@@ -16,6 +16,8 @@ test("ReadWeave completes reviewed save, reuse, all edit modes and validated exp
 
     const editor = app.currentNoteSplit.locator(".note-detail-editable-text-editor");
     const paragraphText = "NPU 神经网络处理器用于加速神经网络中的矩阵和张量运算。";
+    await expect(editor.locator("p")).toBeVisible();
+    await editor.focus();
     await editor.fill(paragraphText);
     const paragraph = editor.locator("p", { hasText: paragraphText });
     await expect(async () => {

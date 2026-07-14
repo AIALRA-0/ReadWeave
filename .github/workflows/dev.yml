@@ -142,7 +142,7 @@ jobs:
 
       - name: Validate container run output
         run: |
-          CONTAINER_ID=$(docker run -d --log-driver=journald --rm -e TRILIUM_INTEGRATION_TEST=memory -e READWEAVE_TEST_AI=mock --name trilium_local ${{ env.TEST_TAG }})
+          CONTAINER_ID=$(docker run -d --log-driver=journald --rm --name trilium_local ${{ env.TEST_TAG }})
           echo "Container ID: $CONTAINER_ID"
 
       - name: Wait for the healthchecks to pass
