@@ -21,7 +21,7 @@ const forbiddenFilePatterns = [
 ];
 
 const allowedFilePatterns = [/(^|\/)\.env\.example$/i, /(^|\/)pnpm-lock\.yaml$/i];
-const placeholderValue = /^(?:<[^>]+>|\$\{[^}]+\}|\$[A-Z_]+|process\.env\.[A-Z0-9_]+|example|placeholder|changeme|redacted|none|null|undefined|true|false)$/i;
+const placeholderValue = /^(?:<[^>]+>|\$\{\{|\$\{[^}]+\}|\$[A-Z_]+|process\.env\.[A-Z0-9_]+|example|placeholder|changeme|redacted|none|null|undefined|true|false)$/i;
 
 const secretPatterns = [
     ["通用模型密钥", /\bsk-[A-Za-z0-9_-]{16,}\b/g],
