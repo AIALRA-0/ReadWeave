@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://readweave.local/schemas/readweave-index-export-1.0.schema.json",
+  "title": "ReadWeave index export",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "exportId",
+    "exportedAt",
+    "generator",
+    "scope",
+    "articles",
+    "anchors",
+    "objects",
+    "links",
+    "integrity"
+  ],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "exportId": { "$ref": "#/$defs/id" },
+    "exportedAt": { "type": "string", "format": "date-time" },
+    "generator": { "$ref": "#/$defs/generator" },
+    "scope": { "$ref": "#/$defs/scope" },
+    "articles": { "type": "array", "items": { "$ref": "#/$defs/article" } },
+    "anchors": { "type": "array", "items": { "$ref": "#/$defs/anchor" } },
+    "objects": { "type": "array", "items": { "$ref": "#/$defs/indexObject" } },
+    "links": { "type": "array", "items": { "$ref": "#/$defs/objectLink" } },
+    "integrity": { "$ref": "#/$defs/integrity" }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\s]+$"
+    },
+    "generator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "triliumVersion", "workflowVersion"],
+      "properties": {
+        "name": { "const": "ReadWeave" },
+        "version": { "type": "string", "minLength": 1 },
+        "triliumVersion": { "type": "string", "minLength": 1 },
+        "workflowVersion": { "type": "string", "minLength": 1 }
+      }
+    },
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "includeContent"],
+      "properties": {
+        "type": { "enum": ["all", "articles"] },
+        "articleIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "includeContent": { "const": true }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "articles" } }, "required": ["type"] },
+          "then": { "required": ["articleIds"] }
+        }
+      ]
+    },
+    "article": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["articleId", "title"],
+      "properties": {
+        "articleId": { "$ref": "#/$defs/id" },
+        "title": { "type": "string" }
+      }
+    },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "value"],
+      "properties": {
+        "type": { "const": "readweave-paragraph-v1" },
+        "value": { "$ref": "#/$defs/id" }
+      }
+    },
+    "anchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["anchorId", "articleId", "selector", "excerpt"],
+      "properties": {
+        "anchorId": { "$ref": "#/$defs/id" },
+        "articleId": { "$ref": "#/$defs/id" },
+        "selector": { "$ref": "#/$defs/selector" },
+        "excerpt": { "type": "string" }
+      }
+    },
+    "indexObject": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "objectId",
+        "kind",
+        "title",
+        "body",
+        "normalizedTitle",
+        "revision",
+        "sourceArticleId",
+        "sourceAnchorId",
+        "sourceExcerpt",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "1.0" },
+        "objectId": { "$ref": "#/$defs/id" },
+        "kind": { "enum": ["question", "term"] },
+        "title": { "type": "string", "minLength": 1 },
+        "body": { "type": "string", "minLength": 1 },
+        "normalizedTitle": { "type": "string" },
+        "revision": { "type": "integer", "minimum": 1 },
+        "sourceArticleId": { "$ref": "#/$defs/id" },
+        "sourceAnchorId": { "$ref": "#/$defs/id" },
+        "sourceExcerpt": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "objectLink": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "linkId",
+        "articleId",
+        "anchorId",
+        "objectId",
+        "sourceExcerpt",
+        "createdAt",
+        "updatedAt"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "1.0" },
+        "linkId": { "$ref": "#/$defs/id" },
+        "articleId": { "$ref": "#/$defs/id" },
+        "anchorId": { "$ref": "#/$defs/id" },
+        "objectId": { "$ref": "#/$defs/id" },
+        "sourceExcerpt": { "type": "string" },
+        "displayTitle": { "type": "string" },
+        "displayBody": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["valid", "articleCount", "anchorCount", "objectCount", "linkCount", "contentSha256"],
+      "properties": {
+        "valid": { "type": "boolean" },
+        "articleCount": { "type": "integer", "minimum": 0 },
+        "anchorCount": { "type": "integer", "minimum": 0 },
+        "objectCount": { "type": "integer", "minimum": 0 },
+        "linkCount": { "type": "integer", "minimum": 0 },
+        "contentSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    }
+  }
+}

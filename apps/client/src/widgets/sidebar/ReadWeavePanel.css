@@ -1,0 +1,172 @@
+.readweave-paragraph-hover {
+    outline: 1px dashed var(--main-text-color-muted);
+    outline-offset: 4px;
+    cursor: pointer;
+}
+
+.readweave-paragraph-selected {
+    outline: 2px solid var(--main-accent-color);
+    outline-offset: 4px;
+}
+
+.readweave-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.readweave-panel section,
+.readweave-candidates {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.readweave-selection,
+.readweave-impact {
+    padding: 10px;
+    border: 1px solid var(--main-border-color);
+    border-radius: 8px;
+    background: var(--accented-background-color);
+}
+
+.readweave-selection p,
+.readweave-entry-detail p,
+.readweave-candidate-detail p,
+.readweave-status,
+.readweave-hint {
+    margin: 0;
+    white-space: pre-wrap;
+}
+
+.readweave-eyebrow,
+.readweave-section-title {
+    font-size: 0.78rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    color: var(--muted-text-color);
+}
+
+.readweave-entry,
+.readweave-candidate {
+    padding: 8px 10px;
+    border: 1px solid var(--main-border-color);
+    border-radius: 7px;
+    min-width: 0;
+}
+
+.readweave-entry-title,
+.readweave-candidate > div:first-child {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-weight: 600;
+}
+
+.readweave-entry-detail,
+.readweave-candidate-detail {
+    display: none;
+    margin-top: 8px;
+}
+
+.readweave-entry:hover .readweave-entry-detail,
+.readweave-entry:focus-within .readweave-entry-detail,
+.readweave-candidate:hover .readweave-candidate-detail,
+.readweave-candidate:focus-within .readweave-candidate-detail {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.readweave-candidate.recommended {
+    border-color: var(--main-accent-color);
+}
+
+.readweave-badge {
+    padding: 2px 5px;
+    border-radius: 999px;
+    background: var(--main-accent-color);
+    color: var(--button-text-color);
+    font-size: 0.68rem;
+    white-space: nowrap;
+}
+
+.readweave-kind,
+.readweave-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.readweave-panel button {
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+}
+
+.readweave-kind button {
+    flex: 1;
+    padding: 6px;
+    border: 1px solid var(--main-border-color);
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+}
+
+.readweave-kind button.active {
+    border-color: var(--main-accent-color);
+    background: var(--main-accent-color);
+    color: var(--button-text-color);
+}
+
+.readweave-editor label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.readweave-editor textarea,
+.readweave-editor input:not([type="radio"]) {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 7px;
+    border: 1px solid var(--main-border-color);
+    border-radius: 6px;
+    background: var(--input-background-color);
+    color: var(--main-text-color);
+}
+
+.readweave-edit-modes {
+    display: grid;
+    gap: 6px;
+}
+
+.readweave-edit-modes label {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+}
+
+.readweave-status {
+    color: var(--muted-text-color);
+    font-size: 0.8rem;
+}
+
+.readweave-export {
+    align-self: stretch;
+}
+
+@media (max-width: 720px) {
+    .readweave-kind,
+    .readweave-actions {
+        flex-direction: column;
+    }
+
+    .readweave-kind button,
+    .readweave-actions button {
+        width: 100%;
+    }
+}

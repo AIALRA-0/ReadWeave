@@ -1,0 +1,38 @@
+{
+    "get-started": {
+        "title": "Başlangıç",
+        "desktop_title": "Masaüstü uygulamasını indirin (v{{version}})",
+        "architecture": "Mimari:",
+        "older_releases": "Eski sürümleri görüntüle",
+        "server_title": "Birden fazla cihazdan erişim için bir sunucu kurun"
+    },
+    "hero_section": {
+        "title": "Düşüncelerinizi organize edin. Kişisel bilgi birikiminizi oluşturun.",
+        "subtitle": "Trilium, not tutma ve kişisel bir bilgi tabanını düzenleme için açık kaynaklı bir çözümdür. Bunu masaüstünü bilgisayarınızda kullanabilir veya kendi barındırdığınız sunucuyla senkronize ederek notlarınızı gittiğiniz her yerde yanınızda bulundurabilirsiniz.",
+        "get_started": "Başlayın",
+        "github": "GitHub",
+        "dockerhub": "Docker Hub",
+        "screenshot_alt": "Trilium Notes masaüstü uygulamasının ekran görüntüsü"
+    },
+    "organization_benefits": {
+        "title": "Organizasyon",
+        "note_structure_title": "Not yapısı",
+        "note_structure_description": "Notlar hiyerarşik olarak düzenlenebilir. Her not 'alt notlar' içerebildiği için klasörlere ihtiyaç duyulmaz. Tek bir not, hiyerarşinin birden fazla noktasına eklenebilir.",
+        "attributes_description": "Notlar arasında ilişkiler kurun veya kolay kategorizasyon için etiketler ekleyin. Tablolarda ve panolarda kullanılabilen yapılandırılmış bilgileri eklemek için öne çıkan öznitelikleri kullanın.",
+        "hoisting_description": "Kişisel ve iş notlarınızı bir çalışma alanı altında gruplandırarak kolayca ayırın; bu sayede not ağacınız yalnızca belirli bir not kümesini gösterecek şekilde odaklanacaktır.",
+        "attributes_title": "Not etiketleri ve ilişkileri",
+        "hoisting_title": "İş alanları ve yükseltme"
+    },
+    "productivity_benefits": {
+        "title": "Üretkenlik ve güvenlik",
+        "revisions_title": "Note düzenlemeleri",
+        "revisions_content": "Notlar arka planda düzenli olarak kaydedilir ve revizyonlar aracılığıyla geçmişe göz atılabilir ya da istenmeyen değişiklikler geri alınabilir. Revizyonlar ayrıca isteğe bağlı olarak da oluşturulabilir.",
+        "sync_title": "Senkronizasyon",
+        "sync_content": "Notlarınızı birden fazla cihaz arasında kolayca senkronize etmek ve cep telefonunuzdan bir PWA kullanarak erişmek için kendi sunucunuzu (self-hosted) veya bir bulut örneğini (cloud instance) kullanın.",
+        "protected_notes_title": "Korumalı notlar",
+        "protected_notes_content": "Hassas kişisel verilerinizi, notları şifreleyerek ve şifre korumalı bir oturumla kilitleyerek güven altına alın.",
+        "jump_to_title": "Hızlı arama ve komutlar",
+        "jump_to_content": "Notlar veya kullanıcı arayüzü komutları arasında, başlık araması yaparak hiyerarşik yapıda hızla geçiş yapın; yazım hatalarını ve küçük farklılıkları fuzzy matching (bulanık eşleme) ile tolere edin.",
+        "search_title": "Gelişmiş arama"
+    }
+}

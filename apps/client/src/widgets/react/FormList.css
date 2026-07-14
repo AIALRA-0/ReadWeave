@@ -1,0 +1,39 @@
+.dropdown-item {
+    .description {
+        font-size: small;
+        color: var(--muted-text-color);
+        white-space: normal;
+    }
+
+    span.tn-icon {
+        flex-shrink: 0;
+    }
+
+    .switch-widget {
+        flex-grow: 1;
+        width: 100%;
+        --switch-track-width: 40px;
+        --switch-track-height: 20px;
+        --switch-thumb-width: 12px;
+        --switch-thumb-height: var(--switch-thumb-width);
+
+        .contextual-help {
+            margin-inline-start: 0.25em;
+            cursor: pointer;
+        }
+
+        .switch-spacer {
+            flex-grow: 1;
+        }
+    }
+}
+
+.form-list-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1em;
+
+    .form-list-col {
+        flex-grow: 1;
+    }
+}

@@ -1,0 +1,145 @@
+{
+    "download_helper_server_linux": {
+        "download_tar_arm64": "بصيغة ARM (.tar.xz)",
+        "download_nixos": "مكون NixOS",
+        "download_tar_x64": "x64 (.tar.xz)",
+        "title": "الاستضافة الذاتية على نظام لينكس"
+    },
+    "download_helper_server_hosted": {
+        "title": "استضافة مدفوعة",
+        "download_triliumcc": "بدلا من ذلك، راجع trillum. cc",
+        "download_pikapod": "اعدلد على PikaPods"
+    },
+    "get-started": {
+        "architecture": "المعمارية:",
+        "older_releases": "انظر الى الاصدارات القديمة",
+        "title": "ابدأ الان",
+        "desktop_title": "قم بتحميل تطبيق سطح المكتب (v{{version}})",
+        "server_title": "إعداد خادم للدخول من أكثر من جهاز"
+    },
+    "hero_section": {
+        "github": "GitHub",
+        "get_started": "ابدأ الان",
+        "dockerhub": "مستودع Docker",
+        "title": "رتب أفكارك. ابنِ قاعدة معرفتك الشخصية.",
+        "subtitle": "تريليوم هو حل مفتوح المصدر لتدوين الملاحظات وتنظيم قاعدة المعرفة الشخصية. استخدمه محليًا على جهاز الكمبيوتر الخاص بك، أو قم بمزامنته مع خادمك المستضاف ذاتيًا للاحتفاظ بملاحظاتك أينما كنت.",
+        "screenshot_alt": "لقطة شاشة لتطبيق Trilium Notes لسطح المكتب"
+    },
+    "organization_benefits": {
+        "title": "تنظيم",
+        "note_structure_title": "هيكيلية الملاحظة",
+        "hoisting_title": "مساحات العمل والتركيز على الملاحظة",
+        "attributes_title": "العلاقات وجداول الملاحظة",
+        "note_structure_description": "يمكن تنظيم الملاحظات بشكل هرمي. لا حاجة للمجلدات، إذ يمكن أن تحتوي كل ملاحظة على ملاحظات فرعية. ويمكن إضافة الملاحظة الواحدة في عدة مواضع ضمن التسلسل الهرمي.",
+        "attributes_description": "استخدم العلاقات بين الملاحظات أو أضف تصنيفات لتسهيل عملية التصنيف. استخدم السمات المُروَّجة لإدخال معلومات مُهيكلة يمكن استخدامها في الجداول واللوحات.",
+        "hoisting_description": "يمكنك بسهولة فصل ملاحظاتك الشخصية وملاحظات العمل عن طريق تجميعها ضمن مساحة عمل، مما يركز شجرة الملاحظات الخاصة بك لعرض مجموعة محددة من الملاحظات فقط."
+    },
+    "productivity_benefits": {
+        "sync_title": "‎المزامنة",
+        "revisions_title": "مراجعات الملاحظة",
+        "protected_notes_title": "الملاحظات المحمية",
+        "search_title": "البحث القوي",
+        "web_clipper_title": "اداة قص الويب",
+        "title": "الانتاجية والسلامة",
+        "jump_to_title": "الاوامر والبحث السريع",
+        "revisions_content": "تُحفظ الملاحظات دوريًا في الخلفية، ويمكن استخدام التعديلات للمراجعة أو للتراجع عن التغييرات غير المقصودة. كما يمكن إنشاء التعديلات عند الطلب.",
+        "sync_content": "استخدم نسخة مستضافة ذاتيًا أو نسخة سحابية لمزامنة ملاحظاتك بسهولة عبر أجهزة متعددة، وللوصول إليها من هاتفك المحمول باستخدام تطبيق ويب تقدمي (PWA).",
+        "protected_notes_content": "احمِ معلوماتك الشخصية الحساسة عبر تشفير الملاحظات وقفلها خلف جلسة محمية بكلمة مرور.",
+        "jump_to_content": "انتقل بسرعة إلى الملاحظات أو أوامر واجهة المستخدم عبر التسلسل الهرمي من خلال البحث عن عناوينها، مع ميزة المطابقة التقريبية لتجاوز الأخطاء الإملائية أو الاختلافات البسيطة.",
+        "search_content": "أو ابحث عن نص داخل الملاحظات وضيّق نطاق البحث عبر التصفية حسب الملاحظة الرئيسية، أو حسب مستوى التفرع.",
+        "web_clipper_content": "اقتبس صفحات الويب (أو لقطات الشاشة) وضعها مباشرة في Trilium باستخدام إضافة المتصفح مقص الشبكة (Web Clipper)."
+    },
+    "note_types": {
+        "canvas_title": "مساحة العمل",
+        "mindmap_title": "خريطة ذهنية",
+        "text_title": "ملاحظات النص",
+        "code_title": "ملاحظات الكود",
+        "file_title": "ملاحظات الملف",
+        "mermaid_title": "مخططات Mermaid",
+        "title": "طرق متعددة لعرض معلوماتك",
+        "text_description": "يتم تحرير الملاحظات باستخدام محرر مرئي (WYSIWYG)، مع دعم للجداول، والصور، والعبارات الرياضية، وكتل التعليمات البرمجية مع تمييز بناء الجملة. يمكنك تنسيق النص بسرعة باستخدام قواعد \"Markdown\" أو عبر أوامر الشرطة المائلة (slash commands).",
+        "code_description": "تستخدم العينات الكبيرة من التعليمات البرمجية أو النصوص البرمجية (Scripts) محررًا مخصصًا، مع تمييز الصيغة للعديد من لغات البرمجة وبسمات ألوان متنوعة.",
+        "file_description": "تضمين ملفات الوسائط المتعددة مثل ملفات PDF والصور ومقاطع الفيديو مع ميزة المعاينة داخل التطبيق."
+    },
+    "extensibility_benefits": {
+        "import_export_title": "استيراد/تصدير",
+        "title": "المشاركة وقابلية التوسيع",
+        "scripting_title": "البرمجة النصية المتقدمة",
+        "api_title": "واجهة برمجة REST"
+    },
+    "collections": {
+        "calendar_title": "التقويم",
+        "table_title": "جدول",
+        "board_title": "لوحة",
+        "geomap_title": "خريطة جغرافية"
+    },
+    "footer": {
+        "copyright_community": "المجتمع",
+        "copyright_and_the": " و ال "
+    },
+    "social_buttons": {
+        "github": "GitHub",
+        "matrix": "‍مصفوفة",
+        "reddit": "Reddit",
+        "github_discussions": "مناقشات GitHub"
+    },
+    "support_us": {
+        "paypal": "PayPal",
+        "title": "ادعمنا",
+        "financial_donations_title": "التبرعات المالية",
+        "github_sponsors": "الرعاة على GitHub",
+        "buy_me_a_coffee": "Buy Me A Coffee"
+    },
+    "download_helper_desktop_windows": {
+        "download_scoop": "Scoop",
+        "download_exe": "تحميل ملف التثبيت (exe.)",
+        "title_x64": "ويندوز 64 بت",
+        "download_zip": "النسخة المحمولة بصيغة zip",
+        "title_arm64": "نظام ويندوز عاى ARM",
+        "quick_start": "للتثبيت باستخدام Winget:"
+    },
+    "download_helper_desktop_linux": {
+        "download_deb": ".deb",
+        "download_nixpkgs": "nixpkgs",
+        "download_aur": "AUR",
+        "download_rpm": "rpm.",
+        "download_flatpak": "flatpak.",
+        "title_x64": "لينيكس 64 بت",
+        "download_zip": "النسخة المحمولة بصيغة zip",
+        "title_arm64": "نظام لينكس على ARM"
+    },
+    "download_helper_server_docker": {
+        "download_ghcr": "ghcr.io",
+        "download_dockerhub": "مستودع Docker",
+        "title": "الاستضافة الذاتية باستخدام الDocker"
+    },
+    "final_cta": {
+        "get_started": "ابدأ الان"
+    },
+    "components": {
+        "link_learn_more": "تعلم المزيد..."
+    },
+    "download_now": {
+        "text": "تنزيل الان ",
+        "platform_small": "لاجل{{platform}}",
+        "linux_small": "لLinux",
+        "linux_big": "اصدار v {{version}} لنظام لينكس"
+    },
+    "faq": {
+        "title": "الاسئلة المتكررة"
+    },
+    "404": {
+        "title": "404: غير موجود"
+    },
+    "download_helper_desktop_macos": {
+        "download_dmg": "تحميل ملف التثبيت (dmg.)",
+        "download_homebrew_cask": "Homebrew Cask",
+        "download_zip": "النسخة المحمولة بصيغة zip",
+        "title_x64": "نظام macOS لاصدار intel",
+        "title_arm64": "نظام macOS لمعالجة اجهزة Apple Silicon",
+        "quick_start": "للتثبيت بواسطة Homebrew:"
+    },
+    "contribute": {
+        "title": "طرق اخرى للمساهمة"
+    }
+}

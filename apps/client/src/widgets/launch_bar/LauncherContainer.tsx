@@ -1,0 +1,135 @@
+import { useCallback, useLayoutEffect, useState } from "preact/hooks";
+
+import FNote from "../../entities/fnote";
+import { isExperimentalFeatureEnabled } from "../../services/experimental_features";
+import froca from "../../services/froca";
+import { isDesktop, isMobile } from "../../services/utils";
+import TabSwitcher from "../mobile_widgets/TabSwitcher";
+import { useTriliumEvent } from "../react/hooks";
+import { onWheelHorizontalScroll } from "../widget_utils";
+import BookmarkButtons from "./BookmarkButtons";
+import CalendarWidget from "./CalendarWidget";
+import HistoryNavigationButton from "./HistoryNavigation";
+import { LaunchBarContext } from "./launch_bar_widgets";
+import { CommandButton, CustomWidget, NoteLauncher, QuickSearchLauncherWidget, ScriptLauncher, TodayLauncher } from "./LauncherDefinitions";
+import ProtectedSessionStatusWidget from "./ProtectedSessionStatusWidget";
+import SidebarChatButton from "./SidebarChatButton";
+import SpacerWidget from "./SpacerWidget";
+import SyncStatus from "./SyncStatus";
+
+export default function LauncherContainer({ isHorizontalLayout }: { isHorizontalLayout: boolean }) {
+    const childNotes = useLauncherChildNotes();
+
+    return (
+        <div
+            id="launcher-container"
+            style={{
+                display: "flex",
+                flexGrow: 1,
+                flexDirection: isHorizontalLayout ? "row" : "column"
+            }}
+            onWheel={isHorizontalLayout ? (e) => {
+                if ((e.target as HTMLElement).closest(".dropdown-menu")) return;
+                onWheelHorizontalScroll(e);
+            } : undefined}
+        >
+            <LaunchBarContext.Provider value={{
+                isHorizontalLayout
+            }}>
+                {childNotes?.map(childNote => {
+                    if (childNote.type !== "launcher") {
+                        console.warn(`Note '${childNote.noteId}' '${childNote.title}' is not a launcher even though it's in the launcher subtree`);
+                        return false;
+                    }
+
+                    if (!isDesktop() && childNote.isLabelTruthy("desktopOnly")) {
+                        return false;
+                    }
+
+                    return <Launcher key={childNote.noteId} note={childNote} isHorizontalLayout={isHorizontalLayout} />;
+                })}
+            </LaunchBarContext.Provider>
+        </div>
+    );
+}
+
+function Launcher({ note, isHorizontalLayout }: { note: FNote, isHorizontalLayout: boolean }) {
+    const launcherType = note.getLabelValue("launcherType");
+    if (glob.TRILIUM_SAFE_MODE && launcherType === "customWidget") return;
+
+    switch (launcherType) {
+        case "command":
+            return <CommandButton launcherNote={note} />;
+        case "note":
+            return <NoteLauncher launcherNote={note} />;
+        case "script":
+            return <ScriptLauncher launcherNote={note} />;
+        case "customWidget":
+            return <CustomWidget launcherNote={note} />;
+        case "builtinWidget":
+            return initBuiltinWidget(note, isHorizontalLayout);
+        default:
+            console.warn(`Unrecognized launcher type '${launcherType}' for launcher '${note.noteId}' title '${note.title}'`);
+    }
+}
+
+function initBuiltinWidget(note: FNote, isHorizontalLayout: boolean) {
+    const builtinWidget = note.getLabelValue("builtinWidget");
+    switch (builtinWidget) {
+        case "calendar":
+            return <CalendarWidget launcherNote={note} />;
+        case "spacer":
+            // || has to be inside since 0 is a valid value
+            const baseSize = parseInt(note.getLabelValue("baseSize") || "40");
+            const growthFactor = parseInt(note.getLabelValue("growthFactor") || "100");
+
+            return <SpacerWidget launcherNote={note} baseSize={baseSize} growthFactor={growthFactor} />;
+        case "bookmarks":
+            return <BookmarkButtons launcherNote={note} />;
+        case "protectedSession":
+            return <ProtectedSessionStatusWidget launcherNote={note} />;
+        case "syncStatus":
+            return <SyncStatus launcherNote={note} />;
+        case "backInHistoryButton":
+            return <HistoryNavigationButton launcherNote={note} command="backInNoteHistory" />;
+        case "forwardInHistoryButton":
+            return <HistoryNavigationButton launcherNote={note} command="forwardInNoteHistory" />;
+        case "todayInJournal":
+            return <TodayLauncher launcherNote={note} />;
+        case "quickSearch":
+            return <QuickSearchLauncherWidget launcherNote={note} />;
+        case "mobileTabSwitcher":
+            return <TabSwitcher launcherNote={note} />;
+        case "sidebarChat":
+            return isExperimentalFeatureEnabled("llm") ? <SidebarChatButton launcherNote={note} /> : undefined;
+        default:
+            console.warn(`Unrecognized builtin widget ${builtinWidget} for launcher ${note.noteId} "${note.title}"`);
+    }
+}
+
+function useLauncherChildNotes() {
+    const [ visibleLaunchersRoot, setVisibleLaunchersRoot ] = useState<FNote | undefined | null>();
+    const [ childNotes, setChildNotes ] = useState<FNote[]>();
+
+    // Load the root note.
+    useLayoutEffect(() => {
+        const visibleLaunchersRootId = isMobile() ? "_lbMobileVisibleLaunchers" : "_lbVisibleLaunchers";
+        froca.getNote(visibleLaunchersRootId, true).then(setVisibleLaunchersRoot);
+    }, []);
+
+    // Load the children.
+    const refresh = useCallback(() => {
+        if (!visibleLaunchersRoot) return;
+        visibleLaunchersRoot.getChildNotes().then(setChildNotes);
+    }, [ visibleLaunchersRoot, setChildNotes ]);
+    useLayoutEffect(refresh, [ visibleLaunchersRoot ]);
+
+    // React to position changes.
+    useTriliumEvent("entitiesReloaded", ({loadResults}) => {
+        if (loadResults.getBranchRows().find((branch) => branch.parentNoteId && froca.getNoteFromCache(branch.parentNoteId)?.isLaunchBarConfig())) {
+            refresh();
+        }
+    });
+
+    return childNotes;
+}

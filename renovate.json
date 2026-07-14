@@ -1,0 +1,62 @@
+{
+    "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+    "extends": [
+        "config:recommended"
+    ],
+    "schedule": [
+        "before 3am"
+    ],
+    "labels": [
+        "dependencies",
+        "renovate"
+    ],
+    "prHourlyLimit": 0,
+    "prConcurrentLimit": 0,
+    "branchConcurrentLimit": 0,
+    "minimumReleaseAge": "3 days",
+    "ignorePaths": [
+        "**/node_modules/**",
+        "apps/edit-docs/demo/**",
+        "apps/server/src/assets/doc_notes/**",
+        "docs/**",
+        "apps/server/Dockerfile.legacy"
+    ],
+    "html": {
+        "enabled": false
+    },
+    "bun": {
+        "enabled": false
+    },
+    "nix": {
+        "enabled": true
+    },
+    "packageRules": [
+        {
+            "matchPackageNames": ["@fsegurai/codemirror-theme-**", "@catppuccin/codemirror"],
+            "groupName": "codemirror themes"
+        },
+        {
+            "matchPackageNames": "**-config-ckeditor5",
+            "groupName": "ckeditor5 config packages"
+        },
+        {
+            "matchPackageNames": [
+                "@ckeditor/**",
+                "ckeditor5",
+                "ckeditor5-premium-features"
+            ],
+            "groupName": "ckeditor monorepo"
+        },
+        {
+            "matchPackageNames": "@univerjs/**",
+            "groupName": "univer monorepo"
+        },
+        {
+            "matchPackageNames": [
+                "ai",
+                "@ai-sdk/**"
+            ],
+            "groupName": "ai sdk"
+        }
+    ]
+}

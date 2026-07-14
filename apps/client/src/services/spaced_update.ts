@@ -1,0 +1,118 @@
+import type { SaveState } from "../components/note_context";
+import { getErrorMessage } from "./utils";
+
+type Callback = () => Promise<void> | void;
+
+export type StateCallback = (state: SaveState) => void;
+
+export default class SpacedUpdate {
+    private updater: Callback;
+    private lastUpdated: number;
+    private changed: boolean;
+    private updateInterval: number;
+    private changeForbidden?: boolean;
+    private stateCallback?: StateCallback;
+    private lastState: SaveState = "saved";
+
+    constructor(updater: Callback, updateInterval = 1000, stateCallback?: StateCallback) {
+        this.updater = updater;
+        this.lastUpdated = Date.now();
+        this.changed = false;
+        this.updateInterval = updateInterval;
+        this.stateCallback = stateCallback;
+    }
+
+    scheduleUpdate() {
+        if (!this.changeForbidden) {
+            this.changed = true;
+            this.onStateChanged("unsaved");
+            setTimeout(() => this.triggerUpdate());
+        }
+    }
+
+    async updateNowIfNecessary() {
+        if (this.changed) {
+            this.changed = false; // optimistic...
+
+            try {
+                this.onStateChanged("saving");
+                await this.updater();
+                this.onStateChanged("saved");
+            } catch (e) {
+                this.changed = true;
+                this.onStateChanged("error");
+                logError(getErrorMessage(e));
+                throw e;
+            }
+        }
+    }
+
+    isAllSavedAndTriggerUpdate() {
+        const allSaved = !this.changed;
+
+        this.updateNowIfNecessary();
+
+        return allSaved;
+    }
+
+    /**
+     * Normally {@link scheduleUpdate()} would actually trigger the update only once per {@link updateInterval}. If the method is called 200 times within 20s, it will execute only 20 times.
+     * Sometimes, if the updates are continuous this would cause a performance impact. Resetting the time ensures that the calls to {@link triggerUpdate} have stopped before actually triggering an update.
+     */
+    resetUpdateTimer() {
+        this.lastUpdated = Date.now();
+    }
+
+    /**
+     * Sets the update interval for the spaced update.
+     * @param interval The update interval in milliseconds.
+     */
+    setUpdateInterval(interval: number) {
+        this.updateInterval = interval;
+    }
+
+    async triggerUpdate() {
+        if (!this.changed) {
+            return;
+        }
+
+        if (Date.now() - this.lastUpdated > this.updateInterval) {
+            // Update these BEFORE the async call to prevent race conditions.
+            // Multiple setTimeout callbacks may be pending from recursive scheduleUpdate() calls.
+            // Without this, they would all pass the time check during the await and trigger multiple requests.
+            this.lastUpdated = Date.now();
+            this.changed = false;
+
+            this.onStateChanged("saving");
+            try {
+                await this.updater();
+                this.onStateChanged("saved");
+            } catch (e) {
+                // Restore changed flag on error so a retry can happen
+                this.changed = true;
+                this.onStateChanged("error");
+                logError(getErrorMessage(e));
+            }
+        } else {
+            // update isn't triggered but changes are still pending, so we need to schedule another check
+            this.scheduleUpdate();
+        }
+    }
+
+    onStateChanged(state: SaveState) {
+        if (state === this.lastState) return;
+
+        this.stateCallback?.(state);
+        this.lastState = state;
+    }
+
+    async allowUpdateWithoutChange(callback: Callback) {
+        this.changeForbidden = true;
+
+        try {
+            await callback();
+        } finally {
+            this.changeForbidden = false;
+        }
+    }
+}

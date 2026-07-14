@@ -1,0 +1,128 @@
+.note-detail-split {
+    display: flex;
+    height: 100%;
+}
+
+.note-detail-split-editor-col {
+    display: flex;
+    flex-direction: column;
+}
+
+.note-detail-split-preview-col {
+    position: relative;
+}
+
+.note-detail-split .note-detail-split-editor {
+    width: 100%;
+    flex-grow: 1;
+    min-width: 0;
+    min-height: 0;
+
+    >* {
+        height: 100%;
+    }
+}
+
+.note-detail-split .note-detail-split-editor .note-detail-code {
+    contain: size !important;
+}
+
+.note-detail-split .note-detail-code-editor .cm-editor {
+    margin: 0 !important;
+}
+
+body.desktop .note-detail-split .note-detail-code-editor {
+    border-radius: 6px;
+    margin-top: 1px;
+}
+
+.note-detail-split .note-detail-error-container {
+    font-family: var(--monospace-font-family);
+    margin: 5px;
+    white-space: pre-wrap;
+    font-size: 0.85em;
+    overflow: auto;
+    user-select: text;
+}
+
+.note-detail-split .note-detail-split-preview {
+    transition: opacity 250ms ease-in-out;
+    height: 100%;
+}
+
+.note-detail-split .note-detail-split-preview.on-error {
+    opacity: 0.5;
+}
+
+/* Horizontal layout */
+
+.note-detail-split.split-horizontal:not(.split-read-only) {
+    &> .note-detail-split-preview-col {
+        border-inline-start: 1px solid var(--main-border-color);
+    }
+
+    &> .note-detail-split-editor-col,
+    &> .note-detail-split-preview-col {
+        height: 100%;
+        width: 50%;
+    }
+
+    .note-detail-split-preview {
+        height: 100%;
+    }
+}
+
+/* Vertical layout */
+
+.note-detail-split.split-vertical {
+    flex-direction: column;
+
+    &> .note-detail-split-editor-col,
+    &> .note-detail-split-preview-col {
+        width: 100%;
+        height: 50%;
+    }
+
+    &> .note-detail-split-editor-col {
+        border-top: 1px solid var(--main-border-color);
+    }
+
+    &> .note-detail-split-preview-col {
+        order: -1;
+    }
+}
+
+
+/* Read-only view */
+
+.note-detail-split.split-read-only .note-detail-split-editor-col {
+    display: none;
+}
+
+.note-detail-split.split-read-only .note-detail-split-preview-col {
+    width: 100%;
+    height: 100%;
+}
+
+/* Source-only view */
+
+.note-detail-split.split-source-only .note-detail-split-preview-col {
+    display: none;
+}
+
+.note-detail-split.split-source-only .note-detail-split-editor-col {
+    width: 100%;
+    height: 100%;
+}
+
+/* #region SVG */
+.note-detail-split.svg-editor .render-container {
+    height: 100%;
+}
+
+.note-detail-split.svg-editor .render-container svg {
+    width: 100%;
+    height: 100%;
+    max-width: 100% !important;
+}
+/* #endregion */

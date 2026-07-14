@@ -1,0 +1,26 @@
+{
+  "name": "build-docs",
+  "version": "1.0.0",
+  "description": "Build documentation from Trilium notes",
+  "main": "src/main.ts",
+  "bin": {
+    "trilium-build-docs": "dist/cli.js"
+  },
+  "scripts": {
+    "start": "tsx .",
+    "cli": "tsx src/cli.ts",
+    "build": "tsx scripts/build.ts"
+  },
+  "keywords": [],
+  "author": "Elian Doran <contact@eliandoran.me>",
+  "license": "AGPL-3.0-only",
+  "packageManager": "pnpm@10.33.4",
+  "devDependencies": {
+    "@redocly/cli": "2.30.4",
+    "archiver": "7.0.1",
+    "fs-extra": "11.3.4",
+    "js-yaml": "4.1.1",
+    "typedoc": "0.28.19",
+    "typedoc-plugin-missing-exports": "4.1.3"
+  }
+}

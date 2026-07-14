@@ -1,0 +1,2 @@
+#!/bin/sh
+node scripts/readweave/privacy-scan.mjs --all-changes

@@ -1,0 +1,17 @@
+{
+  "plugins": [
+    {
+      "name": "Footnotes",
+      "className": "Footnotes",
+      "description": "Adds text to the editor.",
+      "path": "src/footnotes.ts",
+      "uiComponents": [
+        {
+          "name": "insertFootnote",
+          "type": "Button",
+          "iconPath": "theme/icons/insert-footnote.svg"
+        }
+      ]
+    }
+  ]
+}

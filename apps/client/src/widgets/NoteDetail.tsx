@@ -1,0 +1,435 @@
+import "./NoteDetail.css";
+
+import clsx from "clsx";
+import { isValidElement, VNode } from "preact";
+import { useEffect, useRef, useState } from "preact/hooks";
+
+import appContext from "../components/app_context";
+import NoteContext from "../components/note_context";
+import FNote from "../entities/fnote";
+import type { PrintReport } from "../print";
+import attributes from "../services/attributes";
+import dialog from "../services/dialog";
+import { t } from "../services/i18n";
+import protected_session_holder from "../services/protected_session_holder";
+import toast from "../services/toast.js";
+import { dynamicRequire, isElectron, isMobile } from "../services/utils";
+import NoteTreeWidget from "./note_tree";
+import { ExtendedNoteType, TYPE_MAPPINGS, TypeWidget } from "./note_types";
+import { useLegacyWidget, useNoteContext, useTriliumEvent } from "./react/hooks";
+import { NoteListWithLinks } from "./react/NoteList";
+import { TypeWidgetProps } from "./type_widgets/type_widget";
+
+/**
+ * The note detail is in charge of rendering the content of a note, by determining its type (e.g. text, code) and using the appropriate view widget.
+ *
+ * Apart from that, it:
+ * - Applies a full-height style depending on the content type (e.g. canvas notes).
+ * - Focuses the content when switching tabs.
+ * - Caches the note type elements based on what the user has accessed, in order to quickly load it again.
+ * - Fixes the tree for launch bar configurations on mobile.
+ * - Provides scripting events such as obtaining the active note detail widget, or note type widget.
+ * - Printing and exporting to PDF.
+ */
+export default function NoteDetail() {
+    const containerRef = useRef<HTMLDivElement>(null);
+    const { note, type, mime, noteContext, parentComponent } = useNoteInfo();
+    const { ntxId, viewScope } = noteContext ?? {};
+    const isFullHeight = checkFullHeight(noteContext, type);
+    const [ noteTypesToRender, setNoteTypesToRender ] = useState<{ [ key in ExtendedNoteType ]?: (props: TypeWidgetProps) => VNode }>({});
+    const [ activeNoteType, setActiveNoteType ] = useState<ExtendedNoteType>();
+    const widgetRequestId = useRef(0);
+    const hasFixedTree = note && noteContext?.hoistedNoteId === "_lbMobileRoot" && isMobile() && note.noteId.startsWith("_lbMobile");
+
+    // Defer loading for tabs that haven't been active yet (e.g. on app refresh).
+    // Special contexts (ntxId starting with "_", e.g. popup editor) are always considered active.
+    const isSpecialContext = ntxId?.startsWith("_") ?? false;
+    const [ hasTabBeenActive, setHasTabBeenActive ] = useState(() => isSpecialContext || (noteContext?.isActive() ?? false));
+    useEffect(() => {
+        if (!hasTabBeenActive && noteContext?.isActive()) {
+            setHasTabBeenActive(true);
+        }
+    }, [ noteContext, hasTabBeenActive ]);
+    useTriliumEvent("activeNoteChanged", ({ ntxId: eventNtxId }) => {
+        if (eventNtxId === ntxId && !hasTabBeenActive) {
+            setHasTabBeenActive(true);
+        }
+    });
+
+    const props: TypeWidgetProps = {
+        note: note!,
+        viewScope,
+        ntxId,
+        parentComponent,
+        noteContext
+    };
+
+    useEffect(() => {
+        if (!type || !hasTabBeenActive) return;
+        const requestId = ++widgetRequestId.current;
+
+        if (!noteTypesToRender[type]) {
+            getCorrespondingWidget(type).then((el) => {
+                if (!el) return;
+
+                // Ignore stale requests
+                if (requestId !== widgetRequestId.current) return;
+
+                setNoteTypesToRender(prev => ({
+                    ...prev,
+                    [type]: el
+                }));
+                setActiveNoteType(type);
+            });
+        } else {
+            setActiveNoteType(type);
+        }
+    }, [ note, viewScope, type, noteTypesToRender, hasTabBeenActive ]);
+
+    // Detect note type changes.
+    useTriliumEvent("entitiesReloaded", async ({ loadResults }) => {
+        if (!note) return;
+
+        // we're detecting note type change on the note_detail level, but triggering the noteTypeMimeChanged
+        // globally, so it gets also to e.g. ribbon components. But this means that the event can be generated multiple
+        // times if the same note is open in several tabs.
+
+        if (note.noteId && loadResults.isNoteContentReloaded(note.noteId, parentComponent.componentId)) {
+            // probably incorrect event
+            // calling this.refresh() is not enough since the event needs to be propagated to children as well
+            // FIXME: create a separate event to force hierarchical refresh
+
+            // this uses handleEvent to make sure that the ordinary content updates are propagated only in the subtree
+            // to avoid the problem in #3365
+            parentComponent.handleEvent("noteTypeMimeChanged", { noteId: note.noteId });
+        } else if (note.noteId
+            && loadResults.isNoteReloaded(note.noteId, parentComponent.componentId)
+            && (type !== (await getExtendedWidgetType(note, noteContext)) || mime !== note?.mime)) {
+            // this needs to have a triggerEvent so that e.g., note type (not in the component subtree) is updated
+            parentComponent.triggerEvent("noteTypeMimeChanged", { noteId: note.noteId });
+        } else {
+            const attrs = loadResults.getAttributeRows();
+
+            const label = attrs.find(
+                (attr) =>
+                    attr.type === "label" &&
+                    ["readOnly", "autoReadOnlyDisabled", "cssClass", "displayRelations", "hideRelations"].includes(attr.name ?? "") &&
+                    attributes.isAffecting(attr, note)
+            );
+
+            const relation = attrs.find((attr) => attr.type === "relation" && ["template", "inherit", "renderNote"]
+                .includes(attr.name ?? "") && attributes.isAffecting(attr, note));
+
+            if (note.noteId && (label || relation)) {
+                // probably incorrect event
+                // calling this.refresh() is not enough since the event needs to be propagated to children as well
+                parentComponent.triggerEvent("noteTypeMimeChanged", { noteId: note.noteId });
+            }
+        }
+    });
+
+    // Automatically focus the editor.
+    useTriliumEvent("activeNoteChanged", ({ ntxId: eventNtxId }) => {
+        if (eventNtxId != ntxId) return;
+        // Restore focus to the editor when switching tabs,
+        // but only if the note tree and the note panel (e.g., note title or note detail) are not focused.
+        if (!document.activeElement?.classList.contains("fancytree-title") && !parentComponent.$widget[0].closest(".note-split")?.contains(document.activeElement)) {
+            parentComponent.triggerCommand("focusOnDetail", { ntxId });
+        }
+    });
+
+    // Handle toast notifications.
+    useEffect(() => {
+        if (!isElectron()) return;
+        const { ipcRenderer } = dynamicRequire("electron");
+        const onPrintProgress = (_e: any, { progress, action }: { progress: number, action: "printing" | "exporting_pdf" }) => showToast(action, progress);
+        const onPrintDone = (_e, printReport: PrintReport) => {
+            toast.closePersistent("printing");
+            handlePrintReport(printReport);
+        };
+        ipcRenderer.on("print-progress", onPrintProgress);
+        ipcRenderer.on("print-done", onPrintDone);
+        return () => {
+            ipcRenderer.off("print-progress", onPrintProgress);
+            ipcRenderer.off("print-done", onPrintDone);
+        };
+    }, [note]);
+
+    useTriliumEvent("executeInActiveNoteDetailWidget", ({ callback }) => {
+        if (!noteContext?.isActive()) return;
+        callback(parentComponent);
+    });
+
+    useTriliumEvent("executeWithTypeWidget", ({ resolve, ntxId: eventNtxId }) => {
+        if (eventNtxId !== ntxId || !activeNoteType || !containerRef.current) return;
+
+        const classNameToSearch = TYPE_MAPPINGS[activeNoteType].className;
+        const componentEl = containerRef.current.querySelector<HTMLElement>(`.${classNameToSearch}`);
+        if (!componentEl) return;
+
+        const component = glob.getComponentByEl(componentEl);
+        resolve(component);
+    });
+
+    useTriliumEvent("printActiveNote", () => {
+        if (!noteContext?.isActive() || !note) return;
+
+        // PDF printing is handled by the PDF viewer's own print mechanism.
+        if (note.type === "file" && note.mime === "application/pdf") return;
+
+        if (isElectron() && noteContext.notePath) {
+            appContext.triggerCommand("showPrintPreview", { note, notePath: noteContext.notePath });
+            return;
+        }
+
+        // Browser fallback: render the print page in a hidden iframe and use window.print().
+        showToast("printing");
+        const iframe = document.createElement('iframe');
+        iframe.src = `?print#${noteContext.notePath}`;
+        iframe.className = "print-iframe";
+        document.body.appendChild(iframe);
+        iframe.onload = () => {
+            if (!iframe.contentWindow) {
+                toast.closePersistent("printing");
+                document.body.removeChild(iframe);
+                return;
+            }
+
+            iframe.contentWindow.addEventListener("note-load-progress", (e) => {
+                showToast("printing", e.detail.progress);
+            });
+
+            iframe.contentWindow.addEventListener("note-ready", (e) => {
+                toast.closePersistent("printing");
+
+                if ("detail" in e) {
+                    handlePrintReport(e.detail as PrintReport);
+                }
+
+                iframe.contentWindow?.print();
+                document.body.removeChild(iframe);
+            });
+        };
+    });
+
+    return (
+        <div
+            ref={containerRef}
+            class={clsx("component note-detail", {
+                "full-height": isFullHeight,
+                "fixed-tree": hasFixedTree
+            })}
+        >
+            {hasFixedTree && <FixedTree noteContext={noteContext} />}
+
+            {Object.entries(noteTypesToRender).map(([ itemType, Element ]) => {
+                return <NoteDetailWrapper
+                    Element={Element}
+                    key={itemType}
+                    type={itemType as ExtendedNoteType}
+                    isVisible={type === itemType}
+                    isFullHeight={isFullHeight}
+                    props={props}
+                />;
+            })}
+        </div>
+    );
+}
+
+function FixedTree({ noteContext }: { noteContext: NoteContext }) {
+    const [ treeEl ] = useLegacyWidget(() => new NoteTreeWidget(), { noteContext });
+    return <div class="fixed-note-tree-container">{treeEl}</div>;
+}
+
+/**
+ * Wraps a single note type widget, in order to keep it in the DOM even after the user has switched away to another note type. This allows faster loading of the same note type again. The properties are cached, so that they are updated only
+ * while the widget is visible, to avoid rendering in the background. When not visible, the DOM element is simply hidden.
+ */
+function NoteDetailWrapper({ Element, type, isVisible, isFullHeight, props }: { Element: (props: TypeWidgetProps) => VNode, type: ExtendedNoteType, isVisible: boolean, isFullHeight: boolean, props: TypeWidgetProps }) {
+    const [ cachedProps, setCachedProps ] = useState(props);
+
+    useEffect(() => {
+        if (isVisible) {
+            setCachedProps(props);
+        }
+        // When not visible, keep the old props to avoid re-rendering in the background.
+    }, [ props, isVisible ]);
+
+    const typeMapping = TYPE_MAPPINGS[type];
+    return (
+        <div
+            className={`${typeMapping.className} ${typeMapping.printable ? "note-detail-printable" : ""} ${isVisible ? "visible" : "hidden-ext"}`}
+            style={{
+                height: isFullHeight ? "100%" : ""
+            }}
+        >
+            <Element {...cachedProps} />
+        </div>
+    );
+}
+
+/** Manages both note changes and changes to the widget type, which are asynchronous. */
+function useNoteInfo() {
+    const { note: actualNote, noteContext, parentComponent } = useNoteContext();
+    const [ note, setNote ] = useState<FNote | null | undefined>();
+    const [ type, setType ] = useState<ExtendedNoteType>();
+    const [ mime, setMime ] = useState<string>();
+    const refreshIdRef = useRef(0);
+
+    function refresh() {
+        const refreshId = ++refreshIdRef.current;
+
+        getExtendedWidgetType(actualNote, noteContext).then(type => {
+            if (refreshId !== refreshIdRef.current) return;
+            setNote(actualNote);
+            setType(type);
+            setMime(actualNote?.mime);
+        });
+    }
+
+    useEffect(refresh, [ actualNote, noteContext, noteContext?.viewScope ]);
+    useTriliumEvent("readOnlyTemporarilyDisabled", ({ noteContext: eventNoteContext }) => {
+        if (eventNoteContext?.ntxId !== noteContext?.ntxId) return;
+        refresh();
+    });
+    useTriliumEvent("noteTypeMimeChanged", refresh);
+
+    return { note, type, mime, noteContext, parentComponent };
+}
+
+async function getCorrespondingWidget(type: ExtendedNoteType): Promise<null | TypeWidget> {
+    const correspondingType = TYPE_MAPPINGS[type].view;
+    if (!correspondingType) return null;
+
+    const result = await correspondingType();
+
+    if ("default" in result) {
+        return result.default;
+    } else if (isValidElement(result)) {
+        // Direct VNode provided.
+        return result;
+    }
+    return result;
+
+}
+
+export async function getExtendedWidgetType(note: FNote | null | undefined, noteContext: NoteContext | undefined): Promise<ExtendedNoteType | undefined> {
+    if (!noteContext) return undefined;
+    if (!note) {
+        // If the note is null, then it's a new tab. If it's undefined, then it's not loaded yet.
+        return note === null ? "empty" : undefined;
+    }
+
+    const type = note.type;
+    let resultingType: ExtendedNoteType;
+
+    if (noteContext?.viewScope?.viewMode === "source") {
+        resultingType = "readOnlyCode";
+    } else if (noteContext.viewScope?.viewMode === "attachments") {
+        resultingType = noteContext.viewScope.attachmentId ? "attachmentDetail" : "attachmentList";
+    } else if (noteContext.viewScope?.viewMode === "note-map") {
+        resultingType = "noteMap";
+    } else if (type === "text" && (await noteContext?.isReadOnly())) {
+        resultingType = "readOnlyText";
+    } else if (note.isTriliumSqlite()) {
+        resultingType = "sqlConsole";
+    } else if (note.isMarkdown()) {
+        resultingType = "markdown";
+    } else if (type === "code" && (await noteContext?.isReadOnly())) {
+        resultingType = "readOnlyCode";
+    } else if (type === "text") {
+        resultingType = "editableText";
+    } else if (type === "code") {
+        resultingType = "editableCode";
+    } else if (type === "launcher") {
+        resultingType = "doc";
+    } else {
+        resultingType = type;
+    }
+
+    if (note.isProtected && !protected_session_holder.isProtectedSessionAvailable()) {
+        resultingType = "protectedSession";
+    }
+
+    return resultingType;
+}
+
+export function checkFullHeight(noteContext: NoteContext | undefined, type: ExtendedNoteType | undefined) {
+    if (!noteContext) return false;
+
+    // https://github.com/zadam/trilium/issues/2522
+    const isBackendNote = noteContext?.noteId === "_backendLog";
+    const isFullHeightNoteType = type && TYPE_MAPPINGS[type].isFullHeight;
+
+    // Allow vertical centering when there are no results.
+    if (type === "book" &&
+        [ "grid", "list" ].includes(noteContext.note?.getLabelValue("viewType") ?? "grid") &&
+        !noteContext.note?.hasChildren()) {
+        return true;
+    }
+
+    return (!noteContext?.hasNoteList() && isFullHeightNoteType)
+        || noteContext?.viewScope?.viewMode === "attachments"
+        || isBackendNote;
+}
+
+function showToast(type: "printing" | "exporting_pdf", progress: number = 0) {
+    toast.showPersistent({
+        icon: "bx bx-loader-circle bx-spin",
+        message: type === "printing" ? t("note_detail.printing") : t("note_detail.printing_pdf"),
+        id: "printing",
+        progress
+    });
+}
+
+function handlePrintReport(printReport?: PrintReport) {
+    if (!printReport) return;
+
+    if (printReport.type === "error") {
+        toast.showPersistent({
+            id: "print-error",
+            icon: "bx bx-error-circle",
+            title: t("note_detail.print_report_error_title"),
+            message: printReport.message,
+            buttons: printReport.stack ? [
+                {
+                    text: t("note_detail.print_report_collection_details_button"),
+                    onClick(api) {
+                        api.dismissToast();
+                        dialog.info(<>
+                            <p>{printReport.message}</p>
+                            <details>
+                                <summary>{t("note_detail.print_report_stack_trace")}</summary>
+                                <pre style="font-size: 0.85em; overflow-x: auto;">{printReport.stack}</pre>
+                            </details>
+                        </>, {
+                            title: t("note_detail.print_report_error_title")
+                        });
+                    }
+                }
+            ] : undefined
+        });
+    } else if (printReport.type === "collection" && printReport.ignoredNoteIds.length > 0) {
+        toast.showPersistent({
+            id: "print-report",
+            icon: "bx bx-collection",
+            title: t("note_detail.print_report_title"),
+            message: t("note_detail.print_report_collection_content", { count: printReport.ignoredNoteIds.length }),
+            buttons: [
+                {
+                    text: t("note_detail.print_report_collection_details_button"),
+                    onClick(api) {
+                        api.dismissToast();
+                        dialog.info(<>
+                            <h3>{t("note_detail.print_report_collection_details_ignored_notes")}</h3>
+                            <NoteListWithLinks noteIds={printReport.ignoredNoteIds} />
+                        </>, {
+                            title: t("note_detail.print_report_title"),
+                            size: "md"
+                        });
+                    }
+                }
+            ]
+        });
+    }
+}

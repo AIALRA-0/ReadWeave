@@ -1,0 +1,13 @@
+{
+  "name": "@triliumnext/server-e2e",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "ajv": "8.18.0",
+    "ajv-formats": "3.0.1",
+    "dotenv": "17.4.2"
+  }
+}

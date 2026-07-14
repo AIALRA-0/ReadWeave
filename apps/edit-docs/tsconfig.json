@@ -1,0 +1,19 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "files": [],
+  "include": [],
+  "references": [
+    {
+      "path": "../server"
+    },
+    {
+      "path": "../desktop"
+    },
+    {
+      "path": "../client"
+    },
+    {
+      "path": "./tsconfig.app.json"
+    }
+  ]
+}

@@ -1,0 +1,159 @@
+name: Dev
+on:
+  push:
+    branches:
+      - main
+      - "release/*"
+  pull_request:
+    branches:
+      - main
+      - "release/*"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GHCR_REGISTRY: ghcr.io
+  DOCKERHUB_REGISTRY: docker.io
+  IMAGE_NAME: ${{ github.repository}}
+  TEST_TAG: ${{ github.repository}}:test
+
+permissions:
+  pull-requests: write  # for PR comments
+
+jobs:
+  test_dev:
+    name: Test development
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+      - name: Set up node & dependencies
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: "pnpm"
+      - run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Run the client-side tests
+        run: pnpm run --filter=client test
+
+      - name: Upload client test report
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: client-test-report
+          path: apps/client/test-output/vitest/html/
+          retention-days: 30
+
+      - name: Run the server-side tests
+        run: pnpm run --filter=server test
+
+      - name: Upload server test report
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: server-test-report
+          path: apps/server/test-output/vitest/html/
+          retention-days: 30
+
+      - name: Run CKEditor e2e tests
+        run: |
+          pnpm run --filter=ckeditor5-mermaid test
+          pnpm run --filter=ckeditor5-math test
+
+      - name: Run the rest of the tests
+        run: pnpm run --filter=\!client --filter=\!server --filter=\!ckeditor5-mermaid --filter=\!ckeditor5-math test
+
+  build_docker:
+    name: Build Docker image
+    runs-on: ubuntu-latest
+    needs:
+      - test_dev
+    steps:
+      - uses: actions/checkout@v6
+      - uses: pnpm/action-setup@v6
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Update build info
+        run: pnpm run chore:update-build-info
+      - name: Trigger client build
+        run: pnpm client:build
+      - name: Send client bundle stats to RelativeCI
+        if: false
+        uses: relative-ci/agent-action@v3
+        with:
+          webpackStatsFile: ./apps/client/dist/webpack-stats.json
+          key: ${{ secrets.RELATIVE_CI_CLIENT_KEY }}
+      - name: Trigger server build
+        run: pnpm run server:build
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/build-push-action@v7
+        with:
+          context: apps/server
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+  test_docker:
+    name: Check Docker build
+    runs-on: ubuntu-latest
+    needs:
+      - build_docker
+    strategy:
+      matrix:
+        include:
+          - dockerfile: Dockerfile.alpine
+          - dockerfile: Dockerfile
+    steps:
+      - name: Checkout the repository
+        uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v6
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Update build info
+        run: pnpm run chore:update-build-info
+      - name: Trigger build
+        run: pnpm server:build
+
+      - name: Set IMAGE_NAME to lowercase
+        run: echo "IMAGE_NAME=${IMAGE_NAME,,}" >> $GITHUB_ENV
+      - name: Set TEST_TAG to lowercase
+        run: echo "TEST_TAG=${TEST_TAG,,}" >> $GITHUB_ENV
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build and export to Docker
+        uses: docker/build-push-action@v7
+        with:
+          context: apps/server
+          file: apps/server/${{ matrix.dockerfile }}
+          load: true
+          tags: ${{ env.TEST_TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Validate container run output
+        run: |
+          CONTAINER_ID=$(docker run -d --log-driver=journald --rm --name trilium_local ${{ env.TEST_TAG }})
+          echo "Container ID: $CONTAINER_ID"
+
+      - name: Wait for the healthchecks to pass
+        uses: stringbean/docker-healthcheck-action@v3
+        with:
+          container: trilium_local
+          wait-time: 50
+          require-status: running
+          require-healthy: true
+
+      # Print the entire log of the container thus far, regardless if the healthcheck failed or succeeded
+      - name: Print entire log
+        if: always()
+        run: journalctl -u docker CONTAINER_NAME=trilium_local --no-pager

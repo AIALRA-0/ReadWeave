@@ -1,0 +1,33 @@
+inputs:
+  os:
+    description: "One of the supported platforms: windows"
+    required: true
+  arch:
+    description: "The architecture to build for: x64, arm64"
+    required: true
+runs:
+  using: composite
+  steps:
+  - uses: pnpm/action-setup@v6
+  - name: Set up node & dependencies
+    uses: actions/setup-node@v6
+    with:
+      node-version: 24
+      cache: "pnpm"
+  - name: Install dependencies
+    shell: bash
+    run: pnpm install --frozen-lockfile
+  - name: Run Linux server build
+    env:
+      MATRIX_ARCH: ${{ inputs.arch }}
+    shell: bash
+    run: |
+      pnpm run chore:update-build-info
+      pnpm run --filter server package
+  - name: Prepare artifacts
+    shell: bash
+    run: |
+      mkdir -p upload
+      file=$(find ./apps/server/out -name '*.tar.xz' -print -quit)
+      name=${{ github.ref_name }}
+      cp "$file" "upload/TriliumNotes-Server-${name//\//-}-${{ inputs.os }}-${{ inputs.arch }}.tar.xz"

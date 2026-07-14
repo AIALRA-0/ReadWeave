@@ -1,0 +1,154 @@
+/* #region Attachment list */
+.attachment-list {
+    padding-inline-start: 15px;
+    padding-inline-end: 15px;
+}
+
+.attachment-list .links-wrapper {
+    font-size: larger;
+    margin-block: 12px;
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+
+    @media (max-width: 991px) {
+        margin-block: 1em;
+        flex-direction: column;
+        gap: 0.5em;
+    }
+}
+/* #endregion */
+
+/* #region Attachment info */
+.attachment-detail-widget {
+    height: 100%;
+}
+
+.attachment-detail-wrapper {
+    margin-bottom: 20px;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.attachment-detail-wrapper.list-view {
+    overflow: visible;
+}
+
+.attachment-title {
+    font-size: 1.1rem;
+    margin: 0;
+
+    a {
+        color: inherit !important;
+    }
+}
+
+.attachment-title-line {
+    display: flex;
+    align-items: center;
+    gap: 1em;
+
+    @media (max-width: 991px) {
+        gap: 0.5em;
+        flex-wrap: wrap;
+        .attachment-title { flex-grow: 1; }
+    }
+}
+
+.attachment-details {
+    margin-inline-start: 10px;
+}
+
+.attachment-content-wrapper {
+    flex-grow: 1;
+}
+
+.attachment-content-wrapper .rendered-content {
+    height: 100%;
+}
+
+.attachment-content-wrapper pre {
+    padding: 10px;
+    margin: 0;
+}
+
+.attachment-detail-wrapper.list-view .attachment-content-wrapper {
+    max-height: 300px;
+    overflow: auto;
+}
+
+.attachment-detail-wrapper.full-detail {
+    height: 100%;
+}
+
+.attachment-detail-wrapper.full-detail .attachment-content-wrapper {
+    height: 100%;
+}
+
+.attachment-detail-wrapper.list-view {
+    border-radius: 12px;
+    background-color: var(--card-background-color);
+    padding: 6px;
+    box-shadow: var(--card-box-shadow);
+}
+
+.attachment-detail-wrapper.list-view .attachment-content-wrapper pre {
+    max-height: 400px;
+    padding: 0;
+}
+
+.attachment-detail-wrapper.list-view .attachment-content-wrapper img, .attachment-detail-wrapper.list-view .attachment-content-wrapper video {
+    max-height: 300px;
+    max-width: 90%;
+    object-fit: contain;
+}
+
+.attachment-detail-wrapper.full-detail .attachment-content-wrapper img {
+    max-width: 90%;
+    object-fit: contain;
+}
+
+.attachment-detail-wrapper.scheduled-for-deletion .attachment-content-wrapper img {
+    filter: contrast(10%);
+}
+
+.attachment-detail-wrapper .attachment-deletion-warning {
+    margin: 0.5em 0;
+}
+/* #endregion */
+
+/* #region Attachment detail */
+.attachment-detail {
+    padding-left: 15px;
+    padding-right: 15px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.attachment-detail .links-wrapper {
+    font-size: larger;
+    padding: 0 0 16px 0;
+}
+
+.attachment-detail .attachment-wrapper {
+    flex-grow: 1;
+}
+/* #endregion */
+
+/* #region Attachment actions */
+
+.attachment-actions .dropdown-item .tn-icon {
+    position: relative;
+    top: 3px;
+    font-size: 120%;
+    margin-inline-end: 5px;
+}
+
+.attachment-actions .dropdown-item[disabled], .attachment-actions .dropdown-item[disabled]:hover {
+    color: var(--muted-text-color) !important;
+    background-color: transparent !important;
+    pointer-events: none; /* makes it unclickable */
+}
+/* #endregion */
