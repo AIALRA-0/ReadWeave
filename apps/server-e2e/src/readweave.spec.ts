@@ -16,10 +16,12 @@ test("ReadWeave completes reviewed save, reuse, all edit modes and validated exp
 
     const editor = app.currentNoteSplit.locator(".note-detail-editable-text-editor");
     const paragraphText = "NPU 神经网络处理器用于加速神经网络中的矩阵和张量运算。";
+    const secondParagraphText = "第二段用于验证每个锚点拥有独立草稿。";
     await expect(editor.locator("p")).toBeVisible();
     await editor.focus();
-    await editor.fill(paragraphText);
+    await editor.fill(`${paragraphText}\n\n${secondParagraphText}`);
     const paragraph = editor.locator("p", { hasText: paragraphText });
+    const secondParagraph = editor.locator("p", { hasText: secondParagraphText });
     await expect(async () => {
         await paragraph.hover();
         await expect(paragraph).toHaveClass(/readweave-paragraph-hover/, { timeout: 500 });
@@ -37,6 +39,26 @@ test("ReadWeave completes reviewed save, reuse, all edit modes and validated exp
 
     await expect(answer).toHaveValue(/测试回答：NPU 是什么？/);
     await expect(panel).toContainText("Draft ready. Review or edit it before saving.");
+    await expect(panel).toContainText("Context used:");
+
+    await secondParagraph.click();
+    await expect(question).toHaveValue("");
+    await expect(answer).toHaveValue("");
+    await expect(panel).not.toContainText("Context used:");
+    await paragraph.click();
+    await expect(question).toHaveValue("NPU 是什么？");
+    await expect(answer).toHaveValue(/测试回答：NPU 是什么？/);
+    await expect(panel).toContainText("Context used:");
+
+    await panel.getByRole("button", { name: "Term", exact: true }).click();
+    await expect(panel.getByRole("textbox", { name: "Term to define", exact: true })).toHaveValue("");
+    await expect(answer).toHaveValue("");
+    await expect(panel).not.toContainText("Context used:");
+    await panel.getByRole("button", { name: "Question", exact: true }).click();
+    await question.fill("NPU 是什么？");
+    await panel.getByRole("button", { name: "Generate one answer", exact: true }).click();
+    await expect(answer).toHaveValue(/测试回答：NPU 是什么？/);
+
     await expect(panel.locator(".readweave-entry")).toHaveCount(0);
     await panel.getByRole("button", { name: "I reviewed it — save", exact: true }).click();
     await expect(panel.locator(".readweave-entry")).toContainText("NPU 是什么？");

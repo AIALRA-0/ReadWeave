@@ -10,8 +10,18 @@ const ROLE_WEIGHT: Record<ReadWeaveContextFragment["role"], number> = {
 
 function tokenize(value: string): Set<string> {
     const normalized = value.normalize("NFKC").toLocaleLowerCase().replace(/\s+/g, " ").trim();
-    const tokens = normalized.match(/[\p{Script=Han}]|[\p{Letter}\p{Number}]+/gu) ?? [];
-    return new Set(tokens.filter(token => token.length > 0));
+    const segments = normalized.match(/[\p{Script=Han}]+|[\p{Letter}\p{Number}]+/gu) ?? [];
+    const tokens = new Set<string>();
+    for (const segment of segments) {
+        if (!/^\p{Script=Han}+$/u.test(segment) || segment.length === 1) {
+            tokens.add(segment);
+            continue;
+        }
+        for (let index = 0; index < segment.length - 1; index += 1) {
+            tokens.add(segment.slice(index, index + 2));
+        }
+    }
+    return tokens;
 }
 function overlapScore(left: Set<string>, right: Set<string>): number {
     if (!left.size || !right.size) return 0;
@@ -88,13 +98,18 @@ export function selectReadWeaveContext(
         unique.set(fragment.id, { ...fragment, text: text.slice(0, 20_000) });
     }
 
-    const ranked = Array.from(unique.values()).map((fragment, originalIndex) => ({
-        fragment,
-        originalIndex,
-        score: ROLE_WEIGHT[fragment.role]
-            + overlapScore(promptTokens, tokenize(fragment.text)) * 1_000
-            - Math.max(fragment.distance ?? 0, 0) * 15
-    })).toSorted((left, right) => right.score - left.score || left.originalIndex - right.originalIndex);
+    const ranked = Array.from(unique.values()).map((fragment, originalIndex) => {
+        const relevance = overlapScore(promptTokens, tokenize(fragment.text));
+        return {
+            fragment,
+            originalIndex,
+            relevance,
+            score: ROLE_WEIGHT[fragment.role]
+                + relevance * 1_000
+                - Math.max(fragment.distance ?? 0, 0) * 15
+        };
+    }).filter(item => item.fragment.role !== "document" || item.relevance > 0)
+        .toSorted((left, right) => right.score - left.score || left.originalIndex - right.originalIndex);
 
     const selected: typeof ranked = [];
     let characterCount = 0;

@@ -32,6 +32,7 @@ interface Draft {
     title: string;
     body: string;
     reuseObjectId?: string;
+    contextDecision?: ReadWeaveGenerateResponse["context"];
 }
 
 interface EditState {
@@ -70,6 +71,7 @@ export default function ReadWeavePanel() {
         setTitle(draft?.title ?? "");
         setBody(draft?.body ?? "");
         setReuseObjectId(draft?.reuseObjectId);
+        setContextDecision(draft?.contextDecision);
         await refreshEntries(noteId!, nextSelection.anchorId, setEntries);
     }, setStatus);
 
@@ -77,15 +79,16 @@ export default function ReadWeavePanel() {
         setSelection(undefined);
         setEntries([]);
         setEditState(undefined);
+        setContextDecision(undefined);
         selectedBlockRef.current?.classList.remove("readweave-paragraph-selected");
         selectedBlockRef.current = undefined;
     }, [ noteId ]);
 
     useEffect(() => {
         if (!noteId || !selection) return;
-        const draft: Draft = { kind, title, body, reuseObjectId };
+        const draft: Draft = { kind, title, body, reuseObjectId, contextDecision };
         sessionStorage.setItem(draftKey(noteId, selection.anchorId), JSON.stringify(draft));
-    }, [ noteId, selection, kind, title, body, reuseObjectId ]);
+    }, [ noteId, selection, kind, title, body, reuseObjectId, contextDecision ]);
 
     useEffect(() => {
         if (!title.trim()) {
@@ -173,6 +176,17 @@ export default function ReadWeavePanel() {
         setKind(object.kind);
         setReuseObjectId(object.objectId);
         setStatus(t("readweave.reuse_selected"));
+    }
+
+    function changeKind(nextKind: ReadWeaveObjectKind) {
+        if (nextKind === kind) return;
+        setKind(nextKind);
+        setTitle("");
+        setBody("");
+        setReuseObjectId(undefined);
+        setContextDecision(undefined);
+        setCandidates([]);
+        setStatus(undefined);
     }
 
     async function beginEdit(entry: ReadWeaveResolvedEntry) {
@@ -270,11 +284,18 @@ export default function ReadWeavePanel() {
 
                         <section class="readweave-editor">
                             <div class="readweave-kind" role="group" aria-label={t("readweave.kind_label")}>
-                                <button type="button" class={kind === "question" ? "active" : ""} onClick={() => { setKind("question"); setReuseObjectId(undefined); }}>{t("readweave.question")}</button>
-                                <button type="button" class={kind === "term" ? "active" : ""} onClick={() => { setKind("term"); setReuseObjectId(undefined); }}>{t("readweave.term")}</button>
+                                <button type="button" class={kind === "question" ? "active" : ""} onClick={() => changeKind("question")}>{t("readweave.question")}</button>
+                                <button type="button" class={kind === "term" ? "active" : ""} onClick={() => changeKind("term")}>{t("readweave.term")}</button>
                             </div>
                             <label>{kind === "question" ? t("readweave.question_label") : t("readweave.term_label")}
-                                <textarea rows={3} value={title} onInput={event => { setTitle(event.currentTarget.value); setReuseObjectId(undefined); }} />
+                                <textarea rows={3} value={title} onInput={event => {
+                                    setTitle(event.currentTarget.value);
+                                    setBody("");
+                                    setReuseObjectId(undefined);
+                                    setContextDecision(undefined);
+                                    setCandidates([]);
+                                    setStatus(undefined);
+                                }} />
                             </label>
 
                             {candidates.length > 0 && (
