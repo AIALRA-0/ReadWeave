@@ -45,6 +45,7 @@ READWEAVE_DEEPSEEK_MODEL=deepseek-chat
 - 目标项目类型检查：通过；仓库全量类型检查仍受上游桌面项目在 Windows 下的 `rootDir` 基线问题影响，ReadWeave 涉及项目单独检查无错误。
 - 视觉验收：暗色主题、300 像素侧栏、长按钮和长答案不产生横向不可用布局。
 - 隐私门禁：工作树扫描、暂存区扫描、提交钩子、推送钩子和持续集成工作流均已配置。
+- GitHub 提交 `25e31e1` 的远端验收：隐私门禁、常规检查、开发构建、Debian/Alpine 容器、Linux x64/ARM64 浏览器端到端测试和 CodeQL（代码查询语言，Code Query Language）安全分析全部通过。
 
 ## 发布前仍需人工完成
 
