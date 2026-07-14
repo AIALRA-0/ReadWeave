@@ -7,6 +7,7 @@ on:
       - hotfix
     paths-ignore:
       - "apps/website/**"
+      - "docs/**"
   pull_request:
 
 permissions:
@@ -49,7 +50,21 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install Playwright browsers
-        run: pnpm exec playwright install --with-deps
+        run: |
+          for attempt in 1 2 3; do
+            if pnpm exec playwright install --with-deps; then
+              exit 0
+            fi
+
+            if [ "$attempt" -eq 3 ]; then
+              exit 1
+            fi
+
+            echo "::warning::Playwright dependency installation failed; refreshing the package index before retrying."
+            sudo rm -rf /var/lib/apt/lists/*
+            sudo apt-get clean
+            sleep 15
+          done
 
       - name: Build the server
         uses: ./.github/actions/build-server
