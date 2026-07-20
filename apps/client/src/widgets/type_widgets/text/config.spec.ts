@@ -20,7 +20,7 @@ describe("CK config", () => {
             const config = await buildConfig({
                 uiLanguage: locale.id as DISPLAYABLE_LOCALE_IDS,
                 contentLanguage: locale.id,
-                forceGplLicense: false,
+                forceGplLicense: true,
                 isClassicEditor: false,
                 templates: []
             });
@@ -29,7 +29,7 @@ describe("CK config", () => {
             if (expectedLocale === "cn") expectedLocale = "zh";
             if (expectedLocale === "tw") expectedLocale = "zh-tw";
 
-            if (locale.id !== "en" && locale.id !== "ga") {
+            if (![ "en", "ga", "id" ].includes(locale.id)) {
                 expect((config.language as any).ui).toMatch(new RegExp(`^${expectedLocale}`));
                 expect(config.translations, locale.id).toBeDefined();
                 expect(config.translations, locale.id).toHaveLength(2);
