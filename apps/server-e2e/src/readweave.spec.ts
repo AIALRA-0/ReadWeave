@@ -65,8 +65,8 @@ async function createTextNote(app: App, title: string, body: string) {
     await expect(autocomplete).toBeVisible();
     await autocomplete.fill(title);
     const results = app.currentNoteSplit.locator(".note-detail-empty-results");
-    const createSuggestion = results.locator(".aa-suggestion").first();
-    await expect(createSuggestion).toContainText(title);
+    const createSuggestion = results.locator(".aa-suggestion", { hasText: title }).first();
+    await expect(createSuggestion).toBeVisible();
     await createSuggestion.click();
     const noteTypeDialog = app.page.locator(".note-type-chooser-dialog");
     await expect(noteTypeDialog).toBeVisible();
