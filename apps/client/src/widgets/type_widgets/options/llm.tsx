@@ -1,8 +1,10 @@
-import { useCallback, useMemo, useState } from "preact/hooks";
+import type { ReadWeaveAiSettings, ReadWeaveModelInfo } from "@triliumnext/commons";
+import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
 
 import dialog from "../../../services/dialog";
 import { isExperimentalFeatureEnabled } from "../../../services/experimental_features";
 import { t } from "../../../services/i18n";
+import server from "../../../services/server";
 import ActionButton from "../../react/ActionButton";
 import Button from "../../react/Button";
 import { useTriliumOption, useTriliumOptionBool } from "../../react/hooks";
@@ -13,17 +15,136 @@ import AddProviderModal, { type LlmProviderConfig, PROVIDER_TYPES } from "./llm/
 export default function LlmSettings() {
     if (!isExperimentalFeatureEnabled("llm")) {
         return (
-            <OptionsSection title={t("llm.settings_title")}>
-                <p className="form-text">{t("llm.feature_not_enabled")}</p>
-            </OptionsSection>
+            <>
+                <ReadWeaveSettings />
+                <OptionsSection title={t("llm.settings_title")}>
+                    <p className="form-text">{t("llm.feature_not_enabled")}</p>
+                </OptionsSection>
+            </>
         );
     }
 
     return (
         <>
+            <ReadWeaveSettings />
             <ProviderSettings />
             <McpSettings />
         </>
+    );
+}
+
+function ReadWeaveSettings() {
+    const [settings, setSettings] = useState<ReadWeaveAiSettings>();
+    const [baseUrl, setBaseUrl] = useState("");
+    const [model, setModel] = useState("");
+    const [apiKey, setApiKey] = useState("");
+    const [models, setModels] = useState<ReadWeaveModelInfo[]>([]);
+    const [busy, setBusy] = useState(false);
+    const [status, setStatus] = useState("");
+    const selectableModels = useMemo(() => Array.from(new Set([
+        model,
+        ...models.map(item => item.id),
+        "deepseek-chat",
+        "deepseek-reasoner"
+    ].filter(Boolean))), [model, models]);
+
+    useEffect(() => {
+        server.get<ReadWeaveAiSettings>("readweave/settings").then(value => {
+            setSettings(value);
+            setBaseUrl(value.baseUrl);
+            setModel(value.model);
+        });
+    }, []);
+
+    async function saveSettings(clearApiKey = false) {
+        setBusy(true);
+        setStatus(t("readweave_settings.saving"));
+        try {
+            const value = await server.put<ReadWeaveAiSettings>("readweave/settings", {
+                baseUrl,
+                model,
+                ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+                clearApiKey
+            });
+            setSettings(value);
+            setBaseUrl(value.baseUrl);
+            setModel(value.model);
+            setApiKey("");
+            setModels([]);
+            setStatus(t("readweave_settings.saved"));
+        } catch {
+            setStatus(t("readweave_settings.save_failed"));
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function loadModels() {
+        setBusy(true);
+        setStatus(t("readweave_settings.testing"));
+        try {
+            if (apiKey.trim() || baseUrl !== settings?.baseUrl || model !== settings?.model) {
+                await saveSettings(false);
+            }
+            const value = await server.get<{ models: ReadWeaveModelInfo[] }>("readweave/settings/models");
+            setModels(value.models);
+            if (!value.models.some(item => item.id === model) && value.models[0]) setModel(value.models[0].id);
+            setStatus(t("readweave_settings.test_succeeded", { count: value.models.length }));
+        } catch {
+            setStatus(t("readweave_settings.test_failed"));
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    return (
+        <OptionsSection title={t("readweave_settings.title")} description={t("readweave_settings.description")}>
+            <OptionsRow name="readweave-base-url" label={t("readweave_settings.base_url")} description={t("readweave_settings.base_url_description")} stacked>
+                <input
+                    type="url"
+                    className="form-control"
+                    value={baseUrl}
+                    onInput={event => setBaseUrl(event.currentTarget.value)}
+                    data-testid="readweave-base-url"
+                />
+            </OptionsRow>
+            <OptionsRow name="readweave-api-key" label={t("readweave_settings.api_key")} description={settings?.hasApiKey
+                ? t("readweave_settings.key_configured", { masked: settings.maskedApiKey ?? "••••••••" })
+                : t("readweave_settings.key_missing")} stacked>
+                <input
+                    type="password"
+                    className="form-control"
+                    value={apiKey}
+                    autocomplete="new-password"
+                    placeholder={settings?.hasApiKey ? t("readweave_settings.key_keep_placeholder") : t("readweave_settings.key_placeholder")}
+                    onInput={event => setApiKey(event.currentTarget.value)}
+                    data-testid="readweave-api-key"
+                />
+            </OptionsRow>
+            <OptionsRow name="readweave-model" label={t("readweave_settings.model")} description={t("readweave_settings.model_description")} stacked>
+                <select
+                    className="form-select"
+                    value={model}
+                    onChange={event => setModel(event.currentTarget.value)}
+                    data-testid="readweave-model"
+                >
+                    {selectableModels.map(modelId => <option value={modelId} key={modelId}>{modelId}</option>)}
+                </select>
+            </OptionsRow>
+            <div className="d-flex flex-wrap gap-2">
+                <button type="button" className="btn btn-primary" disabled={busy || !baseUrl.trim() || !model.trim()} onClick={() => saveSettings(false)} data-testid="readweave-settings-save">
+                    {t("common.save")}
+                </button>
+                <button type="button" className="btn btn-secondary" disabled={busy || (!settings?.hasApiKey && !apiKey.trim())} onClick={loadModels} data-testid="readweave-settings-test">
+                    {t("readweave_settings.test_and_models")}
+                </button>
+                <button type="button" className="btn btn-outline-danger" disabled={busy || settings?.credentialSource !== "settings"} onClick={() => saveSettings(true)}>
+                    {t("readweave_settings.clear_key")}
+                </button>
+            </div>
+            {status && <p className="form-text mb-0" role="status">{status}</p>}
+            <p className="form-text mb-0">{t("readweave_settings.security_note")}</p>
+        </OptionsSection>
     );
 }
 

@@ -3,6 +3,7 @@ import session, { Store } from "express-session";
 import sessionSecret from "../services/session_secret.js";
 import config from "../services/config.js";
 import log from "../services/log.js";
+import sqlInit from "../services/sql_init.js";
 import type express from "express";
 
 /**
@@ -113,13 +114,20 @@ const sessionParser: express.RequestHandler = session({
     store: sessionStore
 });
 
+export function cleanupExpiredSessions() {
+    // During first-run setup, the database file exists but the schema (including
+    // the sessions table) has not been created yet.
+    if (!sqlInit.isDbInitialized()) {
+        return;
+    }
+
+    const now = Date.now();
+    const result = sql.execute(/*sql*/`DELETE FROM sessions WHERE expires < ?`, now);
+    console.log("Cleaning up expired sessions: ", result.changes);
+}
+
 export function startSessionCleanup() {
-    setInterval(() => {
-        // Clean up expired sessions.
-        const now = Date.now();
-        const result = sql.execute(/*sql*/`DELETE FROM sessions WHERE expires < ?`, now);
-        console.log("Cleaning up expired sessions: ", result.changes);
-    }, CLEAN_UP_INTERVAL);
+    setInterval(cleanupExpiredSessions, CLEAN_UP_INTERVAL);
 }
 
 export default sessionParser;

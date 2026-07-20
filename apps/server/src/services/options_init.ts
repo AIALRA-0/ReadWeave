@@ -198,7 +198,7 @@ const defaultOptions: DefaultOption[] = [
     { name: "newLayout", value: "true", isSynced: true },
 
     // Internationalization
-    { name: "locale", value: "en", isSynced: true },
+    { name: "locale", value: "cn", isSynced: true },
     { name: "formattingLocale", value: "", isSynced: true }, // no value means auto-detect
     { name: "firstDayOfWeek", value: "1", isSynced: true },
     { name: "firstWeekOfYear", value: "0", isSynced: true },
@@ -257,6 +257,9 @@ const defaultOptions: DefaultOption[] = [
     // AI / LLM
     { name: "llmProviders", value: "[]", isSynced: true },
     { name: "mcpEnabled", value: "false", isSynced: false },
+    { name: "readWeaveApiKey", value: "", isSynced: false },
+    { name: "readWeaveBaseUrl", value: "https://api.deepseek.com", isSynced: false },
+    { name: "readWeaveModel", value: "deepseek-chat", isSynced: false },
 
     // OCR options
     { name: "ocrAutoProcessImages", value: "false", isSynced: true },

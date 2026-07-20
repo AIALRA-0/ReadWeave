@@ -73,6 +73,10 @@ async function post<T>(url: string, data?: unknown, componentId?: string) {
     return await call<T>("POST", url, componentId, { data });
 }
 
+async function postLongRunning<T>(url: string, data?: unknown, componentId?: string) {
+    return await call<T>("POST", url, componentId, { data, timeout: 60 * 60 * 1000 });
+}
+
 async function postWithSilentInternalServerError<T>(url: string, data?: unknown, componentId?: string) {
     return await call<T>("POST", url, componentId, { data, silentInternalServerError: true });
 }
@@ -167,6 +171,7 @@ function isCsrfError(status: number, responseText: string): boolean {
 
 interface CallOptions {
     data?: unknown;
+    timeout?: number;
     silentNotFound?: boolean;
     silentInternalServerError?: boolean;
     // If `true`, the value will be returned as a string instead of a JavaScript object if JSON, XMLDocument if XML, etc.
@@ -221,7 +226,7 @@ function ajax(url: string, method: string, data: unknown, headers: Headers, opts
             url: window.glob.baseApiUrl + url,
             type: method,
             headers,
-            timeout: 60000,
+            timeout: opts.timeout ?? 60_000,
             success: (body, _textStatus, jqXhr) => {
                 const respHeaders: Headers = {};
 
@@ -379,6 +384,7 @@ export default {
     get,
     getWithSilentNotFound,
     post,
+    postLongRunning,
     postWithSilentInternalServerError,
     put,
     patch,

@@ -16,6 +16,7 @@ import { isDev, isElectron, isMac, isWindows11 } from "../services/utils.js";
 import { generateCsrfToken } from "./csrf_protection.js";
 
 type View = "desktop" | "mobile" | "print";
+const assetCacheKey = Date.now().toString(36);
 
 export function bootstrap(req: Request, res: Response) {
     const options = optionService.getOptionMap();
@@ -67,6 +68,7 @@ export function bootstrap(req: Request, res: Response) {
         isProtectedSessionAvailable: protectedSessionService.isProtectedSessionAvailable(),
         triliumVersion: packageJson.version,
         assetPath,
+        assetCacheKey,
         appPath,
         baseApiUrl: 'api/',
         currentLocale,

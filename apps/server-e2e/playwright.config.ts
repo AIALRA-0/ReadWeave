@@ -23,7 +23,7 @@ export default defineConfig({
 
     /* Run your local dev server before starting the tests */
     webServer: !process.env.TRILIUM_DOCKER ? {
-        command: 'pnpm start-prod-no-dir',
+        command: 'pnpm build && cross-env TRILIUM_ENV=production node dist/main.cjs',
         url: baseURL,
         reuseExistingServer: !process.env.CI,
         cwd: join(__dirname, "../server"),

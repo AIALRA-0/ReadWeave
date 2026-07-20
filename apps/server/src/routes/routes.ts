@@ -336,6 +336,10 @@ function register(app: express.Application) {
     apiRoute(GET, "/api/llm-chat/models", llmChatRoute.getModels);
 
     // ReadWeave uses one-shot, review-before-save answers rather than chat history.
+    apiRoute(GET, "/api/readweave/settings", readweaveRoute.getSettings);
+    apiRoute(PUT, "/api/readweave/settings", readweaveRoute.updateSettings);
+    asyncApiRoute(GET, "/api/readweave/settings/models", readweaveRoute.getModels);
+    apiRoute(GET, "/api/readweave/articles/:articleId/anchors", readweaveRoute.getAnchors);
     apiRoute(GET, "/api/readweave/articles/:articleId/anchors/:anchorId", readweaveRoute.getEntries);
     apiRoute(PST, "/api/readweave/candidates", readweaveRoute.queryCandidates);
     apiRoute(GET, "/api/readweave/objects/:objectId", readweaveRoute.getObject);
@@ -343,6 +347,8 @@ function register(app: express.Application) {
     apiRoute(GET, "/api/readweave/objects/:objectId/impact", readweaveRoute.getImpact);
     apiRoute(PATCH, "/api/readweave/links/:linkId", readweaveRoute.editLink);
     asyncApiRoute(PST, "/api/readweave/generate", readweaveRoute.generate);
+    apiRoute(PST, "/api/readweave/generation-jobs", readweaveRoute.startGenerationJob);
+    apiRoute(GET, "/api/readweave/generation-jobs/:jobId", readweaveRoute.getGenerationJob);
     apiRoute(GET, "/api/readweave/export", readweaveRoute.exportIndex);
 
     // no CSRF since this is called from android app
