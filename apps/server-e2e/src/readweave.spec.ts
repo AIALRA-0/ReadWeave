@@ -28,6 +28,7 @@ interface TestAppWindow extends Window {
 }
 
 async function selectTextRange(page: Page, paragraph: Locator, selectedText: string) {
+    await expect(paragraph).toBeVisible({ timeout: 15_000 });
     await paragraph.evaluate(async (element, text) => {
         const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
         let textNode: Text | null = null;
@@ -66,18 +67,26 @@ async function createTextNote(app: App, title: string, body: string) {
     await autocomplete.fill(title);
     const results = app.currentNoteSplit.locator(".note-detail-empty-results");
     const createSuggestion = results.locator(".aa-suggestion", { hasText: title }).first();
-    await expect(createSuggestion).toBeVisible();
+    await expect(createSuggestion).toBeVisible({ timeout: 15_000 });
     await createSuggestion.click();
     const noteTypeDialog = app.page.locator(".note-type-chooser-dialog");
     await expect(noteTypeDialog).toBeVisible();
     await noteTypeDialog.locator('.dropdown-item[data-value="text,"]').click();
 
     const editor = app.currentNoteSplit.locator(".note-detail-editable-text-editor");
-    await expect(editor.locator("p")).toBeVisible();
-    await editor.focus();
-    await editor.fill(body);
+    await expect(editor.locator("p").first()).toBeVisible({ timeout: 15_000 });
+    const firstBodyLine = body.split("\n", 1)[0];
+    await expect(async () => {
+        await editor.focus();
+        await editor.fill(body);
+        await expect(editor).toContainText(firstBodyLine, { timeout: 2_000 });
+    }).toPass({ timeout: 15_000 });
     await expect(app.currentNoteSplitTitle).toHaveValue(title);
     return editor;
+}
+
+function uniqueTitle(prefix: string): string {
+    return `${prefix} · ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 async function openSelectionEditor(page: Page, app: App, paragraph: Locator, excerpt: string, action: "Ask" | "Define") {
@@ -109,14 +118,14 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     page.on("pageerror", error => pageErrors.push(error.message));
     const app = new App(page, context);
     await app.goto();
-    await app.goToNoteInNewTab("Empty text");
 
-    const editor = app.currentNoteSplit.locator(".note-detail-editable-text-editor");
     const paragraphText = "NPU 用于加速神经网络中的矩阵和张量运算，能够提高推理效率。";
     const secondParagraphText = "第二段用于验证每个锚点拥有独立草稿。";
-    await expect(editor.locator("p")).toBeVisible();
-    await editor.focus();
-    await editor.fill(`${paragraphText}\n\n${secondParagraphText}`);
+    const editor = await createTextNote(
+        app,
+        uniqueTitle("ReadWeave E2E · Core workflow"),
+        `${paragraphText}\n\n${secondParagraphText}`
+    );
     const paragraph = editor.locator("p", { hasText: paragraphText });
 
     await selectTextRange(page, paragraph, "NPU");
@@ -314,12 +323,13 @@ test("ReadWeave splits a Tip subrange from its Note anchor and uses hover withou
     test.setTimeout(90_000);
     const app = new App(page, context);
     await app.goto();
-    await app.goToNoteInNewTab("Empty text");
 
-    const editor = app.currentNoteSplit.locator(".note-detail-editable-text-editor");
     const source = "默认只运行龙猫，备选链路包括 WARP 与 Hiddify。";
-    await editor.focus();
-    await editor.fill(source);
+    const editor = await createTextNote(
+        app,
+        uniqueTitle("ReadWeave E2E · Split anchors"),
+        source
+    );
     const paragraph = editor.locator("p", { hasText: source });
     const panel = await openSelectionEditor(page, app, paragraph, source, "Ask");
     const question = panel.getByRole("textbox", { name: "Question", exact: true });
@@ -375,8 +385,9 @@ test("ReadWeave handles diverse source articles and keeps cross-article term ref
     page.on("pageerror", error => pageErrors.push(error.message));
     const app = new App(page, context);
     await app.goto();
+    const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    const rfcTitle = "ReadWeave E2E · RFC 9000 技术标准";
+    const rfcTitle = `ReadWeave E2E · RFC 9000 技术标准 · ${runId}`;
     const rfcBody = [
         "来源：https://www.rfc-editor.org/rfc/rfc9000.html",
         "QUIC is a secure transport protocol that carries packets in UDP datagrams and integrates TLS into its handshake.",
@@ -403,7 +414,7 @@ test("ReadWeave handles diverse source articles and keeps cross-article term ref
     await page.mouse.move(5, 5);
     await expect.poll(() => quicAnchor.evaluate(element => getComputedStyle(element).textDecorationLine)).toBe("none");
 
-    const nasaTitle = "ReadWeave E2E · NASA 凌日法科普";
+    const nasaTitle = `ReadWeave E2E · NASA 凌日法科普 · ${runId}`;
     const nasaBody = [
         "来源：https://science.nasa.gov/exoplanets/whats-a-transit/",
         "The transit method detects an exoplanet when the planet passes in front of its star and produces a measurable dip in brightness.",
@@ -436,7 +447,7 @@ test("ReadWeave handles diverse source articles and keeps cross-article term ref
     await expect(hoverPreview).toBeHidden();
     await expect.poll(() => tessAnchor.evaluate(element => getComputedStyle(element).textDecorationLine)).toBe("none");
 
-    const referenceTitle = "ReadWeave E2E · NASA 任务中文解读";
+    const referenceTitle = `ReadWeave E2E · NASA 任务中文解读 · ${runId}`;
     const referenceBody = [
         "来源：https://science.nasa.gov/missions/tess/",
         "这份中文解读再次提到 TESS，并说明同一术语在不同文章中应复用同一个定义对象。",
@@ -471,7 +482,7 @@ test("ReadWeave handles diverse source articles and keeps cross-article term ref
     panel = app.sidebar.locator("#readweave-panel");
     await expect(panel.locator(".readweave-entry", { hasText: synchronizedDefinition })).toBeVisible();
 
-    const unescoTitle = "ReadWeave E2E · UNESCO 文献遗产说明";
+    const unescoTitle = `ReadWeave E2E · UNESCO 文献遗产说明 · ${runId}`;
     const unescoBody = [
         "来源：https://www.unesco.org/en/memory-world/about",
         "世界记忆计划旨在促进文献遗产保存、推动普遍获取，并提高公众对文献遗产重要性的认识。",

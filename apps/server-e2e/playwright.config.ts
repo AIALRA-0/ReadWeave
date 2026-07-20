@@ -13,6 +13,9 @@ export default defineConfig({
     reporter: [["list"], ["html", { outputFolder: "test-output" }]],
     outputDir: "test-output",
     retries: 3,
+    // All browser tests share one integration database and server. Running them
+    // concurrently can leak tabs and search results between test files on slower runners.
+    workers: process.env.CI ? 1 : undefined,
 
     /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
     use: {
