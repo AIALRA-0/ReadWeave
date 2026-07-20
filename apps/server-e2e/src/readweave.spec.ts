@@ -64,10 +64,13 @@ async function createTextNote(app: App, title: string, body: string) {
     await app.addNewTab();
     const autocomplete = app.currentNoteSplit.locator(".note-autocomplete");
     await expect(autocomplete).toBeVisible();
-    await autocomplete.fill(title);
     const results = app.currentNoteSplit.locator(".note-detail-empty-results");
     const createSuggestion = results.locator(".aa-suggestion", { hasText: title }).first();
-    await expect(createSuggestion).toBeVisible({ timeout: 15_000 });
+    await expect(async () => {
+        await autocomplete.fill("");
+        await autocomplete.fill(title);
+        await expect(createSuggestion).toBeVisible({ timeout: 3_000 });
+    }).toPass({ timeout: 30_000 });
     await createSuggestion.click();
     const noteTypeDialog = app.page.locator(".note-type-chooser-dialog");
     await expect(noteTypeDialog).toBeVisible();
