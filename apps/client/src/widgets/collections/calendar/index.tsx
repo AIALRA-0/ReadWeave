@@ -81,6 +81,7 @@ export const LOCALE_MAPPINGS: Record<DISPLAYABLE_LOCALE_IDS, (() => Promise<{ de
     it: () => import("@fullcalendar/core/locales/it"),
     hi: () => import("@fullcalendar/core/locales/hi"),
     ga: null,
+    id: () => import("@fullcalendar/core/locales/id"),
     cn: () => import("@fullcalendar/core/locales/zh-cn"),
     cs: () => import("@fullcalendar/core/locales/cs"),
     tw: () => import("@fullcalendar/core/locales/zh-tw"),
