@@ -49,7 +49,7 @@ async function selectTextRange(page: Page, paragraph: Locator, selectedText: str
         selection.removeAllRanges();
         selection.addRange(range);
 
-        const noteContext = (window as TestAppWindow).glob.appContext.tabManager.getActiveContext();
+        const noteContext = (window as unknown as TestAppWindow).glob.appContext.tabManager.getActiveContext();
         const editor = await noteContext.getTextEditor();
         const viewRange = editor.editing.view.domConverter.domRangeToView(range);
         const modelRange = editor.editing.mapper.toModelRange(viewRange);

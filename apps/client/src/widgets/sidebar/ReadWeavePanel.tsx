@@ -600,6 +600,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
     useEffect(() => {
         const { noteId, noteContext } = optionsRef.current;
         if (!noteId || !noteContext) return;
+        const activeNoteContext = noteContext;
         let actionBubble: HTMLDivElement | undefined;
         let bubbleCloseTimer: number | undefined;
         let selectionRect: DOMRect | undefined;
@@ -713,7 +714,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
         }
 
         async function editorAndRoot() {
-            const editor: CKTextEditor | null = await noteContext.getTextEditor().catch(() => null);
+            const editor: CKTextEditor | null = await activeNoteContext.getTextEditor().catch(() => null);
             const root = editor?.editing.view.getDomRoot() as HTMLElement | null;
             return { editor, root };
         }
@@ -745,6 +746,10 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             const excerpt = nativeSelection.toString().replace(/\s+/g, " ").trim().slice(0, 10_000);
             const block = common?.closest<HTMLElement>(BLOCK_SELECTOR);
             if (!modelRange || !excerpt || !block || !root.contains(block)) return;
+            const interactionEditor = editor;
+            const interactionRoot = root;
+            const interactionBlock = block;
+            const interactionModelRange = modelRange;
 
             const intersecting = Array.from(root.querySelectorAll<HTMLElement>(RANGE_ANCHOR_SELECTOR)).filter(element => {
                 try { return nativeRange.intersectsNode(element); } catch { return false; }
@@ -780,18 +785,18 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
                         : undefined;
                     if (!anchorId) {
                         anchorId = `rwr_${utils.randomString(20)}`;
-                        editor.model.change(writer => writer.setAttribute("readWeaveAnchorId", anchorId!, modelRange));
+                        interactionEditor.model.change(writer => writer.setAttribute("readWeaveAnchorId", anchorId!, interactionModelRange));
                     }
                     removeBubble();
                     window.getSelection()?.removeAllRanges();
                     window.requestAnimationFrame(async () => {
-                        decorateAnchors(root);
-                        setActiveAnchor(root, anchorId!);
+                        decorateAnchors(interactionRoot);
+                        setActiveAnchor(interactionRoot, anchorId!);
                         await optionsRef.current.onSelect({
                             anchorId: anchorId!,
                             anchorType: "range",
                             excerpt,
-                            fragments: collectFragments(root, block, excerpt)
+                            fragments: collectFragments(interactionRoot, interactionBlock, excerpt)
                         }, preferredKind);
                     });
                 }
