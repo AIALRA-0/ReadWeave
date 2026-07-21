@@ -54,6 +54,7 @@ interface Draft {
     reuseObjectId?: string;
     contextDecision?: ReadWeaveGenerateResponse["context"];
     generationJobId?: string;
+    reviewIssues?: string[];
 }
 
 interface EditState {
@@ -89,7 +90,8 @@ export default function ReadWeavePanel() {
     const [contextDecision, setContextDecision] = useState<ReadWeaveGenerateResponse["context"]>();
     const [workflow, setWorkflow] = useState<ReadWeaveGenerateResponse["workflow"]>();
     const [status, setStatus] = useState<string>();
-    const [statusTone, setStatusTone] = useState<"normal" | "error">("normal");
+    const [statusTone, setStatusTone] = useState<"normal" | "warning" | "error">("normal");
+    const [reviewIssues, setReviewIssues] = useState<string[]>([]);
     const [generationJobId, setGenerationJobId] = useState<string>();
     const [generationProgress, setGenerationProgress] = useState<ReadWeaveGenerationProgress[]>([]);
     const [busy, setBusy] = useState(false);
@@ -128,6 +130,11 @@ export default function ReadWeavePanel() {
         setWorkflow(undefined);
         setGenerationProgress([]);
         setGenerationJobId(matchingDraft?.generationJobId);
+        setReviewIssues(matchingDraft?.reviewIssues ?? []);
+        if (matchingDraft?.reviewIssues?.length) {
+            setStatus(`${t("readweave.draft_ready")} ${matchingDraft.reviewIssues.join("；")}`);
+            setStatusTone("warning");
+        }
         if (matchingDraft?.generationJobId) {
             setBusy(true);
             setStatus(t("readweave.generation_resuming"));
@@ -173,14 +180,16 @@ export default function ReadWeavePanel() {
         setWorkflow(undefined);
         setGenerationJobId(undefined);
         setGenerationProgress([]);
+        setReviewIssues([]);
+        setStatus(undefined);
         setStatusTone("normal");
     }, [noteId]);
 
     useEffect(() => {
         if (!noteId || !selection) return;
-        const draft: Draft = { kind, questionTitle, optimizeQuestion, termIdentity, body, calloutType, reuseObjectId, contextDecision, generationJobId };
+        const draft: Draft = { kind, questionTitle, optimizeQuestion, termIdentity, body, calloutType, reuseObjectId, contextDecision, generationJobId, reviewIssues };
         sessionStorage.setItem(draftKey(noteId, selection.anchorId), JSON.stringify(draft));
-    }, [noteId, selection, kind, questionTitle, optimizeQuestion, termIdentity, body, calloutType, reuseObjectId, contextDecision, generationJobId]);
+    }, [noteId, selection, kind, questionTitle, optimizeQuestion, termIdentity, body, calloutType, reuseObjectId, contextDecision, generationJobId, reviewIssues]);
 
     useEffect(() => {
         if (!generationJobId) return;
@@ -211,8 +220,11 @@ export default function ReadWeavePanel() {
                     if (result.termIdentity) setTermIdentity(current => mergeTermIdentity(result.termIdentity!, current));
                     setContextDecision(result.context);
                     setWorkflow(result.workflow);
-                    setStatus(t(result.optimizedTitle ? "readweave.draft_ready_optimized" : "readweave.draft_ready"));
-                    setStatusTone("normal");
+                    const nextReviewIssues = result.reviewIssues ?? [];
+                    setReviewIssues(nextReviewIssues);
+                    const readyStatus = t(result.optimizedTitle ? "readweave.draft_ready_optimized" : "readweave.draft_ready");
+                    setStatus(nextReviewIssues.length ? `${readyStatus} ${nextReviewIssues.join("；")}` : readyStatus);
+                    setStatusTone(nextReviewIssues.length ? "warning" : "normal");
                     setGenerationJobId(undefined);
                     setBusy(false);
                     return;
@@ -257,6 +269,7 @@ export default function ReadWeavePanel() {
         setStatusTone("normal");
         setGenerationProgress([]);
         setReuseObjectId(undefined);
+        setReviewIssues([]);
         try {
             const response = await server.post<{ job: ReadWeaveGenerationJob }>("readweave/generation-jobs", {
                 articleId: noteId,
@@ -316,6 +329,7 @@ export default function ReadWeavePanel() {
         setWorkflow(undefined);
         setGenerationJobId(undefined);
         setGenerationProgress([]);
+        setReviewIssues([]);
     }
 
     async function loadCandidate(candidate: ReadWeaveCandidate) {
@@ -337,7 +351,9 @@ export default function ReadWeavePanel() {
         setBody(object.body);
         setCalloutType(object.calloutType);
         setReuseObjectId(object.objectId);
+        setReviewIssues([]);
         setStatus(t("readweave.reuse_selected"));
+        setStatusTone("normal");
     }
 
     function changeKind(nextKind: ReadWeaveObjectKind) {
@@ -355,6 +371,7 @@ export default function ReadWeavePanel() {
         setContextDecision(undefined);
         setWorkflow(undefined);
         setCandidates([]);
+        setReviewIssues([]);
         setStatus(undefined);
     }
 
@@ -518,7 +535,7 @@ export default function ReadWeavePanel() {
                         </section>
                     </>
                 )}
-                {status && <p class={`readweave-status ${statusTone === "error" ? "readweave-status-error" : ""}`} role={statusTone === "error" ? "alert" : "status"}>{status}</p>}
+                {status && <p class={`readweave-status ${statusTone === "error" ? "readweave-status-error" : statusTone === "warning" ? "readweave-status-warning" : ""}`} role={statusTone === "error" ? "alert" : "status"}>{status}</p>}
                 <button type="button" class="btn btn-sm btn-link readweave-export" onClick={exportArticle} disabled={!noteId}>{t("readweave.export_article")}</button>
             </div>
 
@@ -602,37 +619,14 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
         if (!noteId || !noteContext) return;
         const activeNoteContext = noteContext;
         let actionBubble: HTMLDivElement | undefined;
-        let bubbleCloseTimer: number | undefined;
-        let selectionRect: DOMRect | undefined;
         let observer: MutationObserver | undefined;
         let editorRoot: HTMLElement | null = null;
         let editorAttachTimer: number | undefined;
         let disposed = false;
 
         function removeBubble() {
-            window.clearTimeout(bubbleCloseTimer);
             actionBubble?.remove();
             actionBubble = undefined;
-            selectionRect = undefined;
-        }
-
-        function scheduleBubbleClose() {
-            window.clearTimeout(bubbleCloseTimer);
-            bubbleCloseTimer = window.setTimeout(removeBubble, 160);
-        }
-
-        function onPointerMove(event: MouseEvent) {
-            if (!actionBubble || !selectionRect) return;
-            const bubbleRect = actionBubble.getBoundingClientRect();
-            const padding = 6;
-            const within = (rect: DOMRect) => event.clientX >= rect.left - padding && event.clientX <= rect.right + padding
-                && event.clientY >= rect.top - padding && event.clientY <= rect.bottom + padding;
-            if (within(bubbleRect) || within(selectionRect)) window.clearTimeout(bubbleCloseTimer);
-            else scheduleBubbleClose();
-        }
-
-        function onSelectionChange() {
-            if (window.getSelection()?.isCollapsed) scheduleBubbleClose();
         }
 
         function setActiveAnchor(root: HTMLElement, anchorId: string) {
@@ -765,8 +759,6 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             actionBubble = document.createElement("div");
             actionBubble.className = "readweave-selection-actions";
             actionBubble.setAttribute("role", "toolbar");
-            actionBubble.addEventListener("mouseenter", () => window.clearTimeout(bubbleCloseTimer));
-            actionBubble.addEventListener("mouseleave", scheduleBubbleClose);
             for (const preferredKind of ["question", "term"] as ReadWeaveObjectKind[]) {
                 const button = document.createElement("button");
                 button.type = "button";
@@ -806,7 +798,6 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             }
             document.body.append(actionBubble);
             const rect = nativeRange.getBoundingClientRect();
-            selectionRect = rect;
             actionBubble.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - actionBubble.offsetWidth - 8))}px`;
             actionBubble.style.top = `${Math.max(8, rect.top - actionBubble.offsetHeight - 8)}px`;
         }
@@ -865,8 +856,6 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
         void attachEditorWhenReady();
         document.addEventListener("mouseup", onMouseUp, true);
         document.addEventListener("click", onClick, true);
-        document.addEventListener("mousemove", onPointerMove);
-        document.addEventListener("selectionchange", onSelectionChange);
         document.addEventListener("scroll", removeBubble, true);
         return () => {
             disposed = true;
@@ -878,8 +867,6 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             editorRoot?.querySelectorAll(".readweave-anchor-active,.readweave-paragraph-selected,.readweave-anchor-hover").forEach(element => element.classList.remove("readweave-anchor-active", "readweave-paragraph-selected", "readweave-anchor-hover"));
             document.removeEventListener("mouseup", onMouseUp, true);
             document.removeEventListener("click", onClick, true);
-            document.removeEventListener("mousemove", onPointerMove);
-            document.removeEventListener("selectionchange", onSelectionChange);
             document.removeEventListener("scroll", removeBubble, true);
         };
     }, [options.noteId, options.noteContext]);

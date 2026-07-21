@@ -182,6 +182,7 @@ export function buildReadWeaveSystemPrompt(kind: ReadWeaveGenerateRequest["kind"
     return [
         "你是 ReadWeave 的单次问答引擎，不进行聊天。",
         kind === "question" ? "直接回答用户提出的问题。" : "给出用户指定名词的准确、紧凑定义。",
+        kind === "term" ? "术语已经出现在上下文、但正文没有给出词典式定义时，可以结合可靠且稳定的通用技术知识，给出与当前用法一致的边界化定义；不得补写未经证实的厂商、标准或实现细节。只有术语本身存在多种含义且上下文无法消歧时，才返回 need_more_context。" : "",
         "只能返回一个 JSON 对象，不得使用 Markdown 代码围栏，也不得输出 JSON 以外的文字。",
         `上下文充分时返回：${resultShape}`,
         '上下文不足以产生可验证答案时返回：{"status":"need_more_context","missing":"需要补充的具体证据"}。此状态不是答案。',
@@ -971,7 +972,8 @@ export async function generateReadWeaveAnswer(
             throw new ValidationError("ReadWeave 测试故障：定点修复重试已耗尽；未保存任何内容。");
         }
         report("checking", "首稿已通过确定性检查");
-        report("complete", "全部检查通过，草稿等待用户审核", [], { unchangedSegmentsVerified: true });
+        const reviewIssues = request.title.includes("[REVIEW]") ? [ "自动检查未确认测试草稿" ] : undefined;
+        report("complete", reviewIssues ? "自动检查未完全通过，已保留原始模型草稿供人工审核" : "全部检查通过，草稿等待用户审核", reviewIssues, { unchangedSegmentsVerified: true });
         const optimizedTitle = request.kind === "question" && request.optimizeQuestion
             ? request.title.trim().replace("是啥", "是什么").replace("有啥用", "有什么用途")
             : undefined;
@@ -1009,6 +1011,7 @@ export async function generateReadWeaveAnswer(
                 : mockQuestionBody,
             optimizedTitle,
             termIdentity,
+            reviewIssues,
             context: { ...selected.decision, expansionLevel: 0, attemptedBudgets: [ budgets[0] ] },
             workflow: { generationAttempts: 1, validationPasses: 1, contextExpansions: 0, repairRounds: 0, unchangedSegmentsVerified: true },
             provider: "readweave-test",
@@ -1037,10 +1040,15 @@ export async function generateReadWeaveAnswer(
     let lastFailure = "上下文无法支持可验证答案";
     let segments: ReadWeaveAnswerSegment[] | undefined;
     let termIdentity: ReadWeaveTermIdentity | undefined;
+    let lastContextDecision: ReturnType<typeof selectReadWeaveContext>["decision"] | undefined;
+    let lastExpansionLevel = 0;
+    const reviewIssues: string[] = [];
 
     for (let expansionLevel = 0; expansionLevel < budgets.length; expansionLevel++) {
         const budget = budgets[expansionLevel];
         const selected = selectReadWeaveContext(effectiveTitle, request.fragments, budget, expansionLevel > 0);
+        lastContextDecision = selected.decision;
+        lastExpansionLevel = expansionLevel;
         const contextText = selected.fragments.map(fragment => `[${fragment.role}:${fragment.id}]\n${fragment.text}`).join("\n\n");
         let evidenceChecklist: EvidenceChecklist | undefined;
         if (request.kind === "question") {
@@ -1060,9 +1068,25 @@ export async function generateReadWeaveAnswer(
 
         if (!segments) {
             report("drafting", "正在生成唯一首稿");
-            const generated = await generateStructured(systemPrompt, userPrompt);
+            let generated = await generateStructured(systemPrompt, userPrompt);
             generationAttempts += 1;
             lastModel = generated.model;
+            if (generated.payload.status === "need_more_context") {
+                lastFailure = generated.payload.missing?.trim() || lastFailure;
+                if (request.kind === "term" && expansionLevel === budgets.length - 1) {
+                    report("drafting", "正文定义不足，正在生成需要人工审核的边界化术语草稿", [ lastFailure ]);
+                    generated = await generateStructured(systemPrompt, userPrompt, [
+                        "这是最后一级可用上下文，不能再请求扩展。",
+                        "如果术语本身已经明确出现，请结合可靠且稳定的通用技术知识返回 sufficient 草稿，并明确限制在当前上下文用法内。",
+                        "不得猜测厂商、标准、协议或实现细节；只有术语确实无法消歧时才返回 need_more_context。"
+                    ].join(""));
+                    generationAttempts += 1;
+                    lastModel = generated.model;
+                    if (generated.payload.status === "sufficient") {
+                        reviewIssues.push(`正文未直接给出完整定义：${lastFailure}`);
+                    }
+                }
+            }
             if (generated.payload.status === "need_more_context") {
                 lastFailure = generated.payload.missing?.trim() || lastFailure;
                 if (expansionLevel < budgets.length - 1) report("expanding-context", "首稿证据不足，正在扩大上下文", [ lastFailure ]);
@@ -1101,6 +1125,7 @@ export async function generateReadWeaveAnswer(
                         body: finalBody,
                         optimizedTitle,
                         termIdentity,
+                        reviewIssues: reviewIssues.length ? Array.from(new Set(reviewIssues)) : undefined,
                         context: {
                             ...selected.decision,
                             expansionLevel,
@@ -1155,6 +1180,31 @@ export async function generateReadWeaveAnswer(
                 unchangedSegmentsVerified: applied.unchangedSegmentsVerified
             });
         }
+    }
+
+    if (segments?.length && lastContextDecision) {
+        const finalReviewIssues = Array.from(new Set([ ...reviewIssues, lastFailure ].filter(Boolean)));
+        report("complete", "自动检查未完全通过，已保留原始模型草稿供人工审核", finalReviewIssues, { unchangedSegmentsVerified });
+        return {
+            body: joinReadWeaveAnswerSegments(segments),
+            optimizedTitle,
+            termIdentity,
+            reviewIssues: finalReviewIssues,
+            context: {
+                ...lastContextDecision,
+                expansionLevel: lastExpansionLevel,
+                attemptedBudgets: budgets.slice(0, lastExpansionLevel + 1)
+            },
+            workflow: {
+                generationAttempts,
+                validationPasses,
+                contextExpansions: lastExpansionLevel,
+                repairRounds,
+                unchangedSegmentsVerified
+            },
+            provider: new URL(getReadWeaveRuntimeConfig().baseUrl).hostname,
+            model: lastModel
+        };
     }
 
     throw new ValidationError(`ReadWeave 无法生成通过检查的答案：${lastFailure}。已保留原草稿和通过检查的片段；系统未创建回退答案，也未保存任何内容。`);

@@ -417,6 +417,15 @@
     font-weight: 650;
 }
 
+.readweave-status-warning {
+    padding: 7px 9px;
+    border-inline-start: 3px solid var(--admonition-warning-accent-color);
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--admonition-warning-accent-color) 10%, transparent);
+    color: var(--main-text-color);
+    font-weight: 650;
+}
+
 .readweave-generation-progress {
     display: flex;
     flex-direction: column;

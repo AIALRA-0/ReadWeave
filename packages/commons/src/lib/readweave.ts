@@ -148,6 +148,7 @@ export interface ReadWeaveGenerateResponse {
     body: string;
     optimizedTitle?: string;
     termIdentity?: ReadWeaveTermIdentity;
+    reviewIssues?: string[];
     context: ReadWeaveContextDecision;
     workflow: ReadWeaveWorkflowSummary;
     provider: string;

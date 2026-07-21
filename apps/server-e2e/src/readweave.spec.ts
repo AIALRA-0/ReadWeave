@@ -76,15 +76,22 @@ async function createTextNote(app: App, title: string, body: string) {
     await expect(noteTypeDialog).toBeVisible();
     await noteTypeDialog.locator('.dropdown-item[data-value="text,"]').click();
 
+    // The empty-tab editor can remain visible briefly while the newly created note
+    // becomes active. Wait for the title first so we never fill the stale editor.
+    await expect(app.currentNoteSplitTitle).toHaveValue(title, { timeout: 15_000 });
     const editor = app.currentNoteSplit.locator(".note-detail-editable-text-editor");
     await expect(editor.locator("p").first()).toBeVisible({ timeout: 15_000 });
     const firstBodyLine = body.split("\n", 1)[0];
     await expect(async () => {
         await editor.focus();
         await editor.fill(body);
+        if (!(await editor.innerText()).includes(firstBodyLine)) {
+            await editor.focus();
+            await app.page.keyboard.press("ControlOrMeta+A");
+            await app.page.keyboard.insertText(body);
+        }
         await expect(editor).toContainText(firstBodyLine, { timeout: 2_000 });
     }).toPass({ timeout: 15_000 });
-    await expect(app.currentNoteSplitTitle).toHaveValue(title);
     return editor;
 }
 
@@ -133,8 +140,7 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
 
     await selectTextRange(page, paragraph, "NPU");
     await page.mouse.move(5, 5);
-    await expect(page.locator(".readweave-selection-actions")).toBeHidden();
-    await selectTextRange(page, paragraph, "NPU");
+    await expect(page.locator(".readweave-selection-actions")).toBeVisible();
     await page.locator(".readweave-selection-actions").getByRole("button", { name: "Ask", exact: true }).click();
     await expect(page.locator("#readweave-panel")).toBeVisible();
     expect(pageErrors).toEqual([]);
@@ -298,6 +304,12 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     const generationError = panel.locator(".readweave-status-error[role='alert']");
     await expect(generationError).toContainText("定点修复重试已耗尽");
     await expect(failedAnchor).not.toHaveClass(/readweave-range-anchor/);
+
+    await question.fill("[REVIEW] 验证保留待人工审核草稿");
+    await panel.getByRole("button", { name: "Generate answer", exact: true }).click();
+    await expect(answer).toHaveValue(/定义与命名：/);
+    await expect(panel.locator(".readweave-status-warning")).toContainText("自动检查未确认测试草稿");
+    await expect(panel.getByRole("button", { name: "I reviewed it — save", exact: true })).toBeEnabled();
 
     const downloadPromise = page.waitForEvent("download");
     await panel.getByRole("button", { name: "Export this article's question-anchor index", exact: true }).click();
