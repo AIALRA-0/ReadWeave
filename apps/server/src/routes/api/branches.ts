@@ -136,7 +136,7 @@ function setExpanded(req: Request<{ branchId: string, expanded: string }>) {
         // we don't sync expanded label
         // also this does not trigger updates to the frontend, this would trigger too many reloads
 
-        const branch = becca.branches[branchId];
+        const branch = becca.getBranch(branchId);
 
         if (branch) {
             branch.isExpanded = !!expanded;

@@ -101,6 +101,18 @@ describe("Markdown export", () => {
         expect(markdownExportService.toMarkdown(html)).toBe(expected);
     });
 
+    it("escapes backslashes in image destinations and titles", () => {
+        const html = String.raw`<img src="folder\image(test).png" title='say "hello" \ again'/>`;
+        const expected = String.raw`![](folder\\image\(test\).png "say \"hello\" \\ again")`;
+        expect(markdownExportService.toMarkdown(html)).toBe(expected);
+    });
+
+    it("escapes backslashes in link destinations and titles", () => {
+        const html = String.raw`<a href="folder\page(test)" title='say "hello" \ again'>Link</a>`;
+        const expected = String.raw`[Link](folder\\page\(test\) "say \"hello\" \\ again")`;
+        expect(markdownExportService.toMarkdown(html)).toBe(expected);
+    });
+
     it("supports keyboard shortcuts", () => {
         const html = "<kbd>Ctrl</kbd> + <kbd>Alt</kbd> + <kbd>Delete</kbd>";
         expect(markdownExportService.toMarkdown(html)).toBe(html);

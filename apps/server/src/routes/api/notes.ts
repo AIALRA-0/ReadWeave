@@ -219,7 +219,7 @@ function sortChildNotes(req: Request<{ noteId: string }>) {
 
 function protectNote(req: Request<{ noteId: string; isProtected: string }>) {
     const noteId = req.params.noteId;
-    const note = becca.notes[noteId];
+    const note = becca.getNoteOrThrow(noteId);
     const protect = !!parseInt(req.params.isProtected);
     const includingSubTree = !!parseInt(req.query?.subtree as string);
 

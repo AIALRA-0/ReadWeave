@@ -31,16 +31,11 @@ class EtapiError extends Error {
 }
 
 function sendError(res: Response, statusCode: number, code: string, message: string) {
-    return res
-        .set("Content-Type", "application/json")
-        .status(statusCode)
-        .send(
-            JSON.stringify({
-                status: statusCode,
-                code,
-                message
-            })
-        );
+    return res.status(statusCode).json({
+        status: statusCode,
+        code,
+        message
+    });
 }
 
 function checkEtapiAuth(req: Request, res: Response, next: NextFunction) {
@@ -70,7 +65,7 @@ function processRequest<P extends ParamsDictionary>(req: Request<P>, res: Respon
         if (e instanceof EtapiError) {
             sendError(res, e.statusCode, e.code, e.message);
         } else {
-            sendError(res, 500, GENERIC_CODE, e.message);
+            sendError(res, 500, GENERIC_CODE, "Internal server error");
         }
     }
 }

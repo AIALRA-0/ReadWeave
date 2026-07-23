@@ -811,4 +811,34 @@ describe("#sanitizeSvg", () => {
         const result = utils.sanitizeSvg(maliciousSvg);
         expect(result).toBe('<svg><rect width="100"/></svg>');
     });
+
+    it("should remove malformed script closing tags", () => {
+        const maliciousSvg = '<svg><script>alert(1)</script ><rect width="100"/></svg>';
+        const result = utils.sanitizeSvg(maliciousSvg);
+        expect(result).toBe('<svg><rect width="100"/></svg>');
+    });
+
+    it("should remove foreign object content", () => {
+        const maliciousSvg = '<svg><foreignObject><iframe srcdoc="<script>alert(1)</script>"></iframe></foreignObject><rect/></svg>';
+        const result = utils.sanitizeSvg(maliciousSvg);
+        expect(result).toBe('<svg><rect/></svg>');
+    });
+
+    it("should replace vbscript URLs with #", () => {
+        const maliciousSvg = '<svg><a href="vbscript:attack()">link</a></svg>';
+        const result = utils.sanitizeSvg(maliciousSvg);
+        expect(result).toBe('<svg><a href="#">link</a></svg>');
+    });
+
+    it("should replace non-image data URLs with #", () => {
+        const maliciousSvg = '<svg><a href="data:text/html;base64,PHNjcmlwdD4=">link</a></svg>';
+        const result = utils.sanitizeSvg(maliciousSvg);
+        expect(result).toBe('<svg><a href="#">link</a></svg>');
+    });
+
+    it("should preserve nested content in non-void SVG elements", () => {
+        const validSvg = '<svg><circle><title>Accessible circle</title></circle></svg>';
+        const result = utils.sanitizeSvg(validSvg);
+        expect(result).toBe(validSvg);
+    });
 });
