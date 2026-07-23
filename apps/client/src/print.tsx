@@ -1,4 +1,3 @@
-import { renderSpreadsheetToHtml } from "@triliumnext/commons";
 import { render } from "preact";
 import { useCallback, useLayoutEffect, useRef } from "preact/hooks";
 
@@ -6,7 +5,8 @@ import FNote from "./entities/fnote";
 import content_renderer from "./services/content_renderer";
 import { applyInlineMermaid } from "./services/content_renderer_text";
 import froca from "./services/froca";
-import { dynamicRequire, isElectron } from "./services/utils";
+import { waitForPendingRenders } from "./services/pending_renders";
+import { isElectron } from "./services/utils";
 import { CustomNoteList, useNoteViewType } from "./widgets/collections/NoteList";
 
 interface RendererProps {
@@ -26,7 +26,7 @@ export type PrintReport = {
     stack?: string;
 };
 
-async function main() {
+export async function main() {
     const notePath = window.location.hash.substring(1);
     const noteId = notePath.split("/").at(-1);
     if (!noteId) return;
@@ -54,12 +54,11 @@ async function main() {
     document.body.appendChild(bodyWrapper);
 }
 
-function App({ note, noteId }: { note: FNote | null | undefined, noteId: string }) {
+export function App({ note, noteId }: { note: FNote | null | undefined, noteId: string }) {
     const sentReadyEvent = useRef(false);
     const onProgressChanged = useCallback((progress: number) => {
-        if (isElectron()) {
-            const { ipcRenderer } = dynamicRequire('electron');
-            ipcRenderer.send("print-progress", progress);
+        if (window.electronApi) {
+            window.electronApi.printing.sendPrintProgress(progress);
         } else {
             window.dispatchEvent(new CustomEvent("note-load-progress", { detail: { progress } }));
         }
@@ -74,11 +73,14 @@ function App({ note, noteId }: { note: FNote | null | undefined, noteId: string 
     }, []);
     const props: RendererProps | undefined | null = note && { note, onReady, onProgressChanged };
 
-    if (!note || !props) return <Error404 noteId={noteId} />;
-
+    // Keep this hook above the early return so hook order stays stable across renders.
     useLayoutEffect(() => {
-        document.body.dataset.noteType = note.type;
+        if (note) {
+            document.body.dataset.noteType = note.type;
+        }
     }, [ note ]);
+
+    if (!note || !props) return <Error404 noteId={noteId} />;
 
     return (
         <>
@@ -90,15 +92,18 @@ function App({ note, noteId }: { note: FNote | null | undefined, noteId: string 
     );
 }
 
-function SingleNoteRenderer({ note, onReady }: RendererProps) {
+export function SingleNoteRenderer({ note, onReady }: RendererProps) {
     const containerRef = useRef<HTMLDivElement>(null);
 
     useLayoutEffect(() => {
         async function load() {
-            const container = containerRef.current!;
+            const container = containerRef.current;
+            /* v8 ignore next -- @preserve: ref is always attached by the time this layout effect runs */
+            if (!container) return;
 
             if (note.type === "spreadsheet") {
                 // Render spreadsheet as HTML tables instead of an image.
+                const { renderSpreadsheetToHtml } = await import("@triliumnext/commons/src/lib/spreadsheet/render_to_html");
                 const blob = await note.getBlob();
                 const html = renderSpreadsheetToHtml(blob?.content ?? "");
                 container.innerHTML = html;
@@ -106,8 +111,15 @@ function SingleNoteRenderer({ note, onReady }: RendererProps) {
                 if (note.type === "text") {
                     await import("@triliumnext/ckeditor5/src/theme/ck-content.css");
                 }
-                const { $renderedContent } = await content_renderer.getRenderedContent(note, { noChildrenList: true });
+                // Printing preserves full include-note nesting (see expandNestedIncludes).
+                const { $renderedContent } = await content_renderer.getRenderedContent(note, { noChildrenList: true, expandNestedIncludes: true, mediaEnvironment: "native" });
                 container.replaceChildren(...$renderedContent);
+
+                // Note types rendered as a mounted component (an AI chat) start their transform
+                // passes — mermaid, syntax highlighting, included notes — in a layout effect that
+                // getRenderedContent does not await. Printing snapshots the page, so wait for those
+                // to settle first; otherwise they land after the capture and are missing from the PDF.
+                await waitForPendingRenders(container);
 
                 // Wait for all images to load.
                 const images = Array.from(container.querySelectorAll("img"));
@@ -145,7 +157,7 @@ function SingleNoteRenderer({ note, onReady }: RendererProps) {
     </>;
 }
 
-function CollectionRenderer({ note, onReady, onProgressChanged }: RendererProps) {
+export function CollectionRenderer({ note, onReady, onProgressChanged }: RendererProps) {
     const viewType = useNoteViewType(note);
     return <CustomNoteList
         viewType={viewType}
@@ -164,7 +176,7 @@ function CollectionRenderer({ note, onReady, onProgressChanged }: RendererProps)
     />;
 }
 
-function Error404({ noteId }: { noteId: string }) {
+export function Error404({ noteId }: { noteId: string }) {
     return (
         <main>
             <p>The note you are trying to print could not be found.</p>
@@ -173,7 +185,7 @@ function Error404({ noteId }: { noteId: string }) {
     );
 }
 
-async function loadCustomCss(note: FNote) {
+export async function loadCustomCss(note: FNote) {
     const printCssNotes = await note.getRelationTargets("printCss");
     const loadPromises: JQueryPromise<void>[] = [];
 

@@ -20,7 +20,6 @@ import RootContainer from "../widgets/containers/root_container.js";
 import ScrollingContainer from "../widgets/containers/scrolling_container.js";
 import SplitNoteContainer from "../widgets/containers/split_note_container.js";
 import PasswordNoteSetDialog from "../widgets/dialogs/password_not_set.js";
-import UploadAttachmentsDialog from "../widgets/dialogs/upload_attachments.js";
 import FindWidget from "../widgets/find.js";
 import FloatingButtons from "../widgets/FloatingButtons.jsx";
 import { DESKTOP_FLOATING_BUTTONS } from "../widgets/FloatingButtonsDefinitions.jsx";
@@ -40,8 +39,8 @@ import PromotedAttributes from "../widgets/PromotedAttributes.jsx";
 import QuickSearchWidget from "../widgets/quick_search.js";
 import ReadOnlyNoteInfoBar from "../widgets/ReadOnlyNoteInfoBar.jsx";
 import { FixedFormattingToolbar } from "../widgets/ribbon/FormattingToolbar.jsx";
+import LazyComponent from "../widgets/react/LazyComponent.jsx";
 import NoteActions from "../widgets/ribbon/NoteActions.jsx";
-import Ribbon from "../widgets/ribbon/Ribbon.jsx";
 import ScrollPadding from "../widgets/scroll_padding.js";
 import SearchResult from "../widgets/search_result.jsx";
 import SharedInfo from "../widgets/shared_info.jsx";
@@ -68,7 +67,6 @@ export default class DesktopLayout {
         const launcherPane = this.#buildLauncherPane(launcherPaneIsHorizontal);
         const isElectron = utils.isElectron();
         const isMac = window.glob.platform === "darwin";
-        const isWindows = window.glob.platform === "win32";
         const hasNativeTitleBar = window.glob.hasNativeTitleBar;
 
         /**
@@ -76,7 +74,7 @@ export default class DesktopLayout {
          * On macOS we need to force the full-width tab bar on Electron in order to allow the semaphore (window controls) enough space.
          */
         const fullWidthTabBar = launcherPaneIsHorizontal || (isElectron && !hasNativeTitleBar && isMac);
-        const customTitleBarButtons = !hasNativeTitleBar && !isMac && !isWindows;
+        const customTitleBarButtons = !hasNativeTitleBar && utils.isLinux();
         const isNewLayout = isExperimentalFeatureEnabled("new-layout");
 
         const rootContainer = new RootContainer(true)
@@ -148,7 +146,7 @@ export default class DesktopLayout {
                                                             .optChild(!isNewLayout, <ClosePaneButton />)
                                                             .optChild(!isNewLayout, <CreatePaneButton />)
                                                             .optChild(isNewLayout, <NoteActions />))
-                                                        .optChild(!isNewLayout, <Ribbon />)
+                                                        .optChild(!isNewLayout, <LazyComponent loader={() => import("../widgets/ribbon/Ribbon.jsx")} />)
                                                         .child(new WatchedFileUpdateStatusWidget())
                                                         .optChild(!isNewLayout, <FloatingButtons items={DESKTOP_FLOATING_BUTTONS} />)
                                                         .child(
@@ -189,8 +187,7 @@ export default class DesktopLayout {
             .child(<CloseZenModeButton />)
 
             // Desktop-specific dialogs.
-            .child(<PasswordNoteSetDialog />)
-            .child(<UploadAttachmentsDialog />);
+            .child(<PasswordNoteSetDialog />);
 
         applyModals(rootContainer);
         return rootContainer;
@@ -210,8 +207,8 @@ export default class DesktopLayout {
                 .css("width", "53px")
                 .class("vertical")
                 .child(<GlobalMenu isHorizontalLayout={false} />)
-                .child(<LauncherContainer isHorizontalLayout={false} />)
-                .child(<LeftPaneToggle isHorizontalLayout={false} />);
+                .child(<LeftPaneToggle isHorizontalLayout={false} />)
+                .child(<LauncherContainer isHorizontalLayout={false} />);
         }
 
         launcherPane.id("launcher-pane");

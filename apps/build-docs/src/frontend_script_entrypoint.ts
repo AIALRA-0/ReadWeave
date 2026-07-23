@@ -27,5 +27,4 @@ export type { default as RightPanelWidget } from "../../client/src/widgets/right
 import FrontendScriptApi, { type Api } from "../../client/src/services/frontend_script_api.js";
 
 
-// @ts-expect-error - FrontendScriptApi is not directly exportable as Api without this simulation.
-export const api: Api = new FrontendScriptApi();
+export const api: Api = new (FrontendScriptApi as unknown as new () => Api)();

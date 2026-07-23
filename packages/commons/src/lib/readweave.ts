@@ -1,8 +1,17 @@
-export const READWEAVE_SCHEMA_VERSION = "1.0" as const;
+export const READWEAVE_SCHEMA_VERSION = "1.1" as const;
+export const READWEAVE_LEGACY_SCHEMA_VERSION = "1.0" as const;
 
 export type ReadWeaveObjectKind = "question" | "term";
 export type ReadWeaveEditMode = "global" | "article-variant" | "display-only";
-export type ReadWeaveContextRole = "selected" | "heading" | "previous" | "next" | "document";
+export type ReadWeaveAnchorType = "paragraph" | "range";
+export type ReadWeaveCalloutType = "note" | "tip" | "important" | "warning" | "caution";
+export type ReadWeaveContextRole = "selected" | "heading" | "previous" | "next" | "section" | "document";
+
+export interface ReadWeaveTermIdentity {
+    abbreviation?: string;
+    chineseName?: string;
+    englishName?: string;
+}
 
 export interface ReadWeaveContextFragment {
     id: string;
@@ -15,6 +24,59 @@ export interface ReadWeaveContextDecision {
     fragmentIds: string[];
     characterCount: number;
     characterBudget: number;
+    expansionLevel: number;
+    attemptedBudgets: number[];
+}
+
+export interface ReadWeaveWorkflowSummary {
+    generationAttempts: number;
+    validationPasses: number;
+    contextExpansions: number;
+    repairRounds: number;
+    unchangedSegmentsVerified: boolean;
+}
+
+export type ReadWeaveGenerationStage = "queued" | "optimizing" | "gathering-context" | "drafting" | "checking" | "repairing" | "expanding-context" | "complete" | "failed";
+
+export type ReadWeaveGenerationIssueCategory = "format" | "entity" | "evidence" | "integrity" | "other";
+
+export interface ReadWeaveGenerationIssue {
+    code: string;
+    category: ReadWeaveGenerationIssueCategory;
+    message: string;
+    segmentId?: string;
+    entity?: string;
+}
+
+export interface ReadWeaveGenerationProgress {
+    sequence?: number;
+    timestamp?: string;
+    elapsedMs?: number;
+    stage: ReadWeaveGenerationStage;
+    round: number;
+    message: string;
+    issues: string[];
+    issueGroups?: ReadWeaveGenerationIssue[];
+    repairedSegmentIds?: string[];
+    unchangedSegmentsVerified?: boolean;
+}
+
+export interface ReadWeaveGenerationJob {
+    jobId: string;
+    articleId: string;
+    anchorId: string;
+    anchorType: ReadWeaveAnchorType;
+    kind: ReadWeaveObjectKind;
+    title: string;
+    sourceExcerpt: string;
+    status: "queued" | "running" | "complete" | "failed";
+    unread: boolean;
+    feedback?: string;
+    progress: ReadWeaveGenerationProgress[];
+    result?: ReadWeaveGenerateResponse;
+    error?: string;
+    createdAt: string;
+    updatedAt: string;
 }
 
 export interface ReadWeaveObject {
@@ -24,6 +86,8 @@ export interface ReadWeaveObject {
     title: string;
     body: string;
     normalizedTitle: string;
+    calloutType: ReadWeaveCalloutType;
+    termIdentity?: ReadWeaveTermIdentity;
     revision: number;
     sourceArticleId: string;
     sourceAnchorId: string;
@@ -37,10 +101,12 @@ export interface ReadWeaveLink {
     linkId: string;
     articleId: string;
     anchorId: string;
+    anchorType: ReadWeaveAnchorType;
     objectId: string;
     sourceExcerpt: string;
     displayTitle?: string;
     displayBody?: string;
+    displayCalloutType?: ReadWeaveCalloutType;
     createdAt: string;
     updatedAt: string;
 }
@@ -49,14 +115,28 @@ export interface ReadWeaveResolvedEntry {
     linkId: string;
     articleId: string;
     anchorId: string;
+    anchorType: ReadWeaveAnchorType;
     objectId: string;
     kind: ReadWeaveObjectKind;
     title: string;
     body: string;
+    calloutType: ReadWeaveCalloutType;
+    termIdentity?: ReadWeaveTermIdentity;
     canonicalTitle: string;
     canonicalBody: string;
+    canonicalCalloutType: ReadWeaveCalloutType;
     revision: number;
     isDisplayOverride: boolean;
+}
+
+export interface ReadWeaveAnchorSummary {
+    articleId: string;
+    anchorId: string;
+    anchorType: ReadWeaveAnchorType;
+    excerpt: string;
+    questionCount: number;
+    termCount: number;
+    entries: ReadWeaveResolvedEntry[];
 }
 
 export interface ReadWeaveCandidate {
@@ -77,26 +157,42 @@ export interface ReadWeaveImpact {
 export interface ReadWeaveGenerateRequest {
     articleId: string;
     anchorId: string;
+    anchorType: ReadWeaveAnchorType;
     kind: ReadWeaveObjectKind;
     title: string;
+    optimizeQuestion?: boolean;
+    termIdentity?: Partial<ReadWeaveTermIdentity>;
     fragments: ReadWeaveContextFragment[];
     characterBudget?: number;
+    feedback?: string;
 }
 
 export interface ReadWeaveGenerateResponse {
     body: string;
+    optimizedTitle?: string;
+    termIdentity?: ReadWeaveTermIdentity;
+    reviewIssues?: string[];
     context: ReadWeaveContextDecision;
+    workflow: ReadWeaveWorkflowSummary;
     provider: string;
     model: string;
+    webCalibration?: {
+        used: true;
+        sourceCount: number;
+        model: string;
+    };
 }
 
 export interface ReadWeaveSaveRequest {
     articleId: string;
     anchorId: string;
+    anchorType: ReadWeaveAnchorType;
     kind: ReadWeaveObjectKind;
     title: string;
     body: string;
     sourceExcerpt: string;
+    calloutType: ReadWeaveCalloutType;
+    termIdentity?: ReadWeaveTermIdentity;
     reuseObjectId?: string;
 }
 
@@ -104,6 +200,27 @@ export interface ReadWeaveEditRequest {
     mode: ReadWeaveEditMode;
     title: string;
     body: string;
+    calloutType: ReadWeaveCalloutType;
+    termIdentity?: ReadWeaveTermIdentity;
+}
+
+export interface ReadWeaveAiSettings {
+    baseUrl: string;
+    model: string;
+    hasApiKey: boolean;
+    maskedApiKey?: string;
+    credentialSource: "settings" | "environment" | "missing";
+}
+
+export interface ReadWeaveAiSettingsUpdate {
+    baseUrl: string;
+    model: string;
+    apiKey?: string;
+    clearApiKey?: boolean;
+}
+
+export interface ReadWeaveModelInfo {
+    id: string;
 }
 
 export interface ReadWeaveExport {
@@ -125,7 +242,9 @@ export interface ReadWeaveExport {
     anchors: Array<{
         anchorId: string;
         articleId: string;
-        selector: { type: "readweave-paragraph-v1"; value: string };
+        selector:
+            | { type: "readweave-paragraph-v1"; value: string }
+            | { type: "readweave-range-v1"; value: string; quote: string };
         excerpt: string;
     }>;
     objects: ReadWeaveObject[];
