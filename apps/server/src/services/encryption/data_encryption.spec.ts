@@ -12,6 +12,15 @@ describe("data encryption", () => {
         expect(dataEncryption.decryptString(key, encrypted)).toBe("sensitive value");
     });
 
+    it("uses a fresh derivation salt for every ciphertext", () => {
+        const first = dataEncryption.encrypt(key, "sensitive value");
+        const second = dataEncryption.encrypt(key, "sensitive value");
+
+        expect(first).not.toBe(second);
+        expect(dataEncryption.decryptString(key, first)).toBe("sensitive value");
+        expect(dataEncryption.decryptString(key, second)).toBe("sensitive value");
+    });
+
     it("rejects modified authenticated ciphertext", () => {
         const encrypted = dataEncryption.encrypt(key, "sensitive value");
         const payload = Buffer.from(encrypted.slice("v2:".length), "base64");

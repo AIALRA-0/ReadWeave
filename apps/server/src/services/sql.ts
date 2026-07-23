@@ -360,18 +360,29 @@ function fillParamList(paramIds: string[] | Set<string>, truncate = true) {
 
 async function copyDatabase(targetFilePath: string) {
     const resolvedTarget = path.resolve(targetFilePath);
-    const allowedDirectories = [ dataDir.BACKUP_DIR, dataDir.ANONYMIZED_DB_DIR ]
-        .map((directory) => `${path.resolve(directory)}${path.sep}`);
+    const requestedDirectory = path.dirname(resolvedTarget);
+    const targetFileName = path.basename(resolvedTarget);
+    const allowedDirectory = [ dataDir.BACKUP_DIR, dataDir.ANONYMIZED_DB_DIR ]
+        .map((directory) => path.resolve(directory))
+        .find((directory) => directory === requestedDirectory);
 
-    if (!allowedDirectories.some((directory) => resolvedTarget.startsWith(directory))) {
-        throw new Error(`Database copy target is outside an allowed directory: '${resolvedTarget}'`);
+    if (!allowedDirectory) {
+        throw new Error(
+            `Database copy target is outside an allowed directory: '${resolvedTarget}'`
+        );
     }
 
+    // Resolve the already-created parent directory to prevent a configured
+    // symlink from redirecting a backup outside the approved location. Only
+    // the basename from the requested path is retained.
+    const canonicalDirectory = fs.realpathSync(allowedDirectory);
+    const safeTarget = path.join(canonicalDirectory, targetFileName);
+
     try {
-        fs.unlinkSync(resolvedTarget);
+        fs.unlinkSync(safeTarget);
     } catch (e) {} // unlink throws exception if the file did not exist
 
-    await dbConnection.backup(resolvedTarget);
+    await dbConnection.backup(safeTarget);
 }
 
 function disableSlowQueryLogging<T>(cb: () => T) {

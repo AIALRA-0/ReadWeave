@@ -2,6 +2,10 @@ import crypto from "crypto";
 import log from "../log.js";
 
 const AUTHENTICATED_ENCRYPTION_PREFIX = "v2:";
+const AUTHENTICATED_ENCRYPTION_SALT_LENGTH = 16;
+const AUTHENTICATED_ENCRYPTION_IV_LENGTH = 12;
+const AUTHENTICATED_ENCRYPTION_TAG_LENGTH = 16;
+const AUTHENTICATED_ENCRYPTION_INFO = Buffer.from("trilium-data-encryption-v2");
 
 function arraysIdentical(a: any[] | Buffer, b: any[] | Buffer) {
     let i = a.length;
@@ -29,8 +33,8 @@ function pad(data: Buffer): Buffer {
     return Buffer.from(data);
 }
 
-function deriveAuthenticatedEncryptionKey(key: Buffer) {
-    return crypto.createHash("sha256").update(key).digest();
+function deriveAuthenticatedEncryptionKey(key: Buffer, salt: Buffer) {
+    return Buffer.from(crypto.hkdfSync("sha256", key, salt, AUTHENTICATED_ENCRYPTION_INFO, 32));
 }
 
 function encrypt(key: Buffer, plainText: Buffer | string) {
@@ -40,10 +44,15 @@ function encrypt(key: Buffer, plainText: Buffer | string) {
 
     const plainTextBuffer = Buffer.isBuffer(plainText) ? plainText : Buffer.from(plainText);
 
-    const iv = crypto.randomBytes(12);
-    const cipher = crypto.createCipheriv("aes-256-gcm", deriveAuthenticatedEncryptionKey(key), iv);
-    const encryptedData = Buffer.concat([cipher.update(plainTextBuffer), cipher.final()]);
-    const payload = Buffer.concat([iv, cipher.getAuthTag(), encryptedData]);
+    const salt = crypto.randomBytes(AUTHENTICATED_ENCRYPTION_SALT_LENGTH);
+    const iv = crypto.randomBytes(AUTHENTICATED_ENCRYPTION_IV_LENGTH);
+    const cipher = crypto.createCipheriv(
+        "aes-256-gcm",
+        deriveAuthenticatedEncryptionKey(key, salt),
+        iv
+    );
+    const encryptedData = Buffer.concat([ cipher.update(plainTextBuffer), cipher.final() ]);
+    const payload = Buffer.concat([ salt, iv, cipher.getAuthTag(), encryptedData ]);
 
     return `${AUTHENTICATED_ENCRYPTION_PREFIX}${payload.toString("base64")}`;
 }
@@ -61,18 +70,34 @@ function decrypt(key: Buffer, cipherText: string | Buffer): Buffer | false | nul
 
     try {
         if (encodedCipherText.startsWith(AUTHENTICATED_ENCRYPTION_PREFIX)) {
-            const payload = Buffer.from(encodedCipherText.slice(AUTHENTICATED_ENCRYPTION_PREFIX.length), "base64");
-            if (payload.length < 28) {
+            const encodedPayload = encodedCipherText.slice(AUTHENTICATED_ENCRYPTION_PREFIX.length);
+            const payload = Buffer.from(encodedPayload, "base64");
+            const authenticatedHeaderLength =
+                AUTHENTICATED_ENCRYPTION_SALT_LENGTH
+                + AUTHENTICATED_ENCRYPTION_IV_LENGTH
+                + AUTHENTICATED_ENCRYPTION_TAG_LENGTH;
+            if (payload.length < authenticatedHeaderLength) {
                 return false;
             }
 
-            const iv = payload.subarray(0, 12);
-            const authTag = payload.subarray(12, 28);
-            const encryptedData = payload.subarray(28);
-            const decipher = crypto.createDecipheriv("aes-256-gcm", deriveAuthenticatedEncryptionKey(key), iv);
+            const salt = payload.subarray(0, AUTHENTICATED_ENCRYPTION_SALT_LENGTH);
+            const iv = payload.subarray(
+                AUTHENTICATED_ENCRYPTION_SALT_LENGTH,
+                AUTHENTICATED_ENCRYPTION_SALT_LENGTH + AUTHENTICATED_ENCRYPTION_IV_LENGTH
+            );
+            const authTag = payload.subarray(
+                AUTHENTICATED_ENCRYPTION_SALT_LENGTH + AUTHENTICATED_ENCRYPTION_IV_LENGTH,
+                authenticatedHeaderLength
+            );
+            const encryptedData = payload.subarray(authenticatedHeaderLength);
+            const decipher = crypto.createDecipheriv(
+                "aes-256-gcm",
+                deriveAuthenticatedEncryptionKey(key, salt),
+                iv
+            );
             decipher.setAuthTag(authTag);
 
-            return Buffer.concat([decipher.update(encryptedData), decipher.final()]);
+            return Buffer.concat([ decipher.update(encryptedData), decipher.final() ]);
         }
 
         // Backward-compatible decryption for data written by earlier Trilium
