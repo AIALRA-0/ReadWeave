@@ -1,10 +1,6 @@
 import { Plugin } from "ckeditor5";
 
-/**
- * Persists ReadWeave paragraph anchors in note HTML. The attribute lives on a
- * CKEditor block, so normal editing, undo, copy and Trilium synchronization all
- * keep the anchor together with its paragraph.
- */
+/** Persists both legacy paragraph anchors and fine-grained inline anchors. */
 export default class ReadWeaveAnchor extends Plugin {
     static get pluginName() {
         return "ReadWeaveAnchor" as const;
@@ -12,15 +8,34 @@ export default class ReadWeaveAnchor extends Plugin {
 
     init() {
         const { editor } = this;
-        editor.model.schema.extend("$block", { allowAttributes: [ "readWeaveAnchorId" ] });
+        editor.model.schema.extend("$block", { allowAttributes: [ "readWeaveParagraphAnchorId" ] });
+        editor.model.schema.extend("$text", { allowAttributes: [ "readWeaveAnchorId" ] });
 
         editor.conversion.for("upcast").attributeToAttribute({
             view: "data-readweave-anchor-id",
-            model: "readWeaveAnchorId"
+            model: "readWeaveParagraphAnchorId"
+        });
+        editor.conversion.for("upcast").elementToAttribute({
+            view: {
+                name: "span",
+                attributes: {
+                    "data-readweave-range-anchor-id": /.+/
+                }
+            },
+            model: {
+                key: "readWeaveAnchorId",
+                value: viewElement => viewElement.getAttribute("data-readweave-range-anchor-id")
+            }
         });
         editor.conversion.for("downcast").attributeToAttribute({
-            model: "readWeaveAnchorId",
+            model: "readWeaveParagraphAnchorId",
             view: "data-readweave-anchor-id"
+        });
+        editor.conversion.for("downcast").attributeToElement({
+            model: "readWeaveAnchorId",
+            view: (anchorId, { writer }) => writer.createAttributeElement("span", {
+                "data-readweave-range-anchor-id": anchorId
+            }, { priority: 5 })
         });
     }
 }

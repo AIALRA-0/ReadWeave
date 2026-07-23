@@ -15,7 +15,7 @@ export async function initLocale(locale: LOCALE_IDS = "en") {
         lng: locale,
         fallbackLng: "en",
         backend: {
-            loadPath: `${window.glob.assetPath}/translations/{{lng}}/{{ns}}.json`
+            loadPath: `${window.glob.assetPath}/translations/{{lng}}/{{ns}}.json?v=${encodeURIComponent(window.glob.assetCacheKey)}`
         },
         returnEmptyString: false
     });

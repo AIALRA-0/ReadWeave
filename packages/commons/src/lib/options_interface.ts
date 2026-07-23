@@ -195,6 +195,12 @@ export interface OptionDefinitions extends KeyboardShortcutsOptions<KeyboardActi
     /** Whether the MCP (Model Context Protocol) server endpoint is enabled. */
     mcpEnabled: boolean;
 
+    // ReadWeave AI settings are local-only. The API key is intentionally not
+    // exposed through the generic options endpoint.
+    readWeaveApiKey: string;
+    readWeaveBaseUrl: string;
+    readWeaveModel: string;
+
     // OCR options
     ocrEnabled: boolean;
     ocrLanguage: string;

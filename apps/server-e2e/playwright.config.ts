@@ -13,6 +13,9 @@ export default defineConfig({
     reporter: [["list"], ["html", { outputFolder: "test-output" }]],
     outputDir: "test-output",
     retries: 3,
+    // All browser tests share one integration database and server. Running them
+    // concurrently can leak tabs and search results between test files on slower CI machines.
+    workers: process.env.CI ? 1 : undefined,
 
     /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
     use: {
@@ -23,7 +26,7 @@ export default defineConfig({
 
     /* Run your local dev server before starting the tests */
     webServer: !process.env.TRILIUM_DOCKER ? {
-        command: 'pnpm start-prod-no-dir',
+        command: 'pnpm build && cross-env TRILIUM_ENV=production node dist/main.cjs',
         url: baseURL,
         reuseExistingServer: !process.env.CI,
         cwd: join(__dirname, "../server"),
