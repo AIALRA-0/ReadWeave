@@ -9,6 +9,7 @@ import type { Statement, Database as DatabaseType, RunResult } from "better-sqli
 import dataDir from "./data_dir.js";
 import cls from "./cls.js";
 import fs from "fs";
+import path from "path";
 import Database from "better-sqlite3";
 import ws from "./ws.js";
 import becca_loader from "../becca/becca_loader.js";
@@ -59,6 +60,14 @@ const LOG_ALL_QUERIES = false;
 
 type Params = any;
 
+function validateSqlIdentifier(identifier: string): string {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(identifier)) {
+        throw new Error(`Invalid SQL identifier '${identifier}'`);
+    }
+
+    return identifier;
+}
+
 [`exit`, `SIGINT`, `SIGUSR1`, `SIGUSR2`, `SIGTERM`].forEach((eventType) => {
     process.on(eventType, () => {
         if (dbConnection) {
@@ -76,7 +85,8 @@ function insert<T extends {}>(tableName: string, rec: T, replace = false) {
         return;
     }
 
-    const columns = keys.join(", ");
+    tableName = validateSqlIdentifier(tableName);
+    const columns = keys.map(validateSqlIdentifier).join(", ");
     const questionMarks = keys.map((p) => "?").join(", ");
 
     const query = `INSERT
@@ -103,22 +113,23 @@ function upsert<T extends {}>(tableName: string, primaryKey: string, rec: T) {
         return;
     }
 
-    const columns = keys.join(", ");
+    tableName = validateSqlIdentifier(tableName);
+    primaryKey = validateSqlIdentifier(primaryKey);
+    const safeKeys = keys.map(validateSqlIdentifier);
+    const columns = safeKeys.join(", ");
 
-    const questionMarks = keys.map((colName) => `@${colName}`).join(", ");
+    const questionMarks = safeKeys.map((colName) => `@${colName}`).join(", ");
 
-    const updateMarks = keys.map((colName) => `${colName} = @${colName}`).join(", ");
+    const updateMarks = safeKeys.map((colName) => `${colName} = @${colName}`).join(", ");
 
     const query = `INSERT INTO ${tableName} (${columns}) VALUES (${questionMarks})
                     ON CONFLICT (${primaryKey}) DO UPDATE SET ${updateMarks}`;
 
-    for (const idx in rec) {
-        if (rec[idx] === true || rec[idx] === false) {
-            (rec as any)[idx] = rec[idx] ? 1 : 0;
-        }
-    }
+    const boundValues = Object.fromEntries(
+        safeKeys.map((key) => [ key, rec[key] === true || rec[key] === false ? Number(rec[key]) : rec[key] ])
+    );
 
-    execute(query, rec);
+    execute(query, boundValues);
 }
 
 /**
@@ -348,11 +359,19 @@ function fillParamList(paramIds: string[] | Set<string>, truncate = true) {
 }
 
 async function copyDatabase(targetFilePath: string) {
+    const resolvedTarget = path.resolve(targetFilePath);
+    const allowedDirectories = [ dataDir.BACKUP_DIR, dataDir.ANONYMIZED_DB_DIR ]
+        .map((directory) => `${path.resolve(directory)}${path.sep}`);
+
+    if (!allowedDirectories.some((directory) => resolvedTarget.startsWith(directory))) {
+        throw new Error(`Database copy target is outside an allowed directory: '${resolvedTarget}'`);
+    }
+
     try {
-        fs.unlinkSync(targetFilePath);
+        fs.unlinkSync(resolvedTarget);
     } catch (e) {} // unlink throws exception if the file did not exist
 
-    await dbConnection.backup(targetFilePath);
+    await dbConnection.backup(resolvedTarget);
 }
 
 function disableSlowQueryLogging<T>(cb: () => T) {

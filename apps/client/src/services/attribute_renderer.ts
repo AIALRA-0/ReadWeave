@@ -39,15 +39,9 @@ async function renderAttribute(attribute: FAttribute, renderIsInheritable: boole
 function formatValue(val: string) {
     if (/^[\p{L}\p{N}\-_,.]+$/u.test(val)) {
         return val;
-    } else if (!val.includes('"')) {
-        return `"${val}"`;
-    } else if (!val.includes("'")) {
-        return `'${val}'`;
-    } else if (!val.includes("`")) {
-        return `\`${val}\``;
-    } else {
-        return `"${val.replace(/"/g, '\\"')}"`;
     }
+
+    return `"${val.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 async function createLink(noteId: string) {

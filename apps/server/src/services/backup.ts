@@ -72,6 +72,10 @@ function periodBackup(optionName: "lastDailyBackupDate" | "lastWeeklyBackupDate"
 }
 
 async function backupNow(name: string) {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(name)) {
+        throw new Error(`Invalid backup name '${name}'`);
+    }
+
     // we don't want to back up DB in the middle of sync with potentially inconsistent DB state
     return await syncMutexService.doExclusively(async () => {
         const backupFile = path.resolve(`${dataDir.BACKUP_DIR}/backup-${name}.db`);

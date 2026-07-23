@@ -17,8 +17,7 @@ module.exports = async function (filePath) {
         fs.mkdirSync(outputDir);
     }
 
-    const command = `${WINDOWS_SIGN_EXECUTABLE} --executable "${filePath}"`;
-    console.log(`[Sign] Running ${command}`);
+    console.log(`[Sign] Running ${WINDOWS_SIGN_EXECUTABLE}`);
 
     let remainingTries = 10;
     let sleepTime = 10_000;
@@ -35,7 +34,7 @@ module.exports = async function (filePath) {
 
         // Run the signing.
         try {
-            child_process.execSync(command);
+            child_process.execFileSync(WINDOWS_SIGN_EXECUTABLE, [ "--executable", filePath ]);
             console.log(`[Sign] Signed ${filePath} successfully.`);
             break;
         } catch (e) {
@@ -43,7 +42,15 @@ module.exports = async function (filePath) {
             console.warn(`[Sign] Unable to sign ${filePath} due to:\n${output}`);
 
             // Check if the error is retryable.
-            if (!output.includes("http://timestamp.digicert.com")) {
+            const hasRetryableTimestampUrl = output.split(/\s+/).some((token) => {
+                try {
+                    const parsed = new URL(token.replace(/[),.;]+$/, ""));
+                    return parsed.protocol === "http:" && parsed.hostname === "timestamp.digicert.com";
+                } catch {
+                    return false;
+                }
+            });
+            if (!hasRetryableTimestampUrl) {
                 console.warn("Cannot retry due to unknown error.");
                 process.exit(1);
             }

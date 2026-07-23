@@ -8,6 +8,19 @@ export { ADMONITION_TYPE_MAPPINGS };
 
 export const DEFAULT_ADMONITION_TYPE = ADMONITION_TYPE_MAPPINGS.note;
 
+function escapeLinkDestination(destination: string) {
+    return destination
+        .replace(/\\/g, "\\\\")
+        .replace(/([()])/g, "\\$1")
+        .replace(/ /g, "%20");
+}
+
+function escapeLinkTitle(title: string) {
+    return title
+        .replace(/\\/g, "\\\\")
+        .replace(/"/g, '\\"');
+}
+
 const fencedCodeBlockFilter: Rule = {
     filter (node, options) {
         return options.codeBlockStyle === "fenced" && node.nodeName === "PRE" && node.firstChild !== null && node.firstChild.nodeName === "CODE";
@@ -87,16 +100,6 @@ function buildImageFilter() {
         return content.replace(escapePattern, (match, before, after) => {
             return before ? `\\${before}` : `${after}\\`;
         });
-    }
-
-    function escapeLinkDestination(destination: string) {
-        return destination
-            .replace(/([()])/g, '\\$1')
-            .replace(/ /g, "%20");
-    }
-
-    function escapeLinkTitle (title: string) {
-        return title.replace(/"/g, '\\"');
     }
 
     const imageFilter: Rule = {
@@ -191,9 +194,9 @@ function buildInlineLinkFilter(): Rule {
             // Otherwise treat as normal.
             // TODO: Call super() somehow instead of duplicating the implementation.
             let href = node.getAttribute('href');
-            if (href) href = href.replace(/([()])/g, '\\$1');
+            if (href) href = escapeLinkDestination(href);
             let title = cleanAttribute(node.getAttribute('title'));
-            if (title) title = ` "${title.replace(/"/g, '\\"')}"`;
+            if (title) title = ` "${escapeLinkTitle(title)}"`;
             return `[${content}](${href}${title})`;
         }
     };
