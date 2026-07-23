@@ -380,9 +380,15 @@ Readability.prototype = {
     this._forEachNode(links, function(link) {
       var href = link.getAttribute("href");
       if (href) {
-        // Remove links with javascript: URIs, since
+        var protocol = "";
+        try {
+          protocol = new URL(href, baseURI).protocol.toLowerCase();
+        } catch (ex) {
+          // Invalid links are handled by toAbsoluteURI below.
+        }
+        // Remove links with executable or embedded-content URIs, since
         // they won't work after scripts have been removed from the page.
-        if (href.indexOf("javascript:") === 0) {
+        if (["javascript:", "data:", "vbscript:"].indexOf(protocol) !== -1) {
           // if the link only contains simple text content, it can be converted to a text node
           if (link.childNodes.length === 1 && link.childNodes[0].nodeType === this.TEXT_NODE) {
             var text = this._doc.createTextNode(link.textContent);

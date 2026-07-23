@@ -2,6 +2,7 @@ import { type AttachmentRow, type AttributeRow, type BranchRow, dayjs, type Note
 import fs from "fs";
 import html2plaintext from "html2plaintext";
 import { t } from "i18next";
+import { parse } from "node-html-parser";
 import path from "path";
 import url from "url";
 
@@ -14,7 +15,7 @@ import ValidationError from "../errors/validation_error.js";
 import cls from "../services/cls.js";
 import log from "../services/log.js";
 import protectedSessionService from "../services/protected_session.js";
-import { newEntityId, quoteRegex, toMap, unescapeHtml } from "../services/utils.js";
+import { escapeHtml, newEntityId, quoteRegex, toMap, unescapeHtml } from "../services/utils.js";
 import dateUtils from "./date_utils.js";
 import entityChangesService from "./entity_changes.js";
 import eventService from "./events.js";
@@ -664,11 +665,14 @@ function replaceUrl(content: string, url: string, attachment: Attachment) {
 }
 
 function downloadImages(noteId: string, content: string) {
-    const imageRe = /<img[^>]*?\ssrc=['"]([^'">]+)['"]/gi;
-    let imageMatch;
+    const imageUrls = new Set(
+        parse(content)
+            .querySelectorAll("img")
+            .map((image) => image.getAttribute("src"))
+            .filter((imageUrl): imageUrl is string => Boolean(imageUrl))
+    );
 
-    while ((imageMatch = imageRe.exec(content))) {
-        const url = imageMatch[1];
+    for (const url of imageUrls) {
         const inlineImageMatch = /^data:image\/[a-z]+;base64,/.exec(url);
 
         if (inlineImageMatch) {
@@ -677,12 +681,10 @@ function downloadImages(noteId: string, content: string) {
 
             const attachment = imageService.saveImageToAttachment(noteId, imageBuffer, "inline image", true, true);
 
-            const encodedTitle = encodeURIComponent(attachment.title);
-
-            content = `${content.substring(0, imageMatch.index)}<img src="api/attachments/${attachment.attachmentId}/image/${encodedTitle}"${content.substring(imageMatch.index + imageMatch[0].length)}`;
+            content = replaceUrl(content, url, attachment);
         } else if (
             !url.includes("api/images/") &&
-            !/api\/attachments\/.+\/image\/?.*/.test(url) &&
+            !isInternalAttachmentUrl(url) &&
             // this is an exception for the web clipper's "imageId"
             (url.length !== 20 || url.toLowerCase().startsWith("http"))
         ) {
@@ -763,17 +765,35 @@ function downloadImages(noteId: string, content: string) {
     return content;
 }
 
+function isInternalAttachmentUrl(url: string) {
+    const pathOnly = url.split("?")[0].split("#")[0];
+    const segments = pathOnly.split("/").filter(Boolean);
+    return segments[0] === "api"
+        && segments[1] === "attachments"
+        && Boolean(segments[2])
+        && segments[3] === "image";
+}
+
 function saveAttachments(note: BNote, content: string) {
-    const inlineAttachmentRe = /<a[^>]*?\shref=['"]data:([^;'">]+);base64,([^'">]+)['"][^>]*>(.*?)<\/a>/gim;
-    let attachmentMatch;
+    const root = parse(content);
 
-    while ((attachmentMatch = inlineAttachmentRe.exec(content))) {
-        const mime = attachmentMatch[1].toLowerCase();
+    for (const link of root.querySelectorAll("a")) {
+        const href = link.getAttribute("href");
+        if (!href?.startsWith("data:")) {
+            continue;
+        }
 
-        const base64data = attachmentMatch[2];
+        const marker = ";base64,";
+        const markerIndex = href.indexOf(marker);
+        if (markerIndex <= "data:".length) {
+            continue;
+        }
+
+        const mime = href.slice("data:".length, markerIndex).toLowerCase();
+        const base64data = href.slice(markerIndex + marker.length);
         const buffer = Buffer.from(base64data, "base64");
 
-        const title = html2plaintext(attachmentMatch[3]);
+        const title = html2plaintext(link.innerHTML);
 
         const attachment = note.saveAttachment({
             role: "file",
@@ -782,8 +802,12 @@ function saveAttachments(note: BNote, content: string) {
             content: buffer
         });
 
-        content = `${content.substring(0, attachmentMatch.index)}<a class="reference-link" href="#root/${note.noteId}?viewMode=attachments&attachmentId=${attachment.attachmentId}">${title}</a>${content.substring(attachmentMatch.index + attachmentMatch[0].length)}`;
+        link.replaceWith(
+            `<a class="reference-link" href="#root/${note.noteId}?viewMode=attachments&attachmentId=${attachment.attachmentId}">${escapeHtml(title)}</a>`
+        );
     }
+
+    content = root.toString();
 
     // removing absolute references to server to keep it working between instances,
     // we also omit / at the beginning to keep the paths relative

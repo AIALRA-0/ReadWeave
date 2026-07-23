@@ -4,6 +4,7 @@ import crypto from "crypto";
 import escape from "escape-html";
 import { t } from "i18next";
 import mimeTypes from "mime-types";
+import { parse } from "node-html-parser";
 import { release as osRelease } from "os";
 import path from "path";
 import { generator } from "rand-token";
@@ -124,15 +125,116 @@ export function sanitizeSqlIdentifier(str: string) {
  * This prevents XSS via script injection in SVG content.
  */
 export function sanitizeSvg(svg: string): string {
-    return svg
-        // Remove script elements
-        .replace(/<script[\s\S]*?<\/script>/gi, '')
-        // Remove on* event handlers (onclick, onload, onerror, etc.)
-        .replace(/\s+on\w+\s*=\s*["'][^"']*["']/gi, '')
-        .replace(/\s+on\w+\s*=\s*[^\s>]+/gi, '')
-        // Remove javascript: URLs
-        .replace(/href\s*=\s*["']javascript:[^"']*["']/gi, 'href="#"')
-        .replace(/xlink:href\s*=\s*["']javascript:[^"']*["']/gi, 'xlink:href="#"');
+    const blockedTags = new Set([ "script", "foreignobject", "iframe", "object", "embed" ]);
+    const normalizedSvg = normalizeBlockedTagClosings(
+        normalizeBlockedTagOpenings(svg, blockedTags),
+        blockedTags
+    );
+    const root = parse(normalizedSvg);
+    const selfClosingTagSerializer = {
+        formatNode: (tag: string, attributes: string) => `<${tag}${attributes}/>`,
+        isVoidElement: () => true
+    };
+
+    for (const element of root.querySelectorAll("*")) {
+        if (blockedTags.has(element.rawTagName.toLowerCase())) {
+            element.remove();
+            continue;
+        }
+
+        for (const attributeName of Object.keys(element.attributes)) {
+            const lowerName = attributeName.toLowerCase();
+            if (lowerName.startsWith("on")) {
+                element.removeAttribute(attributeName);
+                continue;
+            }
+
+            if (lowerName === "href" || lowerName === "xlink:href") {
+                const value = element.getAttribute(attributeName) || "";
+                try {
+                    const protocol = new URL(value, "https://svg.invalid/").protocol.toLowerCase();
+                    if ([ "javascript:", "vbscript:" ].includes(protocol)
+                        || (protocol === "data:" && !value.trim().toLowerCase().startsWith("data:image/"))) {
+                        element.setAttribute(attributeName, "#");
+                    }
+                } catch {
+                    element.setAttribute(attributeName, "#");
+                }
+            }
+        }
+
+        const originalElement = normalizedSvg.slice(element.range[0], element.range[1]).trimEnd();
+        if (element.childNodes.length === 0 && originalElement.endsWith("/>")) {
+            (element as unknown as { voidTag: typeof selfClosingTagSerializer }).voidTag = selfClosingTagSerializer;
+        }
+    }
+
+    return root.toString();
+}
+
+function normalizeBlockedTagOpenings(svg: string, blockedTags: ReadonlySet<string>) {
+    const lowerSvg = svg.toLowerCase();
+    let normalizedSvg = "";
+    let copiedUntil = 0;
+    let searchFrom = 0;
+
+    while (searchFrom < svg.length) {
+        const tagStart = lowerSvg.indexOf("<", searchFrom);
+        if (tagStart === -1) {
+            break;
+        }
+        if (lowerSvg[tagStart + 1] === "/") {
+            searchFrom = tagStart + 2;
+            continue;
+        }
+
+        let tagNameEnd = tagStart + 1;
+        while (tagNameEnd < svg.length && ![ " ", "\t", "\r", "\n", "/", ">" ].includes(svg[tagNameEnd])) {
+            tagNameEnd++;
+        }
+
+        const tagName = lowerSvg.slice(tagStart + 1, tagNameEnd);
+        if (blockedTags.has(tagName)) {
+            normalizedSvg += `${svg.slice(copiedUntil, tagStart + 1)}${tagName}`;
+            copiedUntil = tagNameEnd;
+        }
+
+        searchFrom = tagNameEnd;
+    }
+
+    return `${normalizedSvg}${svg.slice(copiedUntil)}`;
+}
+
+function normalizeBlockedTagClosings(svg: string, blockedTags: ReadonlySet<string>) {
+    const lowerSvg = svg.toLowerCase();
+    let normalizedSvg = "";
+    let copiedUntil = 0;
+    let searchFrom = 0;
+
+    while (searchFrom < svg.length) {
+        const closingTagStart = lowerSvg.indexOf("</", searchFrom);
+        if (closingTagStart === -1) {
+            break;
+        }
+
+        const closingTagEnd = lowerSvg.indexOf(">", closingTagStart + 2);
+        if (closingTagEnd === -1) {
+            break;
+        }
+
+        const tagContent = lowerSvg.slice(closingTagStart + 2, closingTagEnd).trim();
+        const firstWhitespace = tagContent.search(/\s/);
+        const tagName = firstWhitespace === -1 ? tagContent : tagContent.slice(0, firstWhitespace);
+
+        if (blockedTags.has(tagName)) {
+            normalizedSvg += `${svg.slice(copiedUntil, closingTagStart)}</${tagName}>`;
+            copiedUntil = closingTagEnd + 1;
+        }
+
+        searchFrom = closingTagEnd + 1;
+    }
+
+    return `${normalizedSvg}${svg.slice(copiedUntil)}`;
 }
 
 export const escapeHtml = escape;
@@ -152,7 +254,7 @@ export function toObject<T, K extends string | number | symbol, V>(array: T[], f
 }
 
 export function stripTags(text: string) {
-    return text.replace(/<(?:.|\n)*?>/gm, "");
+    return parse(text).textContent;
 }
 
 export function escapeRegExp(str: string) {

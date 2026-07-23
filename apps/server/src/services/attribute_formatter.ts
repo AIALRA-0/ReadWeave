@@ -30,15 +30,9 @@ function formatAttrForSearch(attr: AttributeRow, searchWithValue: boolean) {
 function formatValue(val: string) {
     if (!/[^\w]/.test(val)) {
         return val;
-    } else if (!val.includes('"')) {
-        return `"${val}"`;
-    } else if (!val.includes("'")) {
-        return `'${val}'`;
-    } else if (!val.includes("`")) {
-        return `\`${val}\``;
-    } else {
-        return `"${val.replace(/"/g, '\\"')}"`;
     }
+
+    return `"${val.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 export default {

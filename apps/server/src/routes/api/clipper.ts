@@ -175,12 +175,13 @@ export function processContent(images: Image[], note: BNote, content: string) {
 
     // fallback if parsing/downloading images fails for some reason on the extension side (
     rewrittenContent = noteService.downloadImages(note.noteId, rewrittenContent);
-    // Check if rewrittenContent contains at least one HTML tag
-    if (!/<.+?>/.test(rewrittenContent)) {
+    // Parse once instead of using a backtracking regular expression on
+    // untrusted clipping content.
+    let dom = parse(rewrittenContent);
+    if (dom.querySelectorAll("*").length === 0) {
         rewrittenContent = `<p>${rewrittenContent}</p>`;
+        dom = parse(rewrittenContent);
     }
-    // Create a JSDOM object from the existing HTML content
-    const dom = parse(rewrittenContent);
 
     // Get the content inside the body tag and serialize it
     rewrittenContent = dom.innerHTML ?? "";
