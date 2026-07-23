@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://readweave.local/schemas/readweave-index-export-1.0.schema.json",
+  "$id": "https://readweave.local/schemas/readweave-index-export-1.1.schema.json",
   "title": "ReadWeave index export",
   "type": "object",
   "additionalProperties": false,
@@ -17,7 +17,7 @@
     "integrity"
   ],
   "properties": {
-    "schemaVersion": { "const": "1.0" },
+    "schemaVersion": { "const": "1.1" },
     "exportId": { "$ref": "#/$defs/id" },
     "exportedAt": { "type": "string", "format": "date-time" },
     "generator": { "$ref": "#/$defs/generator" },
@@ -76,13 +76,27 @@
       }
     },
     "selector": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["type", "value"],
-      "properties": {
-        "type": { "const": "readweave-paragraph-v1" },
-        "value": { "$ref": "#/$defs/id" }
-      }
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value"],
+          "properties": {
+            "type": { "const": "readweave-paragraph-v1" },
+            "value": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "value", "quote"],
+          "properties": {
+            "type": { "const": "readweave-range-v1" },
+            "value": { "$ref": "#/$defs/id" },
+            "quote": { "type": "string" }
+          }
+        }
+      ]
     },
     "anchor": {
       "type": "object",
@@ -105,6 +119,7 @@
         "title",
         "body",
         "normalizedTitle",
+        "calloutType",
         "revision",
         "sourceArticleId",
         "sourceAnchorId",
@@ -113,12 +128,14 @@
         "updatedAt"
       ],
       "properties": {
-        "schemaVersion": { "const": "1.0" },
+        "schemaVersion": { "const": "1.1" },
         "objectId": { "$ref": "#/$defs/id" },
         "kind": { "enum": ["question", "term"] },
         "title": { "type": "string", "minLength": 1 },
         "body": { "type": "string", "minLength": 1 },
         "normalizedTitle": { "type": "string" },
+        "calloutType": { "$ref": "#/$defs/calloutType" },
+        "termIdentity": { "$ref": "#/$defs/termIdentity" },
         "revision": { "type": "integer", "minimum": 1 },
         "sourceArticleId": { "$ref": "#/$defs/id" },
         "sourceAnchorId": { "$ref": "#/$defs/id" },
@@ -135,22 +152,37 @@
         "linkId",
         "articleId",
         "anchorId",
+        "anchorType",
         "objectId",
         "sourceExcerpt",
         "createdAt",
         "updatedAt"
       ],
       "properties": {
-        "schemaVersion": { "const": "1.0" },
+        "schemaVersion": { "const": "1.1" },
         "linkId": { "$ref": "#/$defs/id" },
         "articleId": { "$ref": "#/$defs/id" },
         "anchorId": { "$ref": "#/$defs/id" },
+        "anchorType": { "enum": ["paragraph", "range"] },
         "objectId": { "$ref": "#/$defs/id" },
         "sourceExcerpt": { "type": "string" },
         "displayTitle": { "type": "string" },
         "displayBody": { "type": "string" },
+        "displayCalloutType": { "$ref": "#/$defs/calloutType" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "calloutType": {
+      "enum": ["note", "tip", "important", "warning", "caution"]
+    },
+    "termIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "abbreviation": { "type": "string", "minLength": 1 },
+        "chineseName": { "type": "string", "minLength": 1 },
+        "englishName": { "type": "string", "minLength": 1 }
       }
     },
     "integrity": {

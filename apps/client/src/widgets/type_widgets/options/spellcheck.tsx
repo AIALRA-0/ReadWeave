@@ -2,20 +2,27 @@ import { useCallback, useMemo } from "preact/hooks";
 
 import appContext from "../../../components/app_context";
 import { t } from "../../../services/i18n";
-import { dynamicRequire, isElectron, restartDesktopApp } from "../../../services/utils";
+import { isElectron } from "../../../services/utils";
 import Button from "../../react/Button";
 import FormText from "../../react/FormText";
+import FormToggle from "../../react/FormToggle";
 import { useTriliumOption, useTriliumOptionBool } from "../../react/hooks";
 import NoItems from "../../react/NoItems";
 import CheckboxList from "./components/CheckboxList";
-import OptionsRow, { OptionsRowWithToggle } from "./components/OptionsRow";
+import OptionsPageHeader from "./components/OptionsPageHeader";
+import OptionsRow from "./components/OptionsRow";
 import OptionsSection from "./components/OptionsSection";
 
 export default function SpellcheckSettings() {
     if (isElectron()) {
         return <ElectronSpellcheckSettings />;
     }
-    return <WebSpellcheckSettings />;
+    return (
+        <>
+            <OptionsPageHeader />
+            <WebSpellcheckSettings />
+        </>
+    );
 }
 
 interface SpellcheckLanguage {
@@ -26,30 +33,35 @@ interface SpellcheckLanguage {
 function ElectronSpellcheckSettings() {
     const [ spellCheckEnabled, setSpellCheckEnabled ] = useTriliumOptionBool("spellCheckEnabled");
 
+    const onToggle = useCallback((enabled: boolean) => {
+        setSpellCheckEnabled(enabled);
+        // Apply immediately to the live Electron sessions so the change takes
+        // effect without restarting the app.
+        window.electronApi?.spellcheck.setSpellCheckerEnabled(enabled);
+    }, [setSpellCheckEnabled]);
+
     return (
         <>
-            <OptionsSection title={t("spellcheck.title")}>
-                <FormText>{t("spellcheck.restart-required")}</FormText>
-
-                <OptionsRowWithToggle
-                    name="spell-check-enabled"
-                    label={t("spellcheck.enable")}
+            <OptionsPageHeader actions={
+                <FormToggle
+                    switchOnName="" switchOffName=""
+                    switchOnTooltip={t("spellcheck.enable")}
+                    switchOffTooltip={t("spellcheck.enable")}
                     currentValue={spellCheckEnabled}
-                    onChange={setSpellCheckEnabled}
+                    onChange={onToggle}
                 />
+            } />
 
-                <OptionsRow name="restart" centered>
-                    <Button
-                        name="restart-app-button"
-                        text={t("electron_integration.restart-app-button")}
-                        size="micro"
-                        onClick={restartDesktopApp}
-                    />
-                </OptionsRow>
-            </OptionsSection>
-
-            {spellCheckEnabled && <SpellcheckLanguages />}
-            {spellCheckEnabled && <CustomDictionary />}
+            {spellCheckEnabled ? (
+                <>
+                    <SpellcheckLanguages />
+                    <CustomDictionary />
+                </>
+            ) : (
+                <OptionsSection>
+                    <NoItems icon="bx bx-check-double" text={t("spellcheck.disabled_placeholder")} />
+                </OptionsSection>
+            )}
         </>
     );
 }
@@ -67,15 +79,18 @@ function SpellcheckLanguages() {
 
     const setSelectedCodes = useCallback((codes: string[]) => {
         setSpellCheckLanguageCode(codes.join(", "));
+        // Apply immediately to the live Electron sessions so the change takes
+        // effect without restarting the app.
+        window.electronApi?.spellcheck.setSpellCheckerLanguages(codes);
     }, [setSpellCheckLanguageCode]);
 
     const availableLanguages = useMemo<SpellcheckLanguage[]>(() => {
-        if (!isElectron()) {
+        const api = window.electronApi?.spellcheck;
+        if (!api) {
             return [];
         }
 
-        const { webContents } = dynamicRequire("@electron/remote").getCurrentWindow();
-        const codes = webContents.session.availableSpellCheckerLanguages as string[];
+        const codes = api.getAvailableSpellCheckerLanguages();
         const displayNames = new Intl.DisplayNames([navigator.language], { type: "language" });
 
         return codes.map((code) => ({

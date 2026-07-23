@@ -1,10 +1,18 @@
-import type { ReadWeaveCandidate, ReadWeaveContextDecision, ReadWeaveContextFragment, ReadWeaveObject, ReadWeaveObjectKind } from "@triliumnext/commons";
+import type {
+    ReadWeaveCandidate,
+    ReadWeaveContextDecision,
+    ReadWeaveContextFragment,
+    ReadWeaveObject,
+    ReadWeaveObjectKind,
+    ReadWeaveTermIdentity
+} from "@triliumnext/commons";
 
 const ROLE_WEIGHT: Record<ReadWeaveContextFragment["role"], number> = {
     selected: 10_000,
     heading: 700,
     previous: 500,
     next: 480,
+    section: 350,
     document: 100
 };
 
@@ -65,12 +73,16 @@ export function findReadWeaveCandidates(
     title: string,
     kind: ReadWeaveObjectKind,
     objects: ReadWeaveObject[],
-    limit = 8
+    limit = 8,
+    termIdentity?: Partial<ReadWeaveTermIdentity>
 ): ReadWeaveCandidate[] {
     return objects
         .filter(object => object.kind === kind)
         .map(object => {
-            const confidence = titleSimilarity(title, object.title);
+            const confidence = Math.max(
+                titleSimilarity(title, object.title),
+                kind === "term" ? termIdentitySimilarity(title, termIdentity, object.termIdentity) : 0
+            );
             return {
                 objectId: object.objectId,
                 kind: object.kind,
@@ -84,18 +96,43 @@ export function findReadWeaveCandidates(
         .slice(0, limit);
 }
 
+function termIdentitySimilarity(
+    title: string,
+    query: Partial<ReadWeaveTermIdentity> | undefined,
+    candidate: ReadWeaveTermIdentity | undefined
+): number {
+    if (!candidate) return 0;
+    const fields: Array<keyof ReadWeaveTermIdentity> = [ "abbreviation", "chineseName", "englishName" ];
+    const queryValues = [
+        title,
+        ...fields.map(field => query?.[field])
+    ].map(value => value?.trim()).filter((value): value is string => Boolean(value));
+    let best = 0;
+    for (const left of queryValues) {
+        for (const field of fields) {
+            const right = candidate[field]?.trim();
+            if (!right) continue;
+            const similarity = titleSimilarity(left, right);
+            if (similarity === 1) return 1;
+            best = Math.max(best, similarity);
+        }
+    }
+    return best;
+}
+
 export function selectReadWeaveContext(
     title: string,
     fragments: ReadWeaveContextFragment[],
-    characterBudget = 6_000
+    characterBudget = 6_000,
+    includeDocument = false
 ): { fragments: ReadWeaveContextFragment[]; decision: ReadWeaveContextDecision } {
-    const budget = Math.min(Math.max(characterBudget, 800), 20_000);
+    const budget = Math.min(Math.max(characterBudget, 800), 80_000);
     const promptTokens = tokenize(title);
     const unique = new Map<string, ReadWeaveContextFragment>();
     for (const fragment of fragments) {
         const text = fragment.text.replace(/\s+/g, " ").trim();
         if (!text || unique.has(fragment.id)) continue;
-        unique.set(fragment.id, { ...fragment, text: text.slice(0, 20_000) });
+        unique.set(fragment.id, { ...fragment, text: text.slice(0, 80_000) });
     }
 
     const ranked = Array.from(unique.values()).map((fragment, originalIndex) => {
@@ -108,7 +145,7 @@ export function selectReadWeaveContext(
                 + relevance * 1_000
                 - Math.max(fragment.distance ?? 0, 0) * 15
         };
-    }).filter(item => item.fragment.role !== "document" || item.relevance > 0)
+    }).filter(item => item.fragment.role !== "document" || includeDocument || item.relevance > 0)
         .toSorted((left, right) => right.score - left.score || left.originalIndex - right.originalIndex);
 
     const selected: typeof ranked = [];
@@ -130,7 +167,9 @@ export function selectReadWeaveContext(
         decision: {
             fragmentIds: selected.map(item => item.fragment.id),
             characterCount,
-            characterBudget: budget
+            characterBudget: budget,
+            expansionLevel: 0,
+            attemptedBudgets: [ budget ]
         }
     };
 }

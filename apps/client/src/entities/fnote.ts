@@ -462,9 +462,11 @@ export default class FNote {
                 return a.isArchived ? 1 : -1;
             } else if (a.isHidden !== b.isHidden) {
                 return a.isHidden ? 1 : -1;
+            /* v8 ignore start -- unreachable: getAllNotePaths() filters out search-typed parents at every level, so no path can contain a search note (isSearch is always false) */
             } else if (a.isSearch !== b.isSearch) {
                 return a.isSearch ? 1 : -1;
             }
+            /* v8 ignore stop */
             return a.notePath.length - b.notePath.length;
         });
 
@@ -531,11 +533,10 @@ export default class FNote {
             return attributes.filter((attr) => attr.name === name && attr.type === type);
         } else if (type) {
             return attributes.filter((attr) => attr.type === type);
-        } else if (name) {
-            return attributes.filter((attr) => attr.name === name);
         }
 
-        return [];
+        // type is falsy and the both-falsy case already returned above, so name is necessarily set here
+        return attributes.filter((attr) => attr.name === name);
     }
 
     __getInheritableAttributes(path: string[]) {
@@ -1073,8 +1074,19 @@ export default class FNote {
         return this.type === "code" && (this.mime === "text/markdown" || this.mime === "text/x-markdown" || this.mime === "text/x-gfm");
     }
 
+    isIconPack() {
+        // Icon-pack manifests exist both as JSON `code` notes (created manually per the docs) and as
+        // `file` notes (produced by the icon-pack builder and shipped in distributable zips). Disabled
+        // packs (#disabled:iconPack, e.g. from a safe import) still preview so the user can inspect them.
+        return (this.type === "code" || this.type === "file") && this.mime === "application/json" && this.hasLabelOrDisabled("iconPack");
+    }
+
     isTriliumScript() {
         return this.mime.startsWith("application/javascript");
+    }
+
+    isSvg() {
+        return this.mime === "image/svg+xml";
     }
 
     /**

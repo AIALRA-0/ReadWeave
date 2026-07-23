@@ -1,7 +1,7 @@
 import "./text_notes.css";
 
 import { normalizeMimeTypeForCKEditor } from "@triliumnext/commons";
-import { Themes } from "@triliumnext/highlightjs";
+import { getThemeVariant, Themes } from "@triliumnext/highlightjs";
 import type { CSSProperties } from "preact/compat";
 import { useEffect, useMemo, useState } from "preact/hooks";
 
@@ -9,37 +9,47 @@ import { isExperimentalFeatureEnabled } from "../../../services/experimental_fea
 import { t } from "../../../services/i18n";
 import { ensureMimeTypesForHighlighting, loadHighlightingTheme } from "../../../services/syntax_highlight";
 import { formatDateTime, toggleBodyClass } from "../../../services/utils";
-import FormGroup from "../../react/FormGroup";
 import Dropdown from "../../react/Dropdown";
+import FormGroup from "../../react/FormGroup";
 import { FormListItem } from "../../react/FormList";
-import { FormSelectGroup, FormSelectWithGroups } from "../../react/FormSelect";
+import FormSelect, { FormSelectGroup, FormSelectWithGroups } from "../../react/FormSelect";
 import FormText from "../../react/FormText";
 import FormTextBox, { FormTextBoxWithUnit } from "../../react/FormTextBox";
-import { useTriliumOption, useTriliumOptionBool, useTriliumOptionJson } from "../../react/hooks";
+import { useColorScheme, useTriliumOption, useTriliumOptionBool } from "../../react/hooks";
 import { getHtml } from "../../react/RawHtml";
-import CheckboxList from "./components/CheckboxList";
+import OptionsPageHeader from "./components/OptionsPageHeader";
 import OptionsRow, { OptionsRowWithToggle } from "./components/OptionsRow";
 import OptionsSection from "./components/OptionsSection";
 import RadioWithIllustration from "./components/RadioWithIllustration";
+import RelatedSettings from "./components/RelatedSettings";
+import ThemeModeSelector from "./components/ThemeModeSelector";
+import { HighlightsListOptions } from "./highlights_list_options";
 
 const isNewLayout = isExperimentalFeatureEnabled("new-layout");
 
 export default function TextNoteSettings() {
     return (
         <>
+            <OptionsPageHeader />
             <FormattingToolbar />
             <EditorFeatures />
             <Editor />
             <CodeBlockStyle />
             <TableOfContent />
             <HighlightsList />
+            <RelatedSettings items={[
+                {
+                    title: t("text_editor.related_task_states"),
+                    targetNoteId: "_taskStates"
+                }
+            ]} />
         </>
     );
 }
 
 function FormattingToolbar() {
-    const [ textNoteEditorType, setTextNoteEditorType ] = useTriliumOption("textNoteEditorType", true);
-    const [ textNoteEditorMultilineToolbar, setTextNoteEditorMultilineToolbar ] = useTriliumOptionBool("textNoteEditorMultilineToolbar", true);
+    const [ textNoteEditorType, setTextNoteEditorType ] = useTriliumOption("textNoteEditorType");
+    const [ textNoteEditorMultilineToolbar, setTextNoteEditorMultilineToolbar ] = useTriliumOptionBool("textNoteEditorMultilineToolbar");
 
     return (
         <OptionsSection title={t("editing.editor_type.label")}>
@@ -119,6 +129,8 @@ function EditorFeatures() {
     const [emojiCompletionEnabled, setEmojiCompletionEnabled] = useTriliumOptionBool("textNoteEmojiCompletionEnabled");
     const [noteCompletionEnabled, setNoteCompletionEnabled] = useTriliumOptionBool("textNoteCompletionEnabled");
     const [slashCommandsEnabled, setSlashCommandsEnabled] = useTriliumOptionBool("textNoteSlashCommandsEnabled");
+    const [contentHintsEnabled, setContentHintsEnabled] = useTriliumOptionBool("textNoteContentHintsEnabled");
+    const [autoLinkPreviewsEnabled, setAutoLinkPreviewsEnabled] = useTriliumOptionBool("textNoteAutoLinkPreviewsEnabled");
 
     return (
         <OptionsSection title={t("editorfeatures.title")}>
@@ -128,6 +140,14 @@ function EditorFeatures() {
                 description={t("editorfeatures.emoji_completion_description")}
                 currentValue={emojiCompletionEnabled}
                 onChange={setEmojiCompletionEnabled}
+            />
+
+            <OptionsRowWithToggle
+                name="auto-link-previews-enabled"
+                label={t("editorfeatures.auto_link_previews_enabled")}
+                description={t("editorfeatures.auto_link_previews_description")}
+                currentValue={autoLinkPreviewsEnabled}
+                onChange={setAutoLinkPreviewsEnabled}
             />
 
             <OptionsRowWithToggle
@@ -144,6 +164,14 @@ function EditorFeatures() {
                 description={t("editorfeatures.slash_commands_description")}
                 currentValue={slashCommandsEnabled}
                 onChange={setSlashCommandsEnabled}
+            />
+
+            <OptionsRowWithToggle
+                name="content-hints-enabled"
+                label={t("editorfeatures.content_hints_enabled")}
+                description={t("editorfeatures.content_hints_description")}
+                currentValue={contentHintsEnabled}
+                onChange={setContentHintsEnabled}
             />
         </OptionsSection>
     );
@@ -225,59 +253,96 @@ function HeadingPreview({ style }: { style: string }) {
     );
 }
 
-function CodeBlockStyle() {
-    const themes = useMemo(() => {
+function useCodeBlockThemes() {
+    const allThemes = useMemo(() => {
         const darkThemes: ThemeData[] = [];
         const lightThemes: ThemeData[] = [];
 
         for (const [ id, theme ] of Object.entries(Themes)) {
             const data: ThemeData = {
-                val: `default:${  id}`,
+                val: `default:${id}`,
                 title: theme.name
             };
 
-            if (theme.name.includes("Dark")) {
+            if (getThemeVariant(theme) === "dark") {
                 darkThemes.push(data);
             } else {
                 lightThemes.push(data);
             }
         }
 
-        const output: FormSelectGroup<ThemeData>[] = [
-            {
-                title: "",
-                items: [{
-                    val: "none",
-                    title: t("code_block.theme_none")
-                }]
-            },
-            {
-                title: t("code_block.theme_group_light"),
-                items: lightThemes
-            },
-            {
-                title: t("code_block.theme_group_dark"),
-                items: darkThemes
-            }
-        ];
-        return output;
+        return { lightThemes, darkThemes };
     }, []);
+
+    const groupedThemes = useMemo((): FormSelectGroup<ThemeData>[] => [
+        {
+            title: "",
+            items: [{
+                val: "none",
+                title: t("code_block.theme_none")
+            }]
+        },
+        {
+            title: t("code_block.theme_group_light"),
+            items: allThemes.lightThemes
+        },
+        {
+            title: t("code_block.theme_group_dark"),
+            items: allThemes.darkThemes
+        }
+    ], [allThemes]);
+
+    return { groupedThemes, lightThemes: allThemes.lightThemes, darkThemes: allThemes.darkThemes };
+}
+
+function CodeBlockStyle() {
+    const { groupedThemes, lightThemes, darkThemes } = useCodeBlockThemes();
     const [ codeBlockTheme, setCodeBlockTheme ] = useTriliumOption("codeBlockTheme");
+    const [ matchesApp, setMatchesApp ] = useTriliumOptionBool("codeBlockThemeMatchesApp");
+    const [ lightTheme, setLightTheme ] = useTriliumOption("codeBlockThemeLight");
+    const [ darkTheme, setDarkTheme ] = useTriliumOption("codeBlockThemeDark");
     const [ codeBlockWordWrap, setCodeBlockWordWrap ] = useTriliumOptionBool("codeBlockWordWrap");
     const [ codeBlockTabWidth, setCodeBlockTabWidth ] = useTriliumOption("codeBlockTabWidth");
+    const colorScheme = useColorScheme();
+
+    const effectiveTheme = matchesApp
+        ? (colorScheme === "dark" ? darkTheme : lightTheme)
+        : codeBlockTheme;
+
+    useEffect(() => {
+        loadHighlightingTheme(effectiveTheme);
+    }, [effectiveTheme]);
 
     return (
         <OptionsSection title={t("highlighting.title")}>
-            <OptionsRow name="code-block-theme" label={t("highlighting.color-scheme")}>
-                <FormSelectWithGroups
-                    values={themes}
-                    keyProperty="val" titleProperty="title"
-                    currentValue={codeBlockTheme} onChange={(newTheme) => {
-                        loadHighlightingTheme(newTheme);
-                        setCodeBlockTheme(newTheme);
-                    }}
-                />
-            </OptionsRow>
+            <ThemeModeSelector matchesApp={matchesApp} onMatchesAppChange={setMatchesApp} />
+
+            {matchesApp ? (
+                <>
+                    <OptionsRow name="light-theme" label={t("code_theme.light_theme")}>
+                        <FormSelect
+                            values={lightThemes}
+                            keyProperty="val" titleProperty="title"
+                            currentValue={lightTheme} onChange={setLightTheme}
+                        />
+                    </OptionsRow>
+                    <OptionsRow name="dark-theme" label={t("code_theme.dark_theme")}>
+                        <FormSelect
+                            values={darkThemes}
+                            keyProperty="val" titleProperty="title"
+                            currentValue={darkTheme} onChange={setDarkTheme}
+                        />
+                    </OptionsRow>
+                </>
+            ) : (
+                <OptionsRow name="code-block-theme" label={t("highlighting.color-scheme")}>
+                    <FormSelectWithGroups
+                        values={groupedThemes}
+                        keyProperty="val" titleProperty="title"
+                        currentValue={codeBlockTheme} onChange={setCodeBlockTheme}
+                    />
+                </OptionsRow>
+            )}
 
             <OptionsRowWithToggle
                 name="code-block-word-wrap"
@@ -297,7 +362,7 @@ function CodeBlockStyle() {
                 />
             </OptionsRow>
 
-            <CodeBlockPreview theme={codeBlockTheme} wordWrap={codeBlockWordWrap} tabWidth={codeBlockTabWidth} />
+            <CodeBlockPreview theme={effectiveTheme} wordWrap={codeBlockWordWrap} tabWidth={codeBlockTabWidth} />
         </OptionsSection>
     );
 }
@@ -395,26 +460,5 @@ function HighlightsList() {
                 </>
             )}
         </OptionsSection>
-    );
-}
-
-export function HighlightsListOptions() {
-    const [ highlightsList, setHighlightsList ] = useTriliumOptionJson<string[]>("highlightsList");
-
-    return (
-        <>
-            <FormText>{t("highlights_list.description")}</FormText>
-            <CheckboxList
-                values={[
-                    { val: "bold", title: t("highlights_list.bold") },
-                    { val: "italic", title: t("highlights_list.italic") },
-                    { val: "underline", title: t("highlights_list.underline") },
-                    { val: "color", title: t("highlights_list.color") },
-                    { val: "bgColor", title: t("highlights_list.bg_color") }
-                ]}
-                keyProperty="val" titleProperty="title"
-                currentValue={highlightsList} onChange={setHighlightsList}
-            />
-        </>
     );
 }

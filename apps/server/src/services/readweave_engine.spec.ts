@@ -1,6 +1,7 @@
+import type { ReadWeaveObject } from "@triliumnext/commons";
 import { describe, expect, it } from "vitest";
 
-import { normalizeReadWeaveTitle, selectReadWeaveContext, titleSimilarity } from "./readweave_engine.js";
+import { findReadWeaveCandidates, normalizeReadWeaveTitle, selectReadWeaveContext, titleSimilarity } from "./readweave_engine.js";
 
 describe("ReadWeave deterministic engine", () => {
     it("normalizes punctuation and Unicode width", () => {
@@ -10,6 +11,26 @@ describe("ReadWeave deterministic engine", () => {
     it("ranks exact titles above variants", () => {
         expect(titleSimilarity("RTL 工具保护", "RTL工具保护")).toBe(1);
         expect(titleSimilarity("RTL 工具保护", "FPGA 配置文件")).toBeLessThan(0.4);
+    });
+
+    it("recommends a canonical term when a new selection contains only its abbreviation", () => {
+        const object = {
+            objectId: "term-tess",
+            kind: "term",
+            title: "TESS 凌日系外行星巡天卫星（Transiting Exoplanet Survey Satellite）",
+            termIdentity: {
+                abbreviation: "TESS",
+                chineseName: "凌日系外行星巡天卫星",
+                englishName: "Transiting Exoplanet Survey Satellite"
+            }
+        } as ReadWeaveObject;
+
+        expect(findReadWeaveCandidates("TESS", "term", [ object ], 8, { abbreviation: "TESS" })).toEqual([
+            expect.objectContaining({ objectId: "term-tess", confidence: 1, reuseRecommended: true })
+        ]);
+        expect(findReadWeaveCandidates("TESS", "term", [ object ])).toEqual([
+            expect.objectContaining({ objectId: "term-tess", confidence: 1, reuseRecommended: true })
+        ]);
     });
 
     it("always includes the selected paragraph and respects the budget", () => {

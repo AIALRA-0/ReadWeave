@@ -5,7 +5,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "preact/hooks"
 import FNote from "../../entities/fnote";
 import { t } from "../../services/i18n";
 import toast from "../../services/toast";
-import { dynamicRequire, isElectron } from "../../services/utils";
 import Button, { ButtonGroup } from "../react/Button";
 import Dropdown from "../react/Dropdown";
 import { FormListHeader, FormListItem } from "../react/FormList";
@@ -114,11 +113,12 @@ export default function PrintPreviewDialog() {
     const [destination, setDestination] = useState<string>(DESTINATION_PDF);
 
     useEffect(() => {
-        if (!shown || !isElectron()) return;
-        const { ipcRenderer } = dynamicRequire("electron");
-        ipcRenderer.invoke("get-printers").then((list: PrinterInfo[]) => {
-            setPrinters(list ?? []);
-            const defaultPrinter = list?.find((p) => p.isDefault);
+        const api = window.electronApi?.printing;
+        if (!shown || !api) return;
+        api.getPrinters().then((list) => {
+            const printerList = (list ?? []) as PrinterInfo[];
+            setPrinters(printerList);
+            const defaultPrinter = printerList.find((p) => p.isDefault);
             if (defaultPrinter) setDestination(defaultPrinter.name);
         });
     }, [shown]);
@@ -150,10 +150,10 @@ export default function PrintPreviewDialog() {
     // dialog's lifecycle. A generation counter discards stale results when
     // multiple requests overlap.
     useEffect(() => {
-        if (!shown || !isElectron()) return;
-        const { ipcRenderer } = dynamicRequire("electron");
+        const api = window.electronApi?.printing;
+        if (!shown || !api) return;
 
-        const onResult = (_e: any, { buffer, error }: { buffer?: Uint8Array; error?: string }) => {
+        api.onExportAsPdfPreviewResult(({ buffer, error }) => {
             toast.closePersistent("printing");
             if (error) {
                 setLoading(false);
@@ -173,19 +173,18 @@ export default function PrintPreviewDialog() {
             if (buffer) {
                 updatePreview(buffer);
             }
-        };
-        ipcRenderer.on("export-as-pdf-preview-result", onResult);
+        });
         return () => {
-            ipcRenderer.off("export-as-pdf-preview-result", onResult);
+            api.removeExportAsPdfPreviewResultListener();
         };
     }, [shown, updatePreview]);
 
     const regeneratePreview = useCallback((opts: PreviewOpts) => {
-        if (!isElectron()) return;
+        const api = window.electronApi?.printing;
+        if (!api) return;
 
         setLoading(true);
-        const { ipcRenderer } = dynamicRequire("electron");
-        ipcRenderer.send("export-as-pdf-preview", {
+        api.exportAsPdfPreview({
             notePath: notePathRef.current,
             pageSize: opts.pageSize,
             landscape: opts.landscape,
@@ -225,8 +224,7 @@ export default function PrintPreviewDialog() {
     function handleExportPdf() {
         if (!bufferRef.current) return;
 
-        const { ipcRenderer } = dynamicRequire("electron");
-        ipcRenderer.send("save-pdf", {
+        window.electronApi?.printing.savePdf({
             title: note?.title ?? "",
             buffer: bufferRef.current
         });
@@ -234,9 +232,7 @@ export default function PrintPreviewDialog() {
     }
 
     function handlePrint(silent: boolean, deviceName?: string) {
-        if (!isElectron()) return;
-        const { ipcRenderer } = dynamicRequire("electron");
-        ipcRenderer.send("print-from-preview", {
+        window.electronApi?.printing.printFromPreview({
             notePath: notePathRef.current,
             pageSize,
             landscape,
@@ -277,6 +273,115 @@ export default function PrintPreviewDialog() {
             onHidden={handleClose}
             stackable
             footerAlignment="between"
+            sidebar={
+                <div class="print-preview-settings">
+                    <OptionsSection noCard>
+                        <OptionsRow name="destination" label={t("print_preview.destination")} stacked>
+                            <Dropdown
+                                disabled={loading}
+                                text={<DestinationLabel destination={destination} printers={printers} />}
+                            >
+                                <FormListItem
+                                    icon="bx bxs-file-pdf"
+                                    selected={destination === DESTINATION_PDF}
+                                    onClick={() => setDestination(DESTINATION_PDF)}
+                                >
+                                    {t("print_preview.destination_pdf")}
+                                </FormListItem>
+                                {printers.length > 0 && <FormListHeader text={t("print_preview.destination_printers")} />}
+                                {printers.map((printer) => (
+                                    <FormListItem
+                                        key={printer.name}
+                                        icon="bx bx-printer"
+                                        selected={destination === printer.name}
+                                        onClick={() => setDestination(printer.name)}
+                                        description={buildPrinterDescription(printer)}
+                                    >
+                                        {printer.displayName || printer.name}
+                                    </FormListItem>
+                                ))}
+                            </Dropdown>
+                        </OptionsRow>
+
+                        <OptionsRow name="orientation" label={t("print_preview.orientation")} stacked>
+                            <ButtonGroup className="print-preview-orientation">
+                                <Button
+                                    text={t("print_preview.portrait")}
+                                    icon="bx-rectangle bx-rotate-90"
+                                    className={!landscape ? "active" : ""}
+                                    onClick={() => setLandscape(false)}
+                                    disabled={loading}
+                                    size="small"
+                                />
+                                <Button
+                                    text={t("print_preview.landscape")}
+                                    icon="bx-rectangle"
+                                    className={landscape ? "active" : ""}
+                                    onClick={() => setLandscape(true)}
+                                    disabled={loading}
+                                    size="small"
+                                />
+                            </ButtonGroup>
+                        </OptionsRow>
+
+                        <OptionsRow name="pageSize" label={t("print_preview.page_size")}>
+                            <FormSelect
+                                values={PAGE_SIZES.map((size) => ({ key: size, title: size }))}
+                                keyProperty="key"
+                                titleProperty="title"
+                                currentValue={pageSize}
+                                onChange={setPageSize}
+                                disabled={loading}
+                            />
+                        </OptionsRow>
+
+                        <OptionsRow name="scale" label={t("print_preview.scale")} description={`${Math.round(scale * 100)}%`}>
+                            <Slider
+                                value={scale}
+                                min={0.1}
+                                max={2}
+                                step={0.1}
+                                onChange={handleScaleChange}
+                            />
+                        </OptionsRow>
+
+                        <OptionsRow name="margins" label={t("print_preview.margins")}>
+                            <FormSelect
+                                values={[
+                                    { key: "default", title: t("print_preview.margins_default") },
+                                    { key: "none", title: t("print_preview.margins_none") },
+                                    { key: "minimum", title: t("print_preview.margins_minimum") },
+                                    { key: "custom", title: t("print_preview.margins_custom") },
+                                ]}
+                                keyProperty="key"
+                                titleProperty="title"
+                                currentValue={marginPreset}
+                                onChange={(value) => setMarginsStr(serializeMargins(value as MarginPreset | "custom", customMargins))}
+                                disabled={loading}
+                            />
+                        </OptionsRow>
+
+                        {marginPreset === "custom" && (
+                            <MarginEditor margins={customMargins} onChange={handleCustomMarginChange} disabled={loading} />
+                        )}
+
+                        <OptionsRow
+                            name="pageRanges"
+                            label={t("print_preview.page_ranges")}
+                            description={!pageRangesValid ? t("print_preview.page_ranges_invalid") : t("print_preview.page_ranges_hint")}
+                            stacked
+                        >
+                            <FormTextBox
+                                className={`print-preview-page-ranges ${!pageRangesValid ? "is-invalid" : ""}`}
+                                currentValue={pageRanges}
+                                placeholder={t("print_preview.page_ranges_placeholder")}
+                                onChange={(value) => setPageRanges(value)}
+                                disabled={loading}
+                            />
+                        </OptionsRow>
+                    </OptionsSection>
+                </div>
+            }
             footer={
                 <>
                     <a
@@ -302,120 +407,13 @@ export default function PrintPreviewDialog() {
                 </>
             }
         >
-            <div class="print-preview-settings">
-                <OptionsSection>
-                    <OptionsRow name="destination" label={t("print_preview.destination")}>
-                        <Dropdown
-                            disabled={loading}
-                            text={<DestinationLabel destination={destination} printers={printers} />}
-                        >
-                            <FormListItem
-                                icon="bx bxs-file-pdf"
-                                selected={destination === DESTINATION_PDF}
-                                onClick={() => setDestination(DESTINATION_PDF)}
-                            >
-                                {t("print_preview.destination_pdf")}
-                            </FormListItem>
-                            {printers.length > 0 && <FormListHeader text={t("print_preview.destination_printers")} />}
-                            {printers.map((printer) => (
-                                <FormListItem
-                                    key={printer.name}
-                                    icon="bx bx-printer"
-                                    selected={destination === printer.name}
-                                    onClick={() => setDestination(printer.name)}
-                                    description={buildPrinterDescription(printer)}
-                                >
-                                    {printer.displayName || printer.name}
-                                </FormListItem>
-                            ))}
-                        </Dropdown>
-                    </OptionsRow>
-
-                    <OptionsRow name="orientation" label={t("print_preview.orientation")}>
-                        <ButtonGroup>
-                            <Button
-                                text={t("print_preview.portrait")}
-                                icon="bx-rectangle bx-rotate-90"
-                                className={!landscape ? "active" : ""}
-                                onClick={() => setLandscape(false)}
-                                disabled={loading}
-                                size="small"
-                            />
-                            <Button
-                                text={t("print_preview.landscape")}
-                                icon="bx-rectangle"
-                                className={landscape ? "active" : ""}
-                                onClick={() => setLandscape(true)}
-                                disabled={loading}
-                                size="small"
-                            />
-                        </ButtonGroup>
-                    </OptionsRow>
-
-                    <OptionsRow name="pageSize" label={t("print_preview.page_size")}>
-                        <FormSelect
-                            values={PAGE_SIZES.map((size) => ({ key: size, title: size }))}
-                            keyProperty="key"
-                            titleProperty="title"
-                            currentValue={pageSize}
-                            onChange={setPageSize}
-                            disabled={loading}
-                        />
-                    </OptionsRow>
-
-                    <OptionsRow name="scale" label={t("print_preview.scale")} description={`${Math.round(scale * 100)}%`}>
-                        <Slider
-                            value={scale}
-                            min={0.1}
-                            max={2}
-                            step={0.1}
-                            onChange={handleScaleChange}
-                        />
-                    </OptionsRow>
-
-                    <OptionsRow name="margins" label={t("print_preview.margins")}>
-                        <FormSelect
-                            values={[
-                                { key: "default", title: t("print_preview.margins_default") },
-                                { key: "none", title: t("print_preview.margins_none") },
-                                { key: "minimum", title: t("print_preview.margins_minimum") },
-                                { key: "custom", title: t("print_preview.margins_custom") },
-                            ]}
-                            keyProperty="key"
-                            titleProperty="title"
-                            currentValue={marginPreset}
-                            onChange={(value) => setMarginsStr(serializeMargins(value as MarginPreset | "custom", customMargins))}
-                            disabled={loading}
-                        />
-                    </OptionsRow>
-
-                    {marginPreset === "custom" && (
-                        <MarginEditor margins={customMargins} onChange={handleCustomMarginChange} disabled={loading} />
-                    )}
-
-                    <OptionsRow
-                        name="pageRanges"
-                        label={t("print_preview.page_ranges")}
-                        description={!pageRangesValid ? t("print_preview.page_ranges_invalid") : t("print_preview.page_ranges_hint")}
-                    >
-                        <FormTextBox
-                            className={`print-preview-page-ranges ${!pageRangesValid ? "is-invalid" : ""}`}
-                            currentValue={pageRanges}
-                            placeholder={t("print_preview.page_ranges_placeholder")}
-                            onChange={(value) => setPageRanges(value)}
-                            disabled={loading}
-                        />
-                    </OptionsRow>
-                </OptionsSection>
-            </div>
-
             <div class="print-preview-pane">
                 {loading && (
                     <div class="print-preview-loading-overlay">
                         <span class="bx bx-loader-circle bx-spin" />
                     </div>
                 )}
-                {pdfUrl && <PdfViewer pdfUrl={pdfUrl} toolbar={false} disableSelection />}
+                {pdfUrl && <PdfViewer pdfUrl={pdfUrl} toolbar={false} disableSelection minPixelRatio={2} />}
             </div>
         </Modal>
     );
