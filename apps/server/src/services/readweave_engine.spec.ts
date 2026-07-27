@@ -68,4 +68,27 @@ describe("ReadWeave deterministic engine", () => {
 
         expect(result.decision.fragmentIds).toEqual(["selected", "related"]);
     });
+
+    it("ranks a term's raw subject above fragments matching only a generalized definition prompt", () => {
+        const result = selectReadWeaveContext("BS-PDN-Last", [
+            {
+                id: "selected",
+                role: "selected",
+                text: "本段选中了一个需要定义的方法名。".repeat(4)
+            },
+            {
+                id: "term-relevant",
+                role: "document",
+                text: "BS-PDN-Last 是该研究比较的背面供电网络方法。".repeat(14)
+            },
+            {
+                id: "generic-prompt",
+                role: "document",
+                text: "当前语境是什么以及如何根据当前语境给出一般说明。".repeat(22)
+            }
+        ], 800, true);
+
+        expect(result.decision.fragmentIds).toContain("term-relevant");
+        expect(result.decision.fragmentIds).not.toContain("generic-prompt");
+    });
 });

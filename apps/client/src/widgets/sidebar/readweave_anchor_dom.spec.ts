@@ -1,13 +1,19 @@
 import { describe, expect, it } from "vitest";
 
 import {
+    clearReadWeaveProvisionalAnchors,
     exactReadWeaveAnchorIdForExcerpt,
     exactReadWeaveExcerptRange,
+    forgetReadWeaveProvisionalAnchor,
     matchingReadWeaveAnchorElements,
     mostSpecificReadWeaveAnchorId,
+    protectReadWeaveProvisionalAnchor,
+    provisionalReadWeaveAnchorIds,
     rangesAreNestedOrDisjoint,
     readWeaveAnchorGroupRange,
-    readWeaveAnchorIdsOf
+    readWeaveAnchorIdsOf,
+    releaseReadWeaveProvisionalAnchors,
+    uniqueReadWeaveExcerptRange
 } from "./readweave_anchor_dom.js";
 
 describe("ReadWeave nested DOM anchors", () => {
@@ -75,6 +81,39 @@ describe("ReadWeave nested DOM anchors", () => {
         expect(rangesAreNestedOrDisjoint(outer, inner)).toBe(true);
         expect(rangesAreNestedOrDisjoint(inner, nested)).toBe(true);
         expect(rangesAreNestedOrDisjoint(crossing, inner)).toBe(false);
+        root.remove();
+    });
+
+    it("protects a pending anchor through the save-to-job race and releases it only after durable ownership", () => {
+        const root = document.createElement("div");
+        protectReadWeaveProvisionalAnchor(root, "pending");
+
+        expect(provisionalReadWeaveAnchorIds(root)).toEqual([ "pending" ]);
+        releaseReadWeaveProvisionalAnchors(root, [ "different-anchor" ]);
+        expect(provisionalReadWeaveAnchorIds(root)).toEqual([ "pending" ]);
+
+        releaseReadWeaveProvisionalAnchors(root, [ "pending" ]);
+        expect(provisionalReadWeaveAnchorIds(root)).toEqual([]);
+
+        protectReadWeaveProvisionalAnchor(root, "discarded");
+        forgetReadWeaveProvisionalAnchor(root, "discarded");
+        expect(provisionalReadWeaveAnchorIds(root)).toEqual([]);
+
+        protectReadWeaveProvisionalAnchor(root, "abandoned-on-navigation");
+        clearReadWeaveProvisionalAnchors(root);
+        expect(provisionalReadWeaveAnchorIds(root)).toEqual([]);
+    });
+
+    it("finds one exact orphaned-job excerpt for reload recovery but refuses ambiguous text", () => {
+        const root = document.createElement("div");
+        root.innerHTML = "<p>提升面向灵活3D堆叠ML加速器的布局性能</p><p>另一段只出现一次 BUFFALO</p>";
+        document.body.append(root);
+
+        expect(uniqueReadWeaveExcerptRange(root, "p", "3D堆叠ML")?.toString()).toBe("3D堆叠ML");
+        expect(uniqueReadWeaveExcerptRange(root, "p", "BUFFALO")?.toString()).toBe("BUFFALO");
+
+        root.insertAdjacentHTML("beforeend", "<p>重复的 BUFFALO 不应被猜测定位</p>");
+        expect(uniqueReadWeaveExcerptRange(root, "p", "BUFFALO")).toBeUndefined();
         root.remove();
     });
 });

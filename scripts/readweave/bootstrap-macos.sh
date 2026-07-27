@@ -9,8 +9,21 @@ if [[ "$(uname -s)" != "Darwin" ]]; then
     exit 1
 fi
 
+if [[ "$(node -p 'process.versions.node' 2>/dev/null || true)" != "$EXPECTED_NODE" ]]; then
+    if command -v fnm >/dev/null 2>&1; then
+        eval "$(fnm env --shell bash)"
+        fnm install "$EXPECTED_NODE"
+        fnm use "$EXPECTED_NODE" >/dev/null
+    elif [[ -s "$HOME/.nvm/nvm.sh" ]]; then
+        # shellcheck source=/dev/null
+        source "$HOME/.nvm/nvm.sh"
+        nvm install "$EXPECTED_NODE"
+        nvm use "$EXPECTED_NODE" >/dev/null
+    fi
+fi
+
 if ! command -v node >/dev/null 2>&1; then
-    echo "未找到 Node.js。请先安装 Node.js $EXPECTED_NODE（推荐使用 nvm 或 fnm）。" >&2
+    echo "未找到 Node.js。请先安装 fnm 或 nvm，再重新运行本脚本。" >&2
     exit 1
 fi
 
@@ -19,7 +32,7 @@ EXPECTED_PNPM="$(node -p "require('$ROOT_DIR/package.json').packageManager.split
 ACTUAL_NODE="$(node -p 'process.versions.node')"
 if [[ "$ACTUAL_NODE" != "$EXPECTED_NODE" ]]; then
     echo "Node.js 版本不匹配：当前 $ACTUAL_NODE，需要 $EXPECTED_NODE。" >&2
-    echo "使用 nvm 时可执行：nvm install $EXPECTED_NODE && nvm use $EXPECTED_NODE" >&2
+    echo "请安装 fnm 或 nvm；脚本会自动安装并选择项目指定版本。" >&2
     exit 1
 fi
 

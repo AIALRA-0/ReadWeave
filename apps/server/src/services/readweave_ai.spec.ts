@@ -3,13 +3,16 @@ import { describe, expect, it } from "vitest";
 import {
     applyReadWeaveSegmentPatches,
     buildReadWeaveSystemPrompt,
+    calculateReadWeaveUsageSummary,
     contradictsSuccessfulWebCalibration,
     findReadWeaveQualityIssues,
+    flattenReadWeaveParentheses,
     formatReadWeaveTermIdentity,
     joinReadWeaveAnswerSegments,
     mergeReadWeaveTermIdentity,
     mergeRepairInstructions,
     normalizeReadWeaveGeneratedBody,
+    normalizeReadWeaveModelRequestError,
     segmentReadWeaveAnswer,
     validateReadWeaveTermIdentity
 } from "./readweave_ai.js";
@@ -28,6 +31,36 @@ function professionalAnswer(definition: string): string {
 }
 
 describe("ReadWeave AI quality harness", () => {
+    it.each([
+        {
+            error: new Error("terminated"),
+            category: "连接中断",
+            leaked: "terminated"
+        },
+        {
+            error: Object.assign(new Error("fetch failed"), { cause: { code: "ECONNRESET" } }),
+            category: "连接中断",
+            leaked: "ECONNRESET"
+        },
+        {
+            error: Object.assign(new Error("request aborted"), { name: "TimeoutError" }),
+            category: "请求超时",
+            leaked: "TimeoutError"
+        },
+        {
+            error: Object.assign(new Error("fetch failed"), { cause: { code: "ECONNREFUSED" } }),
+            category: "服务不可达",
+            leaked: "ECONNREFUSED"
+        }
+    ])("normalizes transport failures as $category without exposing $leaked", ({ error, category, leaked }) => {
+        const normalized = normalizeReadWeaveModelRequestError(error, "模型服务请求");
+
+        expect(normalized.message).toMatch(/ReadWeave 无法生成.*上下文与证据检查尚未完成/u);
+        expect(normalized.message).toContain(`诊断类别：${category}`);
+        expect(normalized.message).not.toContain(leaked);
+        expect(normalized.cause).toBe(error);
+    });
+
     it("requires direct structured answers, strict term formatting and no fallback prose", () => {
         const prompt = buildReadWeaveSystemPrompt("question");
 
@@ -43,6 +76,9 @@ describe("ReadWeave AI quality harness", () => {
         expect(prompt).toContain("不得套用固定八段");
         expect(prompt).toContain('"body"');
         expect(prompt).toContain("联网校准资料");
+        expect(prompt).toContain("不得再次逐字复述同一全称");
+        expect(prompt).toContain("连续大写成分不得擅自改成混合大小写");
+        expect(prompt).toContain("即、即为、也就是、亦即、是、指");
     });
 
     it("formats structured terms exactly", () => {
@@ -111,7 +147,7 @@ describe("ReadWeave AI quality harness", () => {
         }, {})).toEqual({
             abbreviation: undefined,
             chineseName: "电源分配网络设计方法",
-            englishName: "BS-PDN-Last"
+            englishName: undefined
         });
     });
 
@@ -148,6 +184,92 @@ describe("ReadWeave AI quality harness", () => {
             professionalAnswer("采用存算一体（CIM/PIM）减少数据搬运"),
             "如何减少数据搬运？"
         )).toContain("缩写 CIM/PIM 未使用“缩写 中文全称（英文全称）”格式");
+    });
+
+    it("detects the real Chinese-adjacent 3D/ML mixed-name failure", () => {
+        const body = "“3D堆叠ML 机器学习（Machine Learning）加速器”是一种利用三维垂直集成技术，通过TSV 硅通孔（Through-Silicon Via）连接多层晶粒。其中的“3D 集成 / 三维集成（Three-Dimensional Integration）”指三维垂直集成。";
+        const issues = findReadWeaveQualityIssues(
+            body,
+            "“3D堆叠ML加速器”在当前上下文中是什么意思？其中的3D、堆叠和加速器分别指什么？"
+        );
+
+        expect(issues).toContain("缩写 3D 未使用“缩写 中文全称（英文全称）”格式");
+        expect(issues).not.toEqual([]);
+    });
+
+    it("accepts the canonical non-abbreviation identity for a Chinese-adjacent 3D/ML compound term", () => {
+        const termIdentity = {
+            chineseName: "三维堆叠机器学习加速器",
+            englishName: "3D-Stacked Machine Learning Accelerator"
+        };
+        const body = "三维堆叠机器学习加速器（3D-Stacked Machine Learning Accelerator）是一类通过垂直集成多层晶粒来加速机器学习工作负载的专用硬件；";
+
+        expect(findReadWeaveQualityIssues(body, "在当前语境中，3D堆叠ML加速器是什么？", {
+            kind: "term",
+            subject: "3D堆叠ML加速器",
+            termIdentity
+        })).toEqual([]);
+    });
+
+    it("rejects extra name punctuation, reverse acronym parentheses and slash-joined Chinese names", () => {
+        expect(() => validateReadWeaveTermIdentity({
+            abbreviation: "EDA",
+            chineseName: "电子设计自动化",
+            englishName: "Electronic Design Automation."
+        })).toThrow(/English full name/u);
+        expect(() => validateReadWeaveTermIdentity({
+            abbreviation: "EDA",
+            chineseName: "电子设计自动化",
+            englishName: "Electronic Design Automation, EDA"
+        })).toThrow(/append the abbreviation/u);
+        expect(() => validateReadWeaveTermIdentity({
+            abbreviation: "3D",
+            chineseName: "集成 / 三维集成",
+            englishName: "Three-Dimensional Integration"
+        })).toThrow(/Chinese term name/u);
+        expect(() => validateReadWeaveTermIdentity({
+            abbreviation: "ASIC",
+            chineseName: "的设计与制造周期“漫长且投入密集”",
+            englishName: "long and intensive"
+        })).toThrow(/Chinese term name/u);
+        expect(() => validateReadWeaveTermIdentity({
+            abbreviation: "ASIC",
+            chineseName: "的设计与制造周期\"漫长且投入密集\"",
+            englishName: "long and intensive"
+        })).toThrow(/Chinese term name/u);
+        expect(validateReadWeaveTermIdentity({
+            abbreviation: "ASIC",
+            chineseName: "专用集成电路",
+            englishName: "Application-Specific Integrated Circuit"
+        })).toEqual({
+            abbreviation: "ASIC",
+            chineseName: "专用集成电路",
+            englishName: "Application-Specific Integrated Circuit"
+        });
+        expect(findReadWeaveQualityIssues(
+            "EDA 电子设计自动化（Electronic Design Automation.）。",
+            "EDA 是什么？"
+        )).toEqual(expect.arrayContaining([
+            "答案包含重复或中英文叠加的句末标点",
+            "中英文名称末尾包含多余句号或分隔符"
+        ]));
+    });
+
+    it("accepts a verified non-expandable method code only as an independent subject", () => {
+        expect(findReadWeaveQualityIssues(
+            "BUFFALO 是一种缓冲树生成框架，把缓冲插入建模为序列生成任务。",
+            "BUFFALO 在当前上下文中是什么意思？",
+            { verifiedNonExpandableArtifact: { originalName: "BUFFALO", entityType: "method" } }
+        )).toEqual([]);
+        expect(findReadWeaveQualityIssues(
+            "缓冲树生成框架（BUFFALO）把缓冲插入建模为序列生成任务。",
+            "BUFFALO 在当前上下文中是什么意思？",
+            { verifiedNonExpandableArtifact: { originalName: "BUFFALO", entityType: "method" } }
+        )).toContain("已核验的方法、系统或产品代号被错误放入英文全称括号；代号必须作为独立名称使用");
+        expect(findReadWeaveQualityIssues(
+            "BUFFALO 把缓冲插入建模为序列生成任务。",
+            "BUFFALO 在当前上下文中是什么意思？"
+        )).toContain("缩写 BUFFALO 未使用“缩写 中文全称（英文全称）”格式");
     });
 
     it("does not mistake a sentence fragment followed by another acronym for a full name", () => {
@@ -209,17 +331,19 @@ describe("ReadWeave AI quality harness", () => {
         expect(merged[0].instruction).toContain("修复 20");
     });
 
-    it("keeps natural punctuation and normalizes only paragraph whitespace", () => {
+    it("removes Chinese periods and normalizes paragraph whitespace", () => {
         expect(normalizeReadWeaveGeneratedBody("第一点。NPU 神经网络处理单元（Neural Processing Unit） 负责推理。结束")).toBe(
-            "第一点。NPU 神经网络处理单元（Neural Processing Unit）负责推理。结束"
+            "第一点；NPU 神经网络处理单元（Neural Processing Unit）负责推理；结束"
         );
         expect(normalizeReadWeaveGeneratedBody("第一段第一句。\n第一段第二句。\n\n\n\n\n第二段。"))
-            .toBe("第一段第一句。 第一段第二句。\n\n第二段。");
+            .toBe("第一段第一句； 第一段第二句；\n\n第二段；");
+        expect(normalizeReadWeaveGeneratedBody("由全球非营利组织开放研究者与贡献者标识符 Inc. 运营。"))
+            .toBe("由全球非营利组织开放研究者与贡献者标识符运营；");
     });
 
     it("removes fixed environment commentary without changing the factual clauses", () => {
         expect(normalizeReadWeaveGeneratedBody("根据上述材料，龙猫是默认路径。原文未提供总切换时长。"))
-            .toBe("龙猫是默认路径。现有证据未给出总切换时长。");
+            .toBe("龙猫是默认路径；现有证据未给出总切换时长；");
     });
 
     it("round-trips natural paragraphs while keeping sentence-level repair segments", () => {
@@ -227,7 +351,40 @@ describe("ReadWeave AI quality harness", () => {
         const segments = segmentReadWeaveAnswer(body);
         expect(segments).toHaveLength(3);
         expect(segments[2].paragraphBreakBefore).toBe(true);
-        expect(joinReadWeaveAnswerSegments(segments)).toBe(body);
+        expect(joinReadWeaveAnswerSegments(segments)).toBe("第一句；第二句；\n\n第三句；");
+    });
+
+    it("flattens nested Chinese and ASCII parentheses into one readable level", () => {
+        expect(flattenReadWeaveParentheses("定义（芯片（Chip））及范围（A（B）C）"))
+            .toBe("定义芯片（Chip）及范围（A，B，C）");
+        expect(normalizeReadWeaveGeneratedBody("术语（系统（System））。")).toBe("术语系统（System）；");
+    });
+
+    it("removes a parenthetical that only repeats its adjacent Chinese term", () => {
+        expect(normalizeReadWeaveGeneratedBody("加速器面向机器学习（机器学习）模型。"))
+            .toBe("加速器面向机器学习模型；");
+    });
+
+    it("calculates the strict V4 Flash CNY budget from real usage fields", () => {
+        expect(calculateReadWeaveUsageSummary("deepseek-v4-flash", {
+            modelCalls: 1,
+            inputTokens: 4_674,
+            cacheHitInputTokens: 256,
+            cacheMissInputTokens: 4_418,
+            outputTokens: 165
+        })).toMatchObject({
+            modelCalls: 1,
+            inputTokens: 4_674,
+            outputTokens: 165,
+            withinBudget: true
+        });
+        expect(calculateReadWeaveUsageSummary("deepseek-v4-flash", {
+            modelCalls: 1,
+            inputTokens: 8_000,
+            cacheHitInputTokens: 0,
+            cacheMissInputTokens: 8_000,
+            outputTokens: 1_100
+        }).withinBudget).toBe(false);
     });
 
     it("detects only contradictory downstream claims after successful web search", () => {
@@ -271,7 +428,7 @@ describe("ReadWeave AI quality harness", () => {
             { operation: "replace", segmentId: "seg-2", issue: "旧句", instruction: "替换旧句" }
         ]);
         expect(result.segments[1].paragraphBreakBefore).toBe(true);
-        expect(joinReadWeaveAnswerSegments(result.segments)).toBe("第一段。\n\n第二段新句。第二段保留句。");
+        expect(joinReadWeaveAnswerSegments(result.segments)).toBe("第一段；\n\n第二段新句；第二段保留句；");
     });
 
     it("allows an explicitly requested deletion but rejects unrelated empty patches", () => {

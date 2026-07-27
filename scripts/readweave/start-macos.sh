@@ -9,6 +9,21 @@ OUT_LOG="$DATA_DIR/readweave.out.log"
 ERR_LOG="$DATA_DIR/readweave.error.log"
 PORT="${1:-8082}"
 ADDRESS="http://127.0.0.1:$PORT"
+EXPECTED_NODE="$(tr -d '[:space:]' < "$ROOT_DIR/.nvmrc")"
+
+# GUI shells and automated launchers do not necessarily inherit the Node
+# version selected in the developer's interactive shell. Select the project's
+# pinned runtime before both building and starting native dependencies.
+if [[ "$(node -p 'process.versions.node' 2>/dev/null || true)" != "$EXPECTED_NODE" ]]; then
+    if command -v fnm >/dev/null 2>&1; then
+        eval "$(fnm env --shell bash)"
+        fnm use "$EXPECTED_NODE" >/dev/null
+    elif [[ -s "$HOME/.nvm/nvm.sh" ]]; then
+        # shellcheck source=/dev/null
+        source "$HOME/.nvm/nvm.sh"
+        nvm use "$EXPECTED_NODE" >/dev/null
+    fi
+fi
 
 for command_name in node pnpm curl screen; do
     if ! command -v "$command_name" >/dev/null 2>&1; then
@@ -16,6 +31,14 @@ for command_name in node pnpm curl screen; do
         exit 1
     fi
 done
+
+ACTUAL_NODE="$(node -p 'process.versions.node')"
+if [[ "$ACTUAL_NODE" != "$EXPECTED_NODE" ]]; then
+    echo "Node.js 版本不匹配：当前 $ACTUAL_NODE，需要 $EXPECTED_NODE。" >&2
+    echo "请先运行 bootstrap-macos.sh，或使用 fnm/nvm 安装项目指定版本。" >&2
+    exit 1
+fi
+NODE_BIN="$(command -v node)"
 
 if [[ ! "$PORT" =~ ^[0-9]+$ ]] || (( PORT < 1 || PORT > 65535 )); then
     echo "端口必须是 1 到 65535 之间的数字。" >&2
@@ -48,6 +71,12 @@ echo "正在构建最新 ReadWeave……"
 pnpm --config.verify-deps-before-run=warn --dir "$SERVER_DIR" run build
 
 echo "正在后台启动 ReadWeave……"
+for LOG_FILE in "$OUT_LOG" "$ERR_LOG"; do
+    if [[ -s "$LOG_FILE" ]]; then
+        mv -f "$LOG_FILE" "$LOG_FILE.previous"
+    fi
+    : > "$LOG_FILE"
+done
 SESSION_NAME="readweave-$PORT"
 screen -dmS "$SESSION_NAME" \
     env \
@@ -58,7 +87,8 @@ screen -dmS "$SESSION_NAME" \
     READWEAVE_PID_FILE="$PID_FILE" \
     READWEAVE_OUT_LOG="$OUT_LOG" \
     READWEAVE_ERR_LOG="$ERR_LOG" \
-    bash -c 'cd "$READWEAVE_SERVER_DIR" && echo $$ >"$READWEAVE_PID_FILE" && exec node dist/main.cjs >>"$READWEAVE_OUT_LOG" 2>>"$READWEAVE_ERR_LOG"'
+    READWEAVE_NODE_BIN="$NODE_BIN" \
+    bash -c 'cd "$READWEAVE_SERVER_DIR" && echo $$ >"$READWEAVE_PID_FILE" && exec "$READWEAVE_NODE_BIN" dist/main.cjs >>"$READWEAVE_OUT_LOG" 2>>"$READWEAVE_ERR_LOG"'
 
 for _ in $(seq 1 50); do
     [[ -s "$PID_FILE" ]] && break

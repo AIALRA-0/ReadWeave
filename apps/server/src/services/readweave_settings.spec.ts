@@ -38,4 +38,34 @@ describe("ReadWeave settings", () => {
             });
         });
     });
+
+    it("stores optional search credentials locally and exposes only masks", () => {
+        cls.init(() => {
+            const serperSecret = "serper-not-a-real-secret-1234";
+            const unpaywallAddress = [ "reader", "example.org" ].join("@");
+            const settings = updateReadWeaveAiSettings({
+                baseUrl: "https://api.deepseek.com",
+                model: "deepseek-v4-flash",
+                searchMode: "automatic",
+                searchBudgetCny: 0.009,
+                serperApiKey: serperSecret,
+                unpaywallEmail: unpaywallAddress
+            });
+
+            expect(settings.searchMode).toBe("automatic");
+            expect(settings.searchBudgetCny).toBe(0.009);
+            expect(settings.search.hasSerperApiKey).toBe(true);
+            expect(settings.search.hasUnpaywallEmail).toBe(true);
+            expect(JSON.stringify(settings)).not.toContain(serperSecret);
+            expect(JSON.stringify(settings)).not.toContain(unpaywallAddress);
+            expect(settings.search.freeProviders).toContain("Crossref");
+
+            updateReadWeaveAiSettings({
+                baseUrl: "https://api.deepseek.com",
+                model: "deepseek-v4-flash",
+                clearSerperApiKey: true,
+                clearUnpaywallEmail: true
+            });
+        });
+    });
 });

@@ -13,6 +13,11 @@ export interface ReadWeaveTermIdentity {
     englishName?: string;
 }
 
+export interface ReadWeaveVerifiedNonExpandableArtifact {
+    originalName: string;
+    entityType: "method" | "system" | "product";
+}
+
 export interface ReadWeaveContextFragment {
     id: string;
     role: ReadWeaveContextRole;
@@ -34,6 +39,18 @@ export interface ReadWeaveWorkflowSummary {
     contextExpansions: number;
     repairRounds: number;
     unchangedSegmentsVerified: boolean;
+}
+
+export interface ReadWeaveUsageSummary {
+    modelCalls: number;
+    inputTokens: number;
+    cacheHitInputTokens: number;
+    cacheMissInputTokens: number;
+    outputTokens: number;
+    totalTokens: number;
+    costCny: number;
+    budgetCny: number;
+    withinBudget: boolean;
 }
 
 export type ReadWeaveGenerationStage = "queued" | "optimizing" | "gathering-context" | "drafting" | "checking" | "repairing" | "expanding-context" | "complete" | "failed";
@@ -88,6 +105,7 @@ export interface ReadWeaveObject {
     normalizedTitle: string;
     calloutType: ReadWeaveCalloutType;
     termIdentity?: ReadWeaveTermIdentity;
+    verifiedNonExpandableArtifact?: ReadWeaveVerifiedNonExpandableArtifact;
     revision: number;
     sourceArticleId: string;
     sourceAnchorId: string;
@@ -122,6 +140,7 @@ export interface ReadWeaveResolvedEntry {
     body: string;
     calloutType: ReadWeaveCalloutType;
     termIdentity?: ReadWeaveTermIdentity;
+    verifiedNonExpandableArtifact?: ReadWeaveVerifiedNonExpandableArtifact;
     canonicalTitle: string;
     canonicalBody: string;
     canonicalCalloutType: ReadWeaveCalloutType;
@@ -171,15 +190,20 @@ export interface ReadWeaveGenerateResponse {
     body: string;
     optimizedTitle?: string;
     termIdentity?: ReadWeaveTermIdentity;
+    verifiedNonExpandableArtifact?: ReadWeaveVerifiedNonExpandableArtifact;
     reviewIssues?: string[];
     context: ReadWeaveContextDecision;
     workflow: ReadWeaveWorkflowSummary;
     provider: string;
     model: string;
+    usage?: ReadWeaveUsageSummary;
     webCalibration?: {
         used: true;
         sourceCount: number;
         model: string;
+        providers?: string[];
+        cacheHit?: boolean;
+        searchCostCny?: number;
     };
 }
 
@@ -193,6 +217,7 @@ export interface ReadWeaveSaveRequest {
     sourceExcerpt: string;
     calloutType: ReadWeaveCalloutType;
     termIdentity?: ReadWeaveTermIdentity;
+    verifiedNonExpandableArtifact?: ReadWeaveVerifiedNonExpandableArtifact;
     reuseObjectId?: string;
 }
 
@@ -202,6 +227,15 @@ export interface ReadWeaveEditRequest {
     body: string;
     calloutType: ReadWeaveCalloutType;
     termIdentity?: ReadWeaveTermIdentity;
+    verifiedNonExpandableArtifact?: ReadWeaveVerifiedNonExpandableArtifact;
+}
+
+export interface ReadWeaveDeleteResult {
+    deleted: true;
+    linkId: string;
+    objectId: string;
+    objectDeleted: boolean;
+    remainingLinkCount: number;
 }
 
 export interface ReadWeaveAiSettings {
@@ -210,6 +244,25 @@ export interface ReadWeaveAiSettings {
     hasApiKey: boolean;
     maskedApiKey?: string;
     credentialSource: "settings" | "environment" | "missing";
+    searchMode: "off" | "automatic" | "always";
+    searchBudgetCny: number;
+    search: {
+        freeProviders: string[];
+        hasSerperApiKey: boolean;
+        maskedSerperApiKey?: string;
+        hasTavilyApiKey: boolean;
+        maskedTavilyApiKey?: string;
+        hasBraveApiKey: boolean;
+        maskedBraveApiKey?: string;
+        hasJinaApiKey: boolean;
+        maskedJinaApiKey?: string;
+        hasSemanticScholarApiKey: boolean;
+        maskedSemanticScholarApiKey?: string;
+        hasOpenAlexApiKey: boolean;
+        maskedOpenAlexApiKey?: string;
+        hasUnpaywallEmail: boolean;
+        maskedUnpaywallEmail?: string;
+    };
 }
 
 export interface ReadWeaveAiSettingsUpdate {
@@ -217,6 +270,38 @@ export interface ReadWeaveAiSettingsUpdate {
     model: string;
     apiKey?: string;
     clearApiKey?: boolean;
+    searchMode?: "off" | "automatic" | "always";
+    searchBudgetCny?: number;
+    serperApiKey?: string;
+    clearSerperApiKey?: boolean;
+    tavilyApiKey?: string;
+    clearTavilyApiKey?: boolean;
+    braveApiKey?: string;
+    clearBraveApiKey?: boolean;
+    jinaApiKey?: string;
+    clearJinaApiKey?: boolean;
+    semanticScholarApiKey?: string;
+    clearSemanticScholarApiKey?: boolean;
+    openAlexApiKey?: string;
+    clearOpenAlexApiKey?: boolean;
+    unpaywallEmail?: string;
+    clearUnpaywallEmail?: boolean;
+}
+
+export interface ReadWeaveSearchTestResult {
+    query: string;
+    sourceCount: number;
+    providers: string[];
+    elapsedMs: number;
+    cacheHit: boolean;
+    searchCostCny: number;
+    sources: Array<{
+        provider: string;
+        title: string;
+        url: string;
+        snippet: string;
+    }>;
+    warnings: string[];
 }
 
 export interface ReadWeaveModelInfo {

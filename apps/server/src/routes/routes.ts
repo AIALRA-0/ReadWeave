@@ -180,6 +180,7 @@ function register(app: express.Application) {
     apiRoute(GET, "/api/readweave/settings", readweaveRoute.getSettings);
     apiRoute(PUT, "/api/readweave/settings", readweaveRoute.updateSettings);
     asyncApiRoute(GET, "/api/readweave/settings/models", readweaveRoute.getModels);
+    asyncApiRoute(PST, "/api/readweave/settings/search-test", readweaveRoute.testSearch);
     apiRoute(GET, "/api/readweave/articles/:articleId/anchors", readweaveRoute.getAnchors);
     apiRoute(GET, "/api/readweave/articles/:articleId/anchors/:anchorId", readweaveRoute.getEntries);
     apiRoute(PST, "/api/readweave/candidates", readweaveRoute.queryCandidates);
@@ -187,6 +188,7 @@ function register(app: express.Application) {
     apiRoute(PST, "/api/readweave/entries", readweaveRoute.saveEntry);
     apiRoute(GET, "/api/readweave/objects/:objectId/impact", readweaveRoute.getImpact);
     apiRoute(PATCH, "/api/readweave/links/:linkId", readweaveRoute.editLink);
+    apiRoute(DEL, "/api/readweave/links/:linkId", readweaveRoute.deleteLink);
     asyncApiRoute(PST, "/api/readweave/generate", readweaveRoute.generate);
     apiRoute(PST, "/api/readweave/generation-jobs", readweaveRoute.startGenerationJob);
     apiRoute(GET, "/api/readweave/articles/:articleId/generation-jobs", readweaveRoute.listGenerationJobs);

@@ -1,6 +1,6 @@
 import "./llm.css";
 
-import type { ReadWeaveAiSettings, ReadWeaveModelInfo } from "@triliumnext/commons";
+import type { ReadWeaveAiSettings, ReadWeaveModelInfo, ReadWeaveSearchTestResult } from "@triliumnext/commons";
 import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
 
 import dialog from "../../../services/dialog";
@@ -68,6 +68,19 @@ function ReadWeaveSettings() {
     const [baseUrl, setBaseUrl] = useState("");
     const [model, setModel] = useState("");
     const [apiKey, setApiKey] = useState("");
+    const [searchMode, setSearchMode] = useState<ReadWeaveAiSettings["searchMode"]>("automatic");
+    const [searchBudgetCny, setSearchBudgetCny] = useState("0.009");
+    const [searchKeys, setSearchKeys] = useState({
+        serperApiKey: "",
+        tavilyApiKey: "",
+        braveApiKey: "",
+        jinaApiKey: "",
+        semanticScholarApiKey: "",
+        openAlexApiKey: "",
+        unpaywallEmail: ""
+    });
+    const [searchQuery, setSearchQuery] = useState("ORCID 的正式名称和用途");
+    const [searchResult, setSearchResult] = useState<ReadWeaveSearchTestResult>();
     const [models, setModels] = useState<ReadWeaveModelInfo[]>([]);
     const [busy, setBusy] = useState(false);
     const [status, setStatus] = useState("");
@@ -85,23 +98,49 @@ function ReadWeaveSettings() {
             setSettings(value);
             setBaseUrl(value.baseUrl);
             setModel(value.model);
+            setSearchMode(value.searchMode);
+            setSearchBudgetCny(value.searchBudgetCny.toString());
         }).catch(() => setStatus(t("readweave_settings.load_failed")));
     }, []);
 
-    async function saveSettings(clearApiKey = false) {
+    async function saveSettings(clearApiKey = false, clearSearchKeys = false) {
         setBusy(true);
         setStatus(t("readweave_settings.saving"));
         try {
+            const parsedSearchBudget = Number.parseFloat(searchBudgetCny);
             const value = await server.put<ReadWeaveAiSettings>("readweave/settings", {
                 baseUrl,
                 model,
                 ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
-                clearApiKey
+                clearApiKey,
+                searchMode,
+                searchBudgetCny: Number.isFinite(parsedSearchBudget) ? parsedSearchBudget : 0.009,
+                ...Object.fromEntries(Object.entries(searchKeys).filter(([, key]) => key.trim())),
+                ...(clearSearchKeys ? {
+                    clearSerperApiKey: true,
+                    clearTavilyApiKey: true,
+                    clearBraveApiKey: true,
+                    clearJinaApiKey: true,
+                    clearSemanticScholarApiKey: true,
+                    clearOpenAlexApiKey: true,
+                    clearUnpaywallEmail: true
+                } : {})
             });
             setSettings(value);
             setBaseUrl(value.baseUrl);
             setModel(value.model);
+            setSearchMode(value.searchMode);
+            setSearchBudgetCny(value.searchBudgetCny.toString());
             setApiKey("");
+            setSearchKeys({
+                serperApiKey: "",
+                tavilyApiKey: "",
+                braveApiKey: "",
+                jinaApiKey: "",
+                semanticScholarApiKey: "",
+                openAlexApiKey: "",
+                unpaywallEmail: ""
+            });
             setModels([]);
             setStatus(t("readweave_settings.saved"));
         } catch {
@@ -110,6 +149,33 @@ function ReadWeaveSettings() {
             setBusy(false);
         }
     }
+
+    async function testSearch() {
+        setBusy(true);
+        setStatus(t("readweave_settings.search_testing"));
+        setSearchResult(undefined);
+        try {
+            if (Object.values(searchKeys).some(value => value.trim())
+                || searchMode !== settings?.searchMode
+                || Number.parseFloat(searchBudgetCny) !== settings?.searchBudgetCny) {
+                await saveSettings(false);
+            }
+            const value = await server.post<ReadWeaveSearchTestResult>("readweave/settings/search-test", { query: searchQuery });
+            setSearchResult(value);
+            setStatus(t("readweave_settings.search_test_succeeded", {
+                count: value.sourceCount,
+                providers: value.providers.join("、") || t("readweave_settings.none")
+            }));
+        } catch {
+            setStatus(t("readweave_settings.search_test_failed"));
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    const updateSearchKey = (name: keyof typeof searchKeys, value: string) => {
+        setSearchKeys(current => ({ ...current, [name]: value }));
+    };
 
     async function loadModels() {
         setBusy(true);
@@ -176,6 +242,113 @@ function ReadWeaveSettings() {
             </div>
             {status && <p className="form-text mb-0" role="status">{status}</p>}
             <p className="form-text mb-0">{t("readweave_settings.security_note")}</p>
+            <hr />
+            <h5>{t("readweave_settings.search_title")}</h5>
+            <p className="form-text">{t("readweave_settings.search_description", {
+                providers: settings?.search.freeProviders.join("、") ?? "Crossref、DBLP、OpenAlex、Semantic Scholar"
+            })}</p>
+            <OptionsRow name="readweave-search-mode" label={t("readweave_settings.search_mode")} description={t("readweave_settings.search_mode_description")} stacked>
+                <select
+                    className="form-select"
+                    value={searchMode}
+                    onChange={event => setSearchMode(event.currentTarget.value as ReadWeaveAiSettings["searchMode"])}
+                    data-testid="readweave-search-mode"
+                >
+                    <option value="automatic">{t("readweave_settings.search_mode_automatic")}</option>
+                    <option value="always">{t("readweave_settings.search_mode_always")}</option>
+                    <option value="off">{t("readweave_settings.search_mode_off")}</option>
+                </select>
+            </OptionsRow>
+            <OptionsRow name="readweave-search-budget" label={t("readweave_settings.search_budget")} description={t("readweave_settings.search_budget_description")} stacked>
+                <input
+                    type="number"
+                    className="form-control"
+                    min="0"
+                    max="1"
+                    step="0.001"
+                    value={searchBudgetCny}
+                    onInput={event => setSearchBudgetCny(event.currentTarget.value)}
+                    data-testid="readweave-search-budget"
+                />
+            </OptionsRow>
+            <details>
+                <summary className="mb-3">{t("readweave_settings.search_keys_title")}</summary>
+                <p className="form-text">{t("readweave_settings.search_keys_description")}</p>
+                {([
+                    [ "serperApiKey", "Serper", settings?.search.hasSerperApiKey, settings?.search.maskedSerperApiKey, "readweave-serper-api-key" ],
+                    [ "tavilyApiKey", "Tavily", settings?.search.hasTavilyApiKey, settings?.search.maskedTavilyApiKey, "readweave-tavily-api-key" ],
+                    [ "braveApiKey", "Brave Search", settings?.search.hasBraveApiKey, settings?.search.maskedBraveApiKey, "readweave-brave-api-key" ],
+                    [ "jinaApiKey", "Jina", settings?.search.hasJinaApiKey, settings?.search.maskedJinaApiKey, "readweave-jina-api-key" ],
+                    [ "semanticScholarApiKey", "Semantic Scholar", settings?.search.hasSemanticScholarApiKey, settings?.search.maskedSemanticScholarApiKey, "readweave-semantic-scholar-api-key" ],
+                    [ "openAlexApiKey", "OpenAlex", settings?.search.hasOpenAlexApiKey, settings?.search.maskedOpenAlexApiKey, "readweave-openalex-api-key" ],
+                    [ "unpaywallEmail", "Unpaywall Email", settings?.search.hasUnpaywallEmail, settings?.search.maskedUnpaywallEmail, "readweave-unpaywall-email" ]
+                ] as const).map(([ name, label, configured, masked, testId ]) => (
+                    <OptionsRow
+                        name={`readweave-${name}`}
+                        label={label}
+                        description={configured
+                            ? t("readweave_settings.search_key_configured", { masked: masked ?? "••••••••" })
+                            : t("readweave_settings.search_key_optional")}
+                        stacked
+                    >
+                        <input
+                            type={name === "unpaywallEmail" ? "email" : "password"}
+                            className="form-control"
+                            value={searchKeys[name]}
+                            autocomplete="new-password"
+                            placeholder={configured ? t("readweave_settings.key_keep_placeholder") : t("readweave_settings.search_key_placeholder")}
+                            onInput={event => updateSearchKey(name, event.currentTarget.value)}
+                            data-testid={testId}
+                        />
+                    </OptionsRow>
+                ))}
+                <button
+                    type="button"
+                    className="btn btn-outline-danger mb-3"
+                    disabled={busy || !settings || !Object.entries(settings.search).some(([ key, value ]) => key.startsWith("has") && value)}
+                    onClick={() => saveSettings(false, true)}
+                >
+                    {t("readweave_settings.clear_search_keys")}
+                </button>
+            </details>
+            <OptionsRow name="readweave-search-test-query" label={t("readweave_settings.search_test_query")} stacked>
+                <input
+                    type="text"
+                    className="form-control"
+                    value={searchQuery}
+                    onInput={event => setSearchQuery(event.currentTarget.value)}
+                    data-testid="readweave-search-test-query"
+                />
+            </OptionsRow>
+            <div className="d-flex flex-wrap gap-2">
+                <button type="button" className="btn btn-primary" disabled={busy || !searchQuery.trim()} onClick={testSearch} data-testid="readweave-search-test">
+                    {t("readweave_settings.search_test")}
+                </button>
+            </div>
+            {searchResult && (
+                <div className="mt-3" data-testid="readweave-search-test-result">
+                    <p className="mb-2">{t("readweave_settings.search_result_summary", {
+                        count: searchResult.sourceCount,
+                        elapsed: searchResult.elapsedMs,
+                        cost: searchResult.searchCostCny.toFixed(4)
+                    })}</p>
+                    <ul className="mb-0">
+                        {searchResult.sources.slice(0, 5).map(item => (
+                            <li key={`${item.provider}:${item.url}`}>
+                                <a href={item.url} target="_blank" rel="noreferrer">{item.title}</a> <small>（{item.provider}）</small>
+                            </li>
+                        ))}
+                    </ul>
+                    {searchResult.warnings.length > 0 && (
+                        <details className="mt-2">
+                            <summary>{t("readweave_settings.search_warnings", { count: searchResult.warnings.length })}</summary>
+                            <ul className="mb-0">
+                                {searchResult.warnings.map(warning => <li key={warning}>{warning}</li>)}
+                            </ul>
+                        </details>
+                    )}
+                </div>
+            )}
         </OptionsSection>
     );
 }

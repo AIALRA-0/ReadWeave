@@ -231,6 +231,15 @@ export interface OptionDefinitions extends KeyboardShortcutsOptions<KeyboardActi
     readWeaveApiKey: string;
     readWeaveBaseUrl: string;
     readWeaveModel: string;
+    readWeaveSearchMode: string;
+    readWeaveSearchBudgetCny: string;
+    readWeaveSerperApiKey: string;
+    readWeaveTavilyApiKey: string;
+    readWeaveBraveApiKey: string;
+    readWeaveJinaApiKey: string;
+    readWeaveSemanticScholarApiKey: string;
+    readWeaveOpenAlexApiKey: string;
+    readWeaveUnpaywallEmail: string;
 
     // OCR options
     ocrEnabled: boolean;

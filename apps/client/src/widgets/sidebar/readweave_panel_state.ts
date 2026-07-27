@@ -1,7 +1,36 @@
-import type { ReadWeaveCalloutType, ReadWeaveCandidate, ReadWeaveObjectKind, ReadWeaveTermIdentity } from "@triliumnext/commons";
+import type {
+    ReadWeaveCalloutType,
+    ReadWeaveCandidate,
+    ReadWeaveGenerationJob,
+    ReadWeaveGenerationProgress,
+    ReadWeaveObjectKind,
+    ReadWeaveTermIdentity
+} from "@triliumnext/commons";
 
 export const READWEAVE_CANDIDATE_MIN_CONFIDENCE = 0.55;
 export const READWEAVE_CANDIDATE_LIMIT = 3;
+
+export type ReadWeaveGenerationVisualState = "running" | "unread" | "error";
+
+export interface ReadWeaveReviewIssueBaseline {
+    body: string;
+    termIdentity?: Partial<ReadWeaveTermIdentity>;
+}
+
+export interface ReadWeaveGenerationDraftSnapshot {
+    body?: string;
+    bodyEdited?: boolean;
+    questionTitle?: string;
+    termIdentity?: Partial<ReadWeaveTermIdentity>;
+    termIdentityEdited?: boolean;
+}
+
+export interface ReadWeaveRecoveredGenerationFields {
+    body: string;
+    questionTitle: string;
+    termIdentity: Partial<ReadWeaveTermIdentity>;
+    termIdentityEdited: boolean;
+}
 
 const USER_SELECTED_CALLOUTS = new Set<ReadWeaveCalloutType>([ "important", "warning", "caution" ]);
 
@@ -35,6 +64,174 @@ export function isReadWeaveGenerationDisabled(input: {
         || !input.hasTitle
         || input.jobStatus === "queued"
         || input.jobStatus === "running";
+}
+
+/**
+ * Only a job with a visible status indicator keeps its source range emphasized.
+ * A completed, already-viewed draft remains recoverable in the side panel, but
+ * its underline goes back to the normal hover/lock interaction.
+ */
+export function readWeaveGenerationVisualState(job: Pick<ReadWeaveGenerationJob, "status" | "unread">): ReadWeaveGenerationVisualState | undefined {
+    if (job.status === "failed") return "error";
+    if (job.status === "queued" || job.status === "running") return "running";
+    if (job.status === "complete" && job.unread) return "unread";
+    return undefined;
+}
+
+/** Remove sentence punctuation that adds visual noise to compact status/log rows. */
+export function readWeaveCompactStatusText(value: string): string {
+    return value.trimEnd().replace(/[。．.]+(?=[\s"'’”」』）)\]】}》〉]*$)/u, "");
+}
+
+/**
+ * Merge one asynchronously returned job without allowing an older response
+ * (for example a delayed "viewed" acknowledgement) to replace a newer local
+ * queued/running state.
+ */
+export function upsertReadWeaveGenerationJob(
+    jobs: ReadWeaveGenerationJob[],
+    incoming: ReadWeaveGenerationJob
+): ReadWeaveGenerationJob[] {
+    const existing = jobs.find(job => job.jobId === incoming.jobId);
+    const selected = existing && compareReadWeaveJobVersions(existing, incoming) > 0
+        ? existing
+        : incoming;
+    return [
+        selected,
+        ...jobs.filter(job => job.jobId !== incoming.jobId)
+    ].toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+/**
+ * Reconcile a periodic server snapshot while retaining a newer optimistic
+ * version of each still-present job until the server catches up.
+ */
+export function mergeReadWeaveGenerationJobSnapshot(
+    current: ReadWeaveGenerationJob[],
+    incoming: ReadWeaveGenerationJob[]
+): ReadWeaveGenerationJob[] {
+    return incoming.map(job => {
+        const existing = current.find(candidate => candidate.jobId === job.jobId);
+        return existing && compareReadWeaveJobVersions(existing, job) > 0 ? existing : job;
+    }).toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+}
+
+/**
+ * A failed job from an older server/database may have no progress rows. Give
+ * it one synthetic failed row so the error remains attached to a foldable log
+ * item instead of disappearing completely.
+ */
+export function readWeaveGenerationProgressForDisplay(
+    job: Pick<ReadWeaveGenerationJob, "status" | "progress" | "createdAt" | "updatedAt">,
+    failedMessage: string
+): ReadWeaveGenerationProgress[] {
+    if (job.progress.length > 0) return job.progress;
+    if (job.status !== "failed") return [];
+    return [ {
+        sequence: 0,
+        timestamp: job.updatedAt,
+        elapsedMs: Math.max(0, Date.parse(job.updatedAt) - Date.parse(job.createdAt)),
+        stage: "failed",
+        round: 0,
+        message: failedMessage,
+        issues: []
+    } ];
+}
+
+/**
+ * Restore a background result without letting the pre-generation session
+ * snapshot hide it.  A deliberately edited answer remains user-owned, while
+ * generated term identity fields fill every field the user left blank.
+ */
+export function recoverReadWeaveGenerationFields(input: {
+    draft?: ReadWeaveGenerationDraftSnapshot;
+    fallbackBody?: string;
+    fallbackQuestionTitle?: string;
+    fallbackTermIdentity?: Partial<ReadWeaveTermIdentity>;
+    job?: Pick<ReadWeaveGenerationJob, "status" | "title" | "result">;
+}): ReadWeaveRecoveredGenerationFields {
+    const completedResult = input.job?.status === "complete" ? input.job.result : undefined;
+    const draftBody = input.draft?.body ?? "";
+    const body = completedResult
+        ? input.draft?.bodyEdited && draftBody.trim() ? draftBody : completedResult.body
+        : draftBody || input.fallbackBody || "";
+    const preferredIdentity = input.draft?.termIdentity ?? input.fallbackTermIdentity ?? {};
+    const termIdentityEdited = !!input.draft?.termIdentityEdited;
+    const termIdentity = completedResult?.termIdentity
+        ? termIdentityEdited
+            ? mergeReadWeaveTermIdentity(completedResult.termIdentity, preferredIdentity)
+            : normalizeReadWeaveTermIdentityForReview(completedResult.termIdentity)
+        : normalizeReadWeaveTermIdentityForReview(preferredIdentity);
+
+    return {
+        body,
+        questionTitle: completedResult?.optimizedTitle?.trim()
+            || input.draft?.questionTitle?.trim()
+            || input.fallbackQuestionTitle?.trim()
+            || input.job?.title.trim()
+            || "",
+        termIdentity,
+        termIdentityEdited
+    };
+}
+
+export function mergeReadWeaveTermIdentity(
+    generated: Partial<ReadWeaveTermIdentity>,
+    preferred: Partial<ReadWeaveTermIdentity>
+): Partial<ReadWeaveTermIdentity> {
+    const generatedClean = normalizeReadWeaveTermIdentityForReview(generated);
+    const preferredClean = normalizeReadWeaveTermIdentityForReview(preferred);
+    return {
+        abbreviation: preferredClean.abbreviation || generatedClean.abbreviation,
+        chineseName: preferredClean.chineseName || generatedClean.chineseName,
+        englishName: preferredClean.englishName || generatedClean.englishName
+    };
+}
+
+export function createReadWeaveReviewIssueBaseline(
+    body: string,
+    termIdentity?: Partial<ReadWeaveTermIdentity>
+): ReadWeaveReviewIssueBaseline {
+    return {
+        body: normalizeReviewValue(body),
+        termIdentity: termIdentity ? normalizeReviewTermIdentity(termIdentity) : undefined
+    };
+}
+
+export function isReadWeaveReviewSaveAllowed(input: {
+    reviewIssues: string[];
+    baseline?: ReadWeaveReviewIssueBaseline;
+    body: string;
+    kind: ReadWeaveObjectKind;
+    termIdentity?: Partial<ReadWeaveTermIdentity>;
+}): boolean {
+    if (input.reviewIssues.length === 0) return true;
+    if (!input.baseline || typeof input.baseline.body !== "string") return false;
+    if (normalizeReviewValue(input.body) !== normalizeReviewValue(input.baseline.body)) return true;
+    if (input.kind !== "term") return false;
+    return JSON.stringify(normalizeReviewTermIdentity(input.termIdentity))
+        !== JSON.stringify(normalizeReviewTermIdentity(input.baseline.termIdentity));
+}
+
+function normalizeReviewTermIdentity(identity: Partial<ReadWeaveTermIdentity> | undefined): Partial<ReadWeaveTermIdentity> {
+    return {
+        abbreviation: normalizeReviewValue(identity?.abbreviation ?? ""),
+        chineseName: normalizeReviewValue(identity?.chineseName ?? ""),
+        englishName: normalizeReviewValue(identity?.englishName ?? "")
+    };
+}
+
+function normalizeReviewValue(value: unknown): string {
+    return typeof value === "string" ? value.normalize("NFKC").replace(/\s+/g, " ").trim() : "";
+}
+
+function compareReadWeaveJobVersions(left: ReadWeaveGenerationJob, right: ReadWeaveGenerationJob): number {
+    const leftTimestamp = Date.parse(left.updatedAt);
+    const rightTimestamp = Date.parse(right.updatedAt);
+    if (Number.isFinite(leftTimestamp) && Number.isFinite(rightTimestamp) && leftTimestamp !== rightTimestamp) {
+        return leftTimestamp - rightTimestamp;
+    }
+    return left.updatedAt.localeCompare(right.updatedAt);
 }
 
 export function normalizeReadWeaveTermIdentityForReview(identity: Partial<ReadWeaveTermIdentity> | undefined): Partial<ReadWeaveTermIdentity> {

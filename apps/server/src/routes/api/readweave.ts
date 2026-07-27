@@ -21,6 +21,7 @@ import {
     startReadWeaveGenerationJob
 } from "../../services/readweave_generation_jobs.js";
 import {
+    deleteReadWeaveLink,
     editReadWeaveLink,
     exportReadWeave,
     getAnchorSummaries,
@@ -35,6 +36,7 @@ import {
     listReadWeaveModels,
     updateReadWeaveAiSettings
 } from "../../services/readweave_settings.js";
+import { testReadWeaveSearch } from "../../services/readweave_search.js";
 
 function getEntries(req: Request<{ articleId: string; anchorId: string }>) {
     return { entries: getEntriesForAnchor(req.params.articleId, req.params.anchorId) };
@@ -67,6 +69,10 @@ function getImpact(req: Request<{ objectId: string }>) {
 
 function editLink(req: Request<{ linkId: string }>) {
     return { entry: editReadWeaveLink(req.params.linkId, req.body as ReadWeaveEditRequest) };
+}
+
+function deleteLink(req: Request<{ linkId: string }>) {
+    return deleteReadWeaveLink(req.params.linkId);
 }
 
 async function generate(req: Request) {
@@ -108,7 +114,7 @@ function markGenerationJobViewed(req: Request<{ jobId: string }>) {
 }
 
 function regenerateGenerationJob(req: Request<{ jobId: string }>) {
-    return { job: regenerateReadWeaveGenerationJob(req.params.jobId, (req.body as { feedback?: unknown })?.feedback) };
+    return { job: regenerateReadWeaveGenerationJob(req.params.jobId, req.body) };
 }
 
 function discardGenerationJob(req: Request<{ jobId: string }>) {
@@ -132,6 +138,14 @@ async function getModels() {
     return { models: await listReadWeaveModels() };
 }
 
+async function testSearch(req: Request) {
+    const query = (req.body as { query?: unknown })?.query;
+    if (typeof query !== "string" || !query.trim() || query.length > 500) {
+        throw new ValidationError("A search test query of at most 500 characters is required.");
+    }
+    return await testReadWeaveSearch(query);
+}
+
 export default {
     getEntries,
     getAnchors,
@@ -140,6 +154,7 @@ export default {
     saveEntry,
     getImpact,
     editLink,
+    deleteLink,
     generate,
     startGenerationJob,
     getGenerationJob,
@@ -151,5 +166,6 @@ export default {
     exportIndex,
     getSettings,
     updateSettings,
-    getModels
+    getModels,
+    testSearch
 };

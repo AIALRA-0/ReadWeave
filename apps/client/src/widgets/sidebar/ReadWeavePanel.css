@@ -29,7 +29,7 @@
 .readweave-range-anchor:hover,
 .readweave-range-anchor.readweave-anchor-hover,
 .readweave-range-anchor.readweave-anchor-locked,
-.readweave-range-anchor.readweave-anchor-draft {
+.readweave-range-anchor.readweave-anchor-status {
     background: transparent;
     box-shadow: none;
     text-decoration-line: underline;
@@ -104,7 +104,12 @@
     text-align: start;
     vertical-align: baseline;
     white-space: pre;
-    pointer-events: none;
+    /*
+     * A generated pseudo-element belongs to the range anchor.  Let it take
+     * part in hit testing so hovering the visible count still resolves to
+     * that anchor instead of falling through to the enclosing paragraph.
+     */
+    pointer-events: auto;
     opacity: 0;
     background-clip: text !important;
     -webkit-background-clip: text !important;
@@ -133,6 +138,7 @@
     );
 }
 
+.readweave-anchor-end:hover::after,
 .readweave-anchor-end.readweave-anchor-hover::after,
 .readweave-anchor-end.readweave-anchor-locked::after {
     opacity: 1;
@@ -147,7 +153,12 @@
     font-size: 0.58rem;
     font-weight: 900;
     line-height: 1;
-    pointer-events: none;
+    /*
+     * Keep the status dot in the anchor's interaction surface.  With
+     * pointer-events disabled Chromium can report the paragraph underneath
+     * as the hit target, which makes pending definitions impossible to hover.
+     */
+    pointer-events: auto;
 }
 
 .readweave-anchor-status-running::before {
@@ -273,6 +284,39 @@
     gap: 6px;
 }
 
+.readweave-entry-title > span:first-child {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.readweave-entry-heading-actions {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 2px;
+}
+
+.readweave-entry-heading-actions .btn {
+    display: inline-grid;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    place-items: center;
+    color: var(--muted-text-color);
+    border-radius: 50%;
+}
+
+.readweave-entry-heading-actions .btn:hover,
+.readweave-entry-heading-actions .btn:focus-visible {
+    color: var(--main-text-color);
+    background: color-mix(in srgb, var(--readweave-callout) 15%, transparent);
+}
+
+.readweave-entry-heading-actions .readweave-delete-action:hover,
+.readweave-entry-heading-actions .readweave-delete-action:focus-visible {
+    color: var(--danger-text-color, #c42b1c);
+}
+
 .readweave-entry-title i,
 .readweave-hover-title i {
     color: var(--readweave-callout);
@@ -300,6 +344,14 @@
     margin-top: 8px;
     opacity: 1;
     transform: translateY(0);
+}
+
+.readweave-delete-confirmation {
+    border-color: color-mix(in srgb, var(--danger-text-color, #c42b1c) 42%, var(--main-border-color));
+}
+
+.readweave-delete-confirmation > strong {
+    overflow-wrap: anywhere;
 }
 
 .readweave-candidate {
@@ -369,6 +421,24 @@
     align-items: center;
     justify-content: center;
     gap: 0.4rem;
+    border-width: 1px;
+    font-weight: 700;
+}
+
+.readweave-panel [data-testid="readweave-generate"].readweave-generate-question:not(:disabled) {
+    border-color: var(--admonition-note-accent-color);
+    background: var(--admonition-note-accent-color);
+    color: white;
+}
+
+.readweave-panel [data-testid="readweave-generate"].readweave-generate-term:not(:disabled) {
+    border-color: var(--admonition-tip-accent-color);
+    background: var(--admonition-tip-accent-color);
+    color: white;
+}
+
+.readweave-panel [data-testid="readweave-generate"]:disabled {
+    opacity: 0.5;
 }
 
 .readweave-kind button {
@@ -677,18 +747,110 @@
 }
 
 .readweave-issue-group strong {
-    display: block;
-    margin-bottom: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.readweave-issue-group strong small {
+    color: var(--muted-text-color);
+    font-size: 0.68rem;
+    font-variant-numeric: tabular-nums;
 }
 
 .readweave-issue-group ul {
+    max-height: 0;
     margin: 0;
     padding-inline-start: 1.1rem;
+    overflow: hidden;
+    opacity: 0;
+    transform: translateY(-2px);
+    transition: max-height 220ms ease, margin-top 160ms ease, opacity 160ms ease, transform 160ms ease;
+}
+
+.readweave-issue-group:hover ul,
+.readweave-issue-group:focus ul {
+    max-height: 720px;
+    margin-top: 4px;
+    opacity: 1;
+    transform: translateY(0);
 }
 
 .readweave-monitor-error {
     margin: 7px 0 0;
     color: var(--admonition-caution-accent-color);
+    outline: none;
+}
+
+.readweave-monitor-error > p {
+    max-height: 0;
+    margin: 0;
+    overflow: hidden;
+    opacity: 0;
+    transform: translateY(-2px);
+    transition: max-height 220ms ease, margin-top 160ms ease, opacity 160ms ease, transform 160ms ease;
+}
+
+.readweave-monitor-error:hover > p,
+.readweave-monitor-error:focus > p {
+    max-height: 320px;
+    margin-top: 4px;
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.readweave-review-gate {
+    padding: 8px 10px;
+    border-inline-start: 3px solid var(--admonition-caution-accent-color);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--admonition-caution-accent-color) 9%, transparent);
+    color: var(--main-text-color);
+    font-size: 0.78rem;
+}
+
+.readweave-review-gate.edited {
+    border-inline-start-color: var(--admonition-tip-accent-color);
+    background: color-mix(in srgb, var(--admonition-tip-accent-color) 9%, transparent);
+}
+
+.readweave-review-gate > strong {
+    display: block;
+    margin-bottom: 4px;
+}
+
+.readweave-review-gate > ul {
+    max-height: 0;
+    margin: 0;
+    padding-inline-start: 1.15rem;
+    overflow: hidden;
+    opacity: 0;
+    transform: translateY(-2px);
+    transition: max-height 220ms ease, margin-top 160ms ease, opacity 160ms ease, transform 160ms ease;
+}
+
+.readweave-review-gate > p {
+    max-height: 0;
+    margin: 0;
+    overflow: hidden;
+    color: var(--muted-text-color);
+    opacity: 0;
+    transition: max-height 220ms ease, margin-top 160ms ease, opacity 160ms ease;
+}
+
+.readweave-review-gate:hover > ul,
+.readweave-review-gate:focus > ul {
+    max-height: 720px;
+    margin-top: 5px;
+    opacity: 1;
+    transform: translateY(0);
+}
+
+.readweave-review-gate:hover > p,
+.readweave-review-gate:focus > p {
+    max-height: 160px;
+    margin-top: 5px;
+    opacity: 1;
 }
 
 .readweave-review-actions {

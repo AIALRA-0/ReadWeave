@@ -284,7 +284,16 @@ const defaultOptions: DefaultOption[] = [
     { name: "mcpEnabled", value: "false", isSynced: false },
     { name: "readWeaveApiKey", value: "", isSynced: false },
     { name: "readWeaveBaseUrl", value: "https://api.deepseek.com", isSynced: false },
-    { name: "readWeaveModel", value: "deepseek-v4-pro", isSynced: false },
+    { name: "readWeaveModel", value: "deepseek-v4-flash", isSynced: false },
+    { name: "readWeaveSearchMode", value: "automatic", isSynced: false },
+    { name: "readWeaveSearchBudgetCny", value: "0.009", isSynced: false },
+    { name: "readWeaveSerperApiKey", value: "", isSynced: false },
+    { name: "readWeaveTavilyApiKey", value: "", isSynced: false },
+    { name: "readWeaveBraveApiKey", value: "", isSynced: false },
+    { name: "readWeaveJinaApiKey", value: "", isSynced: false },
+    { name: "readWeaveSemanticScholarApiKey", value: "", isSynced: false },
+    { name: "readWeaveOpenAlexApiKey", value: "", isSynced: false },
+    { name: "readWeaveUnpaywallEmail", value: "", isSynced: false },
 
     // OCR options
     { name: "ocrAutoProcessImages", value: "false", isSynced: true },

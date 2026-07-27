@@ -239,6 +239,11 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await expect(panel).toContainText("no fallback answer was used");
     const generationMonitor = panel.getByTestId("readweave-generation-monitor");
     await expect(generationMonitor).toContainText("全部检查通过");
+    const compactStatuses = await panel.locator(".readweave-status").allTextContents();
+    expect(compactStatuses.filter(value => value.includes("已使用上下文") || value.includes("首稿生成"))
+        .every(value => !/[。．.]\s*$/u.test(value))).toBe(true);
+    const compactLogMessages = await generationMonitor.locator(".readweave-generation-event > span").allTextContents();
+    expect(compactLogMessages.every(value => !/[。．.]\s*$/u.test(value))).toBe(true);
     await generationMonitor.locator(".readweave-generation-summary").click();
     await expect(generationMonitor.locator(".readweave-generation-log")).toBeVisible();
     await expect(panel.locator(".readweave-generation-monitor")).toHaveCount(1);
@@ -298,6 +303,8 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     expect(await paragraph.evaluate(element => getComputedStyle(element, "::after").content)).toBe("none");
     const questionEntry = panel.locator(".readweave-entry", { hasText: "NPU 是什么，有什么用途？" });
     await expect(questionEntry).toHaveClass(/readweave-callout-important/);
+    await expect(questionEntry.getByRole("button", { name: /^Edit /u })).toBeVisible();
+    await expect(questionEntry.getByRole("button", { name: /^Delete /u })).toBeVisible();
 
     const paragraphBox = await paragraph.boundingBox();
     expect(paragraphBox).not.toBeNull();
@@ -387,7 +394,11 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await expect(hoverPreview.locator(".readweave-hover-question")).toHaveCount(1);
     const hoverTerm = hoverPreview.locator(".readweave-hover-term").first();
     await expect(hoverTerm.locator(".readweave-hover-definition")).toBeVisible();
-    await expect(hoverTerm).toContainText("当前测试资料所定义的概念");
+    await expect(hoverTerm).toContainText("面向神经网络计算的专用硬件加速单元");
+    const termEditButton = panel.getByRole("button", { name: /^Edit “NPU 神经网络处理单元/u });
+    const termEntry = termEditButton.locator("xpath=ancestor::article");
+    await expect(termEditButton).toBeVisible();
+    await expect(termEntry.getByRole("button", { name: /^Delete “NPU 神经网络处理单元/u })).toBeVisible();
 
     await panel.getByRole("button", { name: "Question", exact: true }).click();
     await question.fill("NPU 是什么，有什么用途？");
@@ -401,7 +412,7 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await expect(paragraph).toHaveAttribute("data-readweave-paragraph-question-count", "1");
 
     await questionEntry.hover();
-    await questionEntry.getByRole("button", { name: "Edit", exact: true }).click();
+    await questionEntry.getByRole("button", { name: /^Edit /u }).click();
     const impact = panel.locator(".readweave-impact");
     await expect(impact).toContainText("This object has 1 links across 1 articles.");
     await impact.locator("textarea").fill(professionalAnswer("这是经过全局审核的直接答案"));
@@ -411,19 +422,31 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await expect(questionEntry).toHaveClass(/readweave-callout-warning/);
 
     await questionEntry.hover();
-    await questionEntry.getByRole("button", { name: "Edit", exact: true }).click();
+    await questionEntry.getByRole("button", { name: /^Edit /u }).click();
     await impact.locator("textarea").fill(professionalAnswer("这是只在本文显示的直接答案"));
     await impact.getByRole("radio", { name: "Change this display only", exact: true }).check();
     await impact.getByRole("button", { name: "Apply change", exact: true }).click();
     await questionEntry.hover();
     await expect(questionEntry).toContainText("这是只在本文显示的直接答案；");
 
-    await questionEntry.getByRole("button", { name: "Edit", exact: true }).click();
+    await questionEntry.getByRole("button", { name: /^Edit /u }).click();
     await impact.locator("textarea").fill(professionalAnswer("这是本文专用变体的直接答案"));
     await impact.getByRole("radio", { name: "Create an article variant", exact: true }).check();
     await impact.getByRole("button", { name: "Apply change", exact: true }).click();
     await questionEntry.hover();
     await expect(questionEntry).toContainText("这是本文专用变体的直接答案；");
+
+    await termEntry.getByRole("button", { name: /^Delete “NPU 神经网络处理单元/u }).click();
+    const deleteDialog = panel.getByRole("alertdialog", { name: "Delete saved content" });
+    await expect(deleteDialog).toContainText("This removes the item from the current text fragment");
+    await deleteDialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(termEntry).toBeVisible();
+    await termEntry.getByRole("button", { name: /^Delete “NPU 神经网络处理单元/u }).click();
+    await panel.getByRole("alertdialog", { name: "Delete saved content" })
+        .getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(termEntry).toHaveCount(0);
+    await expect(paragraph).not.toHaveAttribute("data-readweave-paragraph-term-count", /.+/u);
+    await expect(paragraph).toHaveAttribute("data-readweave-paragraph-question-count", "1");
 
     const secondParagraph = editor.locator("p", { hasText: secondParagraphText });
     await selectTextRange(page, secondParagraph, "独立草稿");
@@ -433,10 +456,15 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await question.fill("[FAIL] 验证定点修复错误");
     await panel.getByRole("button", { name: "Generate answer", exact: true }).click();
     const failedMonitor = panel.getByTestId("readweave-generation-monitor");
-    await expect(failedMonitor).toContainText("生成失败");
-    await failedMonitor.locator(".readweave-generation-summary").click();
+    await expect(failedMonitor).toContainText("内部自动恢复已完成，本轮未产生可审核内容");
+    await failedMonitor.locator(".readweave-generation-summary").hover();
     const failedEvent = failedMonitor.locator(".readweave-generation-log > li.failed");
-    await expect(failedEvent.locator(".readweave-issue-group")).toContainText("定点修复重试已耗尽");
+    const failedIssueGroup = failedEvent.locator(".readweave-issue-group");
+    await expect(failedIssueGroup).toContainText("后台自动恢复已连续尝试 5 次");
+    await expect.poll(() => failedIssueGroup.locator("ul").evaluate(element => getComputedStyle(element).opacity)).toBe("0");
+    await failedIssueGroup.hover();
+    await expect.poll(() => failedIssueGroup.locator("ul").evaluate(element => getComputedStyle(element).opacity)).toBe("1");
+    await failedMonitor.locator(".readweave-generation-summary").click();
     await expect(failedMonitor.locator(".readweave-generation-detail > .readweave-issue-group")).toHaveCount(0);
     await expect(failedAnchor).toHaveClass(/readweave-anchor-draft/);
     await expect(failedAnchor).toHaveClass(/readweave-anchor-status-error/);
@@ -450,11 +478,6 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await panel.getByRole("button", { name: "Question", exact: true }).click();
     await expect(panel.getByRole("button", { name: "Note", exact: true })).toHaveAttribute("aria-pressed", "true");
     await expect(panel.getByRole("button", { name: "Generate answer", exact: true })).toBeEnabled();
-    await question.fill("[REVIEW] 验证保留待人工审核草稿");
-    await panel.getByRole("button", { name: "Generate answer", exact: true }).click();
-    await expect(answer).toHaveValue(/定义与命名：/);
-    await expect(panel.getByTestId("readweave-generation-monitor")).toContainText("自动检查未确认测试草稿");
-    await expect(panel.getByRole("button", { name: "I reviewed it — save", exact: true })).toBeEnabled();
 
     const downloadPromise = page.waitForEvent("download");
     await panel.getByRole("button", { name: "Export this article's question-anchor index", exact: true }).click();
@@ -474,7 +497,7 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
         generator: { name: "ReadWeave", workflowVersion: "context-v2-no-fallback" },
         scope: { type: "articles", articleIds: [ expect.any(String) ], includeContent: true },
         anchors: [ { selector: { type: "readweave-range-v1", quote: "NPU" } } ],
-        integrity: { valid: true, articleCount: 1, anchorCount: 1, objectCount: 2, linkCount: 2 }
+        integrity: { valid: true, articleCount: 1, anchorCount: 1, objectCount: 1, linkCount: 1 }
     });
     expect(exported.integrity.contentSha256).toMatch(/^[a-f0-9]{64}$/);
 });
@@ -516,38 +539,96 @@ test("ReadWeave confirms a pending selection from the right panel and enables ge
     const app = new App(page, context);
     await gotoReadWeave(app, page);
     const source = "该论文发表于 ASP-DAC，并讨论了三维集成电路中的宏布局。";
-    const editor = await createTextNote(app, uniqueTitle("ReadWeave E2E · Pending selection"), source);
+    const title = uniqueTitle("ReadWeave E2E · Pending selection");
+    const editor = await createTextNote(app, title, source);
     const paragraph = editor.locator("p", { hasText: source });
     await selectTextRange(page, paragraph, "ASP-DAC");
 
     const panel = app.sidebar.locator("#readweave-panel");
     await expect(panel).toContainText("Text selection awaiting confirmation");
     const generate = panel.getByRole("button", { name: "Generate answer", exact: true });
-    await expect(generate).toBeDisabled();
+    await expect(generate).toBeEnabled();
     const question = panel.getByRole("textbox", { name: "Question", exact: true });
     await question.focus();
     await expect(page.locator(".readweave-selection-actions")).toBeHidden();
-    await expect(question).toHaveValue("What does “ASP-DAC” mean in this context?");
+    await expect(question).toHaveValue("What is “ASP-DAC”? Give a general, detailed explanation.");
+    const provisionalAnchor = paragraph.locator("[data-readweave-range-anchor-id]");
+    await expect(provisionalAnchor).toHaveCount(1);
+    const provisionalAnchorId = await provisionalAnchor.getAttribute("data-readweave-range-anchor-id");
+    expect(provisionalAnchorId).toMatch(/^rwr_/);
+    // Reproduce a human pause: edit after the first save opportunity and stay
+    // longer than the background refresh interval before starting generation.
+    await page.waitForTimeout(1_100);
     await question.fill("[SLOW] What does ASP-DAC mean in this context?");
+    await page.waitForTimeout(1_300);
+    await expect(provisionalAnchor).toHaveAttribute("data-readweave-range-anchor-id", provisionalAnchorId!);
+    const noteId = await page.evaluate(() => (window as unknown as { glob: { appContext: { tabManager: { getActiveContext: () => { noteId: string } } } } }).glob.appContext.tabManager.getActiveContext().noteId);
+    const origin = new URL(page.url()).origin;
+    await expect.poll(async () => {
+        const response = await page.request.get(`${origin}/api/notes/${encodeURIComponent(noteId)}/blob`);
+        if (!response.ok()) return "";
+        return ((await response.json()) as { content?: string }).content ?? "";
+    }).toContain(provisionalAnchorId!);
     await expect(generate).toBeEnabled();
     await generate.click();
-    const provisionalAnchor = paragraph.locator("[data-readweave-range-anchor-id]");
     await expect(provisionalAnchor).toHaveClass(/readweave-anchor-status-running/);
     expect(await provisionalAnchor.evaluate(element => getComputedStyle(element, "::before").content)).toBe('"●"');
-    const generationMonitor = panel.getByTestId("readweave-generation-monitor");
+    // Simulate the historical two-save race: the server job survives but the
+    // note blob loses its mark. Reload recovery must reattach the job by its
+    // unique sourceExcerpt instead of leaving an invisible orphan.
+    await page.evaluate(async ({ noteId, anchorId }) => {
+        const response = await fetch(`/api/notes/${encodeURIComponent(noteId)}/blob`);
+        const blob = await response.json() as { content: string };
+        const documentCopy = new DOMParser().parseFromString(blob.content, "text/html");
+        for (const element of documentCopy.querySelectorAll<HTMLElement>("[data-readweave-range-anchor-id]")) {
+            const remaining = (element.dataset.readweaveRangeAnchorId ?? "").split(/\s+/).filter(id => id && id !== anchorId);
+            if (remaining.length) element.dataset.readweaveRangeAnchorId = remaining.join(" ");
+            else element.replaceWith(...Array.from(element.childNodes));
+        }
+        const saveResponse = await fetch(`/api/notes/${encodeURIComponent(noteId)}/data`, {
+            method: "PUT",
+            headers: {
+                "content-type": "application/json",
+                "x-csrf-token": (window as unknown as { glob: { csrfToken: string } }).glob.csrfToken
+            },
+            body: JSON.stringify({ content: documentCopy.body.innerHTML, attachments: [] })
+        });
+        if (!saveResponse.ok) throw new Error(`Could not create orphaned-job fixture: ${saveResponse.status}`);
+    }, { noteId, anchorId: provisionalAnchorId! });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(app.currentNoteSplitTitle).toHaveValue(title, { timeout: 20_000 });
+    const reloadedParagraph = app.currentNoteSplit.locator(".note-detail-editable-text-editor p", { hasText: source });
+    const reloadedAnchor = reloadedParagraph.locator("[data-readweave-range-anchor-id]", { hasText: "ASP-DAC" });
+    await expect(reloadedAnchor).toHaveAttribute("data-readweave-range-anchor-id", provisionalAnchorId!);
+    await expect.poll(async () => {
+        const response = await page.request.get(`${origin}/api/notes/${encodeURIComponent(noteId)}/blob`);
+        if (!response.ok()) return "";
+        return ((await response.json()) as { content?: string }).content ?? "";
+    }, { timeout: 10_000 }).toContain(provisionalAnchorId!);
+    await expect.poll(() => reloadedAnchor.evaluate(element =>
+        element.classList.contains("readweave-anchor-status-running") || element.classList.contains("readweave-anchor-status-unread")
+    )).toBe(true);
+    const reloadedAnchorBox = await reloadedAnchor.boundingBox();
+    expect(reloadedAnchorBox).not.toBeNull();
+    await page.mouse.click(
+        reloadedAnchorBox!.x + reloadedAnchorBox!.width / 2,
+        reloadedAnchorBox!.y + reloadedAnchorBox!.height / 2
+    );
+    const restoredPanel = app.sidebar.locator("#readweave-panel");
+    const generationMonitor = restoredPanel.getByTestId("readweave-generation-monitor");
     const runningState = generationMonitor.locator(".readweave-generation-state");
-    await expect(runningState).toHaveClass(/running/);
+    await expect(runningState).toHaveClass(/running|complete/);
     const runningStateStyle = await runningState.evaluate(element => {
         const style = getComputedStyle(element);
         return { background: style.backgroundColor, borderWidth: style.borderTopWidth };
     });
     expect(runningStateStyle.borderWidth).toBe("0px");
     expect(runningStateStyle.background).not.toBe("rgba(0, 0, 0, 0)");
-    await expect(panel.getByTestId("readweave-answer")).toHaveValue(/定义与命名：/);
+    await expect(restoredPanel.getByTestId("readweave-answer")).toHaveValue(/定义与命名：/);
 
-    const saveButton = panel.getByRole("button", { name: "I reviewed it — save", exact: true });
-    const discardButton = panel.getByRole("button", { name: "Don't save", exact: true });
-    const regenerateButton = panel.getByRole("button", { name: "Regenerate", exact: true });
+    const saveButton = restoredPanel.getByRole("button", { name: "I reviewed it — save", exact: true });
+    const discardButton = restoredPanel.getByRole("button", { name: "Don't save", exact: true });
+    const regenerateButton = restoredPanel.getByRole("button", { name: "Regenerate", exact: true });
     const [ saveBox, discardBox, regenerateBox ] = await Promise.all([
         saveButton.boundingBox(),
         discardButton.boundingBox(),
@@ -560,17 +641,228 @@ test("ReadWeave confirms a pending selection from the right panel and enables ge
     expect(Math.abs(saveBox!.x + saveBox!.width - regenerateBox!.x - regenerateBox!.width)).toBeLessThanOrEqual(0.5);
 
     await regenerateButton.click();
-    const optionalFeedback = panel.getByRole("textbox", { name: "Correction instructions (optional)", exact: true });
+    const optionalFeedback = restoredPanel.getByRole("textbox", { name: "Correction instructions (optional)", exact: true });
     await expect(optionalFeedback).toHaveValue("");
-    const startRegeneration = panel.getByRole("button", { name: "Start regeneration", exact: true });
+    const startRegeneration = restoredPanel.getByRole("button", { name: "Start regeneration", exact: true });
     await expect(startRegeneration).toBeEnabled();
     await startRegeneration.click();
     const freshLog = generationMonitor.locator(".readweave-generation-log");
     await expect(freshLog.locator("li")).toHaveCount(1);
     await expect(freshLog).toContainText("已按原问题重新排队");
     await expect(freshLog).not.toContainText("全部检查通过");
-    await expect(panel.getByTestId("readweave-answer")).toHaveValue(/定义与命名：/);
+    await expect(restoredPanel.getByTestId("readweave-answer")).toHaveValue(/定义与命名：/);
     await discardButton.click();
+});
+
+test("ReadWeave starts generation directly from a pending selection without an extra confirmation click", async ({ page, context }) => {
+    test.setTimeout(90_000);
+    const app = new App(page, context);
+    await gotoReadWeave(app, page);
+    const source = "直接点击生成回答也必须确认 BS-PDN 锚点，并立即显示精确范围状态。";
+    const editor = await createTextNote(app, uniqueTitle("ReadWeave E2E · Direct pending generation"), source);
+    const paragraph = editor.locator("p", { hasText: source });
+    await selectTextRange(page, paragraph, "BS-PDN");
+
+    let releaseEntries!: () => void;
+    const entriesGate = new Promise<void>(resolve => { releaseEntries = resolve; });
+    let heldEntries = false;
+    await page.route("**/api/readweave/articles/*/anchors/*", async route => {
+        if (heldEntries || route.request().method() !== "GET") {
+            await route.continue();
+            return;
+        }
+        heldEntries = true;
+        const response = await route.fetch();
+        await entriesGate;
+        await route.fulfill({ response });
+    });
+
+    let releaseStart!: () => void;
+    const startGate = new Promise<void>(resolve => { releaseStart = resolve; });
+    let heldStart = false;
+    await page.route("**/api/readweave/generation-jobs", async route => {
+        const request = route.request();
+        if (heldStart || request.method() !== "POST" || new URL(request.url()).pathname !== "/api/readweave/generation-jobs") {
+            await route.continue();
+            return;
+        }
+        heldStart = true;
+        const response = await route.fetch();
+        await startGate;
+        await route.fulfill({ response });
+    });
+
+    const panel = app.sidebar.locator("#readweave-panel");
+    await expect(panel).toContainText("Text selection awaiting confirmation");
+    const generate = panel.getByRole("button", { name: "Generate answer", exact: true });
+    await expect(generate).toBeEnabled();
+    await generate.click();
+
+    await expect(page.locator(".readweave-selection-actions")).toBeHidden();
+    const anchor = paragraph.locator("[data-readweave-range-anchor-id]", { hasText: "BS-PDN" });
+    await expect(anchor).toHaveCount(1);
+    await expect(anchor).toHaveClass(/readweave-anchor-status-running/);
+    expect(await anchor.evaluate(element => getComputedStyle(element, "::before").content)).toBe('"●"');
+    await expect(panel.getByTestId("readweave-generation-monitor").locator(".readweave-generation-state")).toHaveClass(/running/);
+
+    releaseEntries();
+    releaseStart();
+    await expect(panel.getByTestId("readweave-answer")).not.toHaveValue("", { timeout: 20_000 });
+    await panel.getByRole("button", { name: "Don't save", exact: true }).click();
+});
+
+test("ReadWeave keeps immediate exact-range generation state across slow save, start and regeneration responses", async ({ page, context }) => {
+    test.setTimeout(120_000);
+    const app = new App(page, context);
+    await gotoReadWeave(app, page);
+    const source = "慢网络下的精确锚点必须立即显示虚线与黄色生成状态，并且不能被后台刷新擦除。";
+    const editor = await createTextNote(app, uniqueTitle("ReadWeave E2E · Optimistic generation"), source);
+    const paragraph = editor.locator("p", { hasText: source });
+    const panel = await openSelectionEditor(page, app, paragraph, "精确锚点", "Ask");
+    const anchor = paragraph.locator("[data-readweave-range-anchor-id]", { hasText: "精确锚点" });
+    const question = panel.getByRole("textbox", { name: "Question", exact: true });
+    const generate = panel.getByTestId("readweave-generate");
+    await question.fill("慢网络下精确锚点的生成状态应如何反馈？");
+
+    let releaseSave!: () => void;
+    const saveGate = new Promise<void>(resolve => { releaseSave = resolve; });
+    let saveStarted = false;
+    let heldSave = false;
+    await page.route("**/api/notes/*/data", async route => {
+        if (route.request().method() !== "PUT" || heldSave) {
+            await route.continue();
+            return;
+        }
+        heldSave = true;
+        saveStarted = true;
+        const response = await route.fetch();
+        await saveGate;
+        await route.fulfill({ response });
+    });
+
+    let releaseStart!: () => void;
+    const startGate = new Promise<void>(resolve => { releaseStart = resolve; });
+    let startStarted = false;
+    let heldStart = false;
+    let releaseRegeneration = () => {};
+    await page.route("**/api/readweave/generation-jobs", async route => {
+        const request = route.request();
+        if (request.method() !== "POST" || new URL(request.url()).pathname !== "/api/readweave/generation-jobs" || heldStart) {
+            await route.continue();
+            return;
+        }
+        heldStart = true;
+        startStarted = true;
+        await startGate;
+        const response = await route.fetch();
+        await route.fulfill({ response });
+    });
+
+    try {
+        await generate.click();
+        await expect.poll(() => saveStarted).toBe(true);
+        await expect(generate).toHaveAttribute("aria-busy", "true");
+        await expect(generate).toContainText("Generating a draft");
+        await expect(anchor).toHaveClass(/readweave-anchor-status-running/);
+        await expect(anchor).toHaveClass(/readweave-anchor-draft/);
+        expect(await anchor.evaluate(element => getComputedStyle(element, "::before").content)).toBe('"●"');
+        expect(await anchor.evaluate(element => getComputedStyle(element).textDecorationLine)).toContain("underline");
+        const initialMonitor = panel.getByTestId("readweave-generation-monitor");
+        await expect(initialMonitor.locator(".readweave-generation-state")).toHaveClass(/running/);
+        await expect(initialMonitor.locator(".readweave-generation-log > li")).toHaveCount(1);
+
+        // The two-second background snapshot refresh must not erase the local
+        // queued state while the note save is still waiting for its response.
+        await page.waitForTimeout(2_300);
+        await expect(anchor).toHaveClass(/readweave-anchor-status-running/);
+        await expect(generate).toHaveAttribute("aria-busy", "true");
+
+        releaseSave();
+        await expect.poll(() => startStarted).toBe(true);
+        await page.waitForTimeout(2_300);
+        await expect(anchor).toHaveClass(/readweave-anchor-status-running/);
+        await expect(generate).toHaveAttribute("aria-busy", "true");
+
+        releaseStart();
+        await expect(panel.getByTestId("readweave-answer")).not.toHaveValue("", { timeout: 30_000 });
+        await expect(generate).toBeEnabled();
+        await expect(anchor).not.toHaveClass(/readweave-anchor-status-running/);
+        await expect(anchor).toHaveClass(/readweave-anchor-status-unread/);
+        await expect(anchor).toHaveClass(/readweave-anchor-draft/);
+
+        const regenerationGate = new Promise<void>(resolve => { releaseRegeneration = resolve; });
+        let regenerationStarted = false;
+        await page.route("**/api/readweave/generation-jobs/*/regenerate", async route => {
+            if (route.request().method() !== "POST") {
+                await route.continue();
+                return;
+            }
+            regenerationStarted = true;
+            await regenerationGate;
+            const response = await route.fetch();
+            await route.fulfill({ response });
+        });
+
+        await panel.getByRole("button", { name: "Regenerate", exact: true }).click();
+        await panel.getByRole("button", { name: "Start regeneration", exact: true }).click();
+        await expect.poll(() => regenerationStarted).toBe(true);
+        await expect(generate).toHaveAttribute("aria-busy", "true");
+        await expect(generate).toContainText("Generating a draft");
+        await expect(anchor).toHaveClass(/readweave-anchor-status-running/);
+        await expect(anchor).toHaveClass(/readweave-anchor-draft/);
+        const regenerationMonitor = panel.getByTestId("readweave-generation-monitor");
+        await expect(regenerationMonitor.locator(".readweave-generation-state")).toHaveClass(/running/);
+        await expect(regenerationMonitor.locator(".readweave-generation-log > li")).toHaveCount(1);
+
+        // The server still reports the previous completed job while this POST
+        // is held. Its older updatedAt must not replace the optimistic queue.
+        await page.waitForTimeout(2_300);
+        await expect(anchor).toHaveClass(/readweave-anchor-status-running/);
+        await expect(generate).toHaveAttribute("aria-busy", "true");
+        await expect(regenerationMonitor.locator(".readweave-generation-state")).toHaveClass(/running/);
+
+        releaseRegeneration();
+        await expect(generate).toBeEnabled({ timeout: 30_000 });
+        await expect(anchor).not.toHaveClass(/readweave-anchor-status-running/);
+        await panel.getByRole("button", { name: "Don't save", exact: true }).click();
+    } finally {
+        releaseSave();
+        releaseStart();
+        releaseRegeneration();
+    }
+});
+
+test("ReadWeave releases a busy editor when the active background job disappears", async ({ page, context }) => {
+    test.setTimeout(90_000);
+    const app = new App(page, context);
+    await gotoReadWeave(app, page);
+    const source = "后台任务若已被其他页面删除，当前编辑器不能永久停留在灰色禁用状态。";
+    const editor = await createTextNote(app, uniqueTitle("ReadWeave E2E · Missing generation job"), source);
+    const paragraph = editor.locator("p", { hasText: source });
+    const panel = await openSelectionEditor(page, app, paragraph, "灰色禁用状态", "Ask");
+    const generate = panel.getByTestId("readweave-generate");
+    await panel.getByRole("textbox", { name: "Question", exact: true }).fill("后台任务消失后为什么必须恢复编辑？");
+
+    await page.route("**/api/readweave/generation-jobs/*/events?*", async route => {
+        await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({ job: null, events: [], nextSequence: 0 })
+        });
+    });
+    await page.route("**/api/readweave/articles/*/generation-jobs", async route => {
+        await route.fulfill({
+            status: 200,
+            contentType: "application/json",
+            body: JSON.stringify({ jobs: [] })
+        });
+    });
+
+    await generate.click();
+    await expect(generate).toHaveAttribute("aria-busy", "true");
+    await expect(generate).toBeEnabled({ timeout: 10_000 });
+    await expect(generate).not.toHaveAttribute("aria-busy", "true");
+    await expect(panel.getByTestId("readweave-generation-monitor")).toHaveCount(0);
 });
 
 test("ReadWeave keeps a wrapped fragment badge at the inline end without shifting following text", async ({ page, context }) => {
@@ -751,6 +1043,10 @@ test("ReadWeave ignores a delayed generation response after switching to another
         await panel.getByRole("textbox", { name: "Question", exact: true }).fill("[SLOW] 锚点 A 的作用是什么？");
         await panel.getByRole("button", { name: "Generate answer", exact: true }).click();
         await expect.poll(() => delayedJobId, { timeout: 10_000 }).toBeTruthy();
+        await expect(panel.getByRole("textbox", { name: "Question", exact: true })).toBeDisabled();
+        await expect(panel.getByTestId("readweave-answer")).toBeDisabled();
+        await expect(panel.getByRole("button", { name: "Term", exact: true })).toBeDisabled();
+        await expect(panel.getByRole("button", { name: "Note", exact: true })).toBeDisabled();
 
         panel = await openSelectionEditor(page, app, paragraphB, "锚点 B", "Ask");
         const selection = panel.locator(".readweave-selection");
@@ -822,7 +1118,7 @@ test("ReadWeave restores a background result after switching away and clears the
     await expect(panel.getByTestId("readweave-answer")).toHaveValue(/定义与命名：/);
     await expect(panel.getByTestId("readweave-generation-monitor")).toContainText("全部检查通过");
     await expect(restoredAnchor).not.toHaveClass(/readweave-anchor-status-unread/);
-    await expect(restoredAnchor).toHaveClass(/readweave-anchor-draft/);
+    await expect(restoredAnchor).not.toHaveClass(/readweave-anchor-draft/);
     await panel.getByRole("button", { name: "I reviewed it — save", exact: true }).click();
     await expect(restoredAnchor).not.toHaveClass(/readweave-anchor-draft/);
     await expect(app.currentNoteSplit.locator("p", { hasText: source })).toHaveAttribute("data-readweave-paragraph-question-count", "1");
@@ -899,6 +1195,98 @@ test("ReadWeave splits a Tip subrange from its Note anchor and uses hover withou
     await page.mouse.move(5, 5);
     await expect(preview).toBeHidden();
     await expect(paragraph.locator(".readweave-anchor-hover")).toHaveCount(0);
+
+    // A locked nested definition must keep its identity while the review panel
+    // switches modes, and the next click on the same visible fragment must
+    // unlock it instead of immediately locking it again under the outer anchor.
+    await tipAnchor.click();
+    await expect(tipAnchor).toHaveClass(/readweave-anchor-locked/);
+    await panel.getByRole("button", { name: "Question", exact: true }).click();
+    await panel.getByRole("button", { name: "Term", exact: true }).click();
+    await tipAnchor.click();
+    await expect(tipAnchor).not.toHaveClass(/readweave-anchor-locked/);
+    await expect(preview).toBeHidden();
+});
+
+test("ReadWeave keeps a new question unread on a saved term fragment until the user selects it", async ({ page, context }) => {
+    test.setTimeout(90_000);
+    await page.setViewportSize({ width: 1280, height: 720 });
+    const app = new App(page, context);
+    await gotoReadWeave(app, page);
+
+    const source = "ORCID 为研究人员提供持久标识符，用于区分重名作者并关联研究成果。";
+    const editor = await createTextNote(
+        app,
+        uniqueTitle("ReadWeave E2E · Term lock toggle"),
+        source
+    );
+    const paragraph = editor.locator("p", { hasText: source });
+    const panel = await openSelectionEditor(page, app, paragraph, "ORCID", "Define");
+    await panel.getByRole("textbox", { name: "Abbreviation (optional)", exact: true }).fill("ORCID");
+    await panel.getByRole("textbox", { name: "Chinese full name (optional)", exact: true }).fill("开放研究者与贡献者标识符");
+    await panel.getByRole("textbox", { name: "English full name (optional)", exact: true }).fill("Open Researcher and Contributor ID");
+    await panel.getByRole("button", { name: "Generate definition", exact: true }).click();
+    await expect(panel.getByTestId("readweave-answer")).toHaveValue(/ORCID 开放研究者与贡献者标识符（Open Researcher and Contributor ID）/);
+    await panel.getByRole("button", { name: "I reviewed it — save", exact: true }).click();
+
+    const termAnchor = paragraph.locator("[data-readweave-range-anchor-id]", { hasText: "ORCID" });
+    await expect(termAnchor).toHaveClass(/readweave-anchor-has-term/);
+    const savedTermAnchorId = await termAnchor.getAttribute("data-readweave-range-anchor-id");
+    expect(savedTermAnchorId).toBeTruthy();
+
+    // Reuse the exact saved-term anchor for a question. Completion must retain
+    // its unread draft indicator until a later, intentional fragment click;
+    // merely hydrating the result in the already-open review panel is not a
+    // user acknowledgement.
+    const questionPanel = await openSelectionEditor(page, app, paragraph, "ORCID", "Ask");
+    await expect(termAnchor).toHaveAttribute("data-readweave-range-anchor-id", savedTermAnchorId!);
+    await questionPanel.getByRole("textbox", { name: "Question", exact: true }).fill("ORCID 有什么作用？");
+    await questionPanel.getByRole("button", { name: "Generate answer", exact: true }).click();
+    await expect(termAnchor).toHaveClass(/readweave-anchor-draft/);
+    await expect(termAnchor).toHaveClass(/readweave-anchor-status-running/);
+    await expect(questionPanel.getByTestId("readweave-answer")).not.toHaveValue("");
+    await expect(termAnchor).toHaveClass(/readweave-anchor-draft/);
+    await expect(termAnchor).toHaveClass(/readweave-anchor-status-unread/);
+    await expect(termAnchor).toHaveClass(/readweave-anchor-has-term/);
+
+    // Dispatch on the exact inline node: its zero-width trailing badge can make
+    // Playwright's generic hit-point land on the containing paragraph even
+    // though a real glyph click targets this span.
+    await termAnchor.dispatchEvent("click");
+    await expect(termAnchor).not.toHaveClass(/readweave-anchor-status-unread/);
+    await expect(termAnchor).not.toHaveClass(/readweave-anchor-draft/);
+    await termAnchor.dispatchEvent("click");
+    await expect(termAnchor).not.toHaveClass(/readweave-anchor-locked/);
+    await questionPanel.getByRole("button", { name: "Don't save", exact: true }).click();
+
+    await page.mouse.move(5, 5);
+    await termAnchor.click();
+    await expect(termAnchor).toHaveClass(/readweave-anchor-locked/);
+    const preview = page.locator(".readweave-hover-preview");
+    await expect(preview).toBeVisible();
+    const anchorBox = await termAnchor.boundingBox();
+    const previewBox = await preview.boundingBox();
+    expect(anchorBox).not.toBeNull();
+    expect(previewBox).not.toBeNull();
+    const overlapsAnchor = !(
+        previewBox!.x + previewBox!.width <= anchorBox!.x
+        || previewBox!.x >= anchorBox!.x + anchorBox!.width
+        || previewBox!.y + previewBox!.height <= anchorBox!.y
+        || previewBox!.y >= anchorBox!.y + anchorBox!.height
+    );
+    expect(overlapsAnchor).toBe(false);
+    await panel.getByRole("button", { name: "Question", exact: true }).click();
+    await panel.getByRole("button", { name: "Term", exact: true }).click();
+    await termAnchor.click();
+    await expect(termAnchor).not.toHaveClass(/readweave-anchor-locked/);
+    await expect(preview).toBeHidden();
+
+    // A polling/decorating refresh can leave the rendered lock marker one
+    // frame ahead of the hook ref. The next user click must recover by
+    // clearing that stale marker, not interpret it as a request to re-lock.
+    await termAnchor.evaluate(element => element.classList.add("readweave-anchor-locked"));
+    await termAnchor.click();
+    await expect(termAnchor).not.toHaveClass(/readweave-anchor-locked/);
 });
 
 test("ReadWeave handles diverse source articles and keeps cross-article term references synchronized", async ({ page, context }) => {
@@ -959,6 +1347,15 @@ test("ReadWeave handles diverse source articles and keeps cross-article term ref
     await expect(chineseName).toHaveValue("凌日系外行星巡天卫星");
     await expect(englishName).toHaveValue("Transiting Exoplanet Survey Satellite");
     await expect(answer).toHaveValue(/TESS 凌日系外行星巡天卫星（Transiting Exoplanet Survey Satellite）/);
+    const pendingTessAnchor = tessParagraph.locator("[data-readweave-range-anchor-id]", { hasText: "TESS" });
+    await expect(pendingTessAnchor).toHaveClass(/readweave-anchor-status-unread/);
+    await pendingTessAnchor.hover();
+    const pendingDefinitionPreview = page.locator(".readweave-hover-preview");
+    await expect(pendingDefinitionPreview).toBeVisible();
+    await expect(pendingDefinitionPreview.locator(".readweave-hover-question")).toHaveCount(0);
+    await expect(pendingDefinitionPreview).toContainText("TESS 凌日系外行星巡天卫星（Transiting Exoplanet Survey Satellite）");
+    await page.mouse.move(5, 5);
+    await expect(pendingDefinitionPreview).toBeHidden();
     await panel.getByRole("button", { name: "I reviewed it — save", exact: true }).click();
     const tessAnchor = tessParagraph.locator("[data-readweave-range-anchor-id]");
     await expect(tessParagraph).not.toHaveAttribute("data-readweave-paragraph-question-count", /.+/);
@@ -988,7 +1385,7 @@ test("ReadWeave handles diverse source articles and keeps cross-article term ref
     await panel.getByRole("button", { name: "I reviewed it — save", exact: true }).click();
     const referencedEntry = panel.locator(".readweave-entry", { hasText: "TESS 凌日系外行星巡天卫星" });
     await referencedEntry.hover();
-    await referencedEntry.getByRole("button", { name: "Edit", exact: true }).click();
+    await referencedEntry.getByRole("button", { name: /^Edit /u }).click();
     const impact = panel.locator(".readweave-impact");
     await expect(impact).toContainText("2 links across 2 articles");
     const synchronizedDefinition = "TESS 凌日系外行星巡天卫星（Transiting Exoplanet Survey Satellite）用于通过恒星亮度的周期性下降寻找候选系外行星；";
@@ -1020,8 +1417,9 @@ test("ReadWeave handles diverse source articles and keeps cross-article term ref
     await panel.getByTestId("readweave-optimize-question").check();
     await panel.getByRole("button", { name: "Generate answer", exact: true }).click();
     await expect(question).toHaveValue("世界记忆计划是什么，它的三个目标各自有什么用途，彼此是什么关系？");
-    await expect(answer).toHaveValue(/。\n\n.+。\n\n.+。/s);
-    expect((await answer.inputValue()).split(/\n\n/)).toHaveLength(3);
+    const structuredAnswer = await answer.inputValue();
+    expect(structuredAnswer).not.toContain("。");
+    expect(structuredAnswer.split(/\n\n/)).toHaveLength(3);
     await panel.getByRole("button", { name: "I reviewed it — save", exact: true }).click();
     await expect(unescoParagraph).toHaveAttribute("data-readweave-paragraph-question-count", "1");
 

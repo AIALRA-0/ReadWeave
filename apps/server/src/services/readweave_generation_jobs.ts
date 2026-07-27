@@ -40,6 +40,7 @@ interface EventRow {
 const activeJobs = new Set<string>();
 const cancelledJobs = new Set<string>();
 const protectedSession = protectedSessionModule.default;
+const MAX_BACKGROUND_GENERATION_ATTEMPTS = 5;
 let storageReady = false;
 
 function requireReadableArticle(articleId: string) {
@@ -211,6 +212,16 @@ function issueCode(category: ReadWeaveGenerationIssueCategory, index: number): s
     return `RW-${category.toUpperCase()}-${String(index + 1).padStart(2, "0")}`;
 }
 
+function compactProgressText(value: string): string {
+    let result = value.trimEnd();
+    let previous = "";
+    while (result !== previous) {
+        previous = result;
+        result = result.replace(/[。．.]+(?=[\s"'’”」』）)\]】}》〉]*$)/u, "").trimEnd();
+    }
+    return result;
+}
+
 function structuredIssues(progress: ReadWeaveGenerationProgress): ReadWeaveGenerationIssue[] {
     if (progress.issueGroups?.length) return progress.issueGroups;
     return progress.issues.map((message, index) => {
@@ -226,12 +237,18 @@ function appendProgress(jobId: string, input: ReadWeaveGenerationProgress) {
     requireReadableArticle(row.articleId);
     const timestamp = new Date().toISOString();
     const sequence = (sql.getValue<number>("SELECT COALESCE(MAX(sequence), 0) + 1 FROM readweave_generation_events WHERE jobId = ?", [ jobId ]) ?? 1);
-    const progress: ReadWeaveGenerationProgress = {
+    const normalizedInput: ReadWeaveGenerationProgress = {
         ...input,
+        message: compactProgressText(input.message),
+        issues: input.issues.map(compactProgressText),
+        issueGroups: input.issueGroups?.map(issue => ({ ...issue, message: compactProgressText(issue.message) }))
+    };
+    const progress: ReadWeaveGenerationProgress = {
+        ...normalizedInput,
         sequence,
         timestamp,
         elapsedMs: Math.max(0, Date.now() - Date.parse(row.createdAt)),
-        issueGroups: structuredIssues(input)
+        issueGroups: structuredIssues(normalizedInput)
     };
     sql.execute(/* sql */`
         INSERT INTO readweave_generation_events (jobId, sequence, progressJson, createdAt)
@@ -280,13 +297,61 @@ function runJob(jobId: string) {
         appendProgress(jobId, { stage: "queued", round: 0, message: "后台任务已接收，正在准备生成。", issues: [] });
     }
 
-    void generateReadWeaveAnswer(request, progress => appendProgress(jobId, progress)).then(result => {
+    const generateUntilClean = async () => {
+        let latestError: unknown;
+        let retryRequest = request;
+        for (let attempt = 1; attempt <= MAX_BACKGROUND_GENERATION_ATTEMPTS; attempt++) {
+            try {
+                const result = await generateReadWeaveAnswer(retryRequest, progress => appendProgress(jobId, progress));
+                if (!result.reviewIssues?.length) return result;
+                latestError = new ValidationError(result.reviewIssues.join("；"));
+                if (attempt >= MAX_BACKGROUND_GENERATION_ATTEMPTS) break;
+                appendProgress(jobId, {
+                    stage: "repairing",
+                    round: 0,
+                    message: `内部质量检查尚未收敛，正在自动重试第 ${attempt + 1} 次`,
+                    issues: result.reviewIssues
+                });
+                retryRequest = {
+                    ...request,
+                    feedback: [
+                        request.feedback?.trim(),
+                        `上一次内部质量检查发现：${result.reviewIssues.join("；")}。必须在新草稿中全部修复，不得把内部错误、检查过程或修复说明写入正文。`
+                    ].filter(Boolean).join("\n")
+                };
+            } catch (error) {
+                latestError = error;
+                if (attempt >= MAX_BACKGROUND_GENERATION_ATTEMPTS) break;
+                const diagnostic = error instanceof Error ? error.message.trim() : "";
+                appendProgress(jobId, {
+                    stage: "repairing",
+                    round: 0,
+                    message: `生成链路暂未完成，正在自动恢复第 ${attempt + 1} 次`,
+                    issues: diagnostic ? [ diagnostic.slice(0, 2_000) ] : []
+                });
+                retryRequest = {
+                    ...request,
+                    feedback: [
+                        request.feedback?.trim(),
+                        diagnostic
+                            ? `上一次内部生成链路未收敛：${diagnostic.slice(0, 2_000)}。重新生成完整新草稿并主动避开该失败，不得把内部错误或修复说明写入正文。`
+                            : undefined
+                    ].filter(Boolean).join("\n")
+                };
+            }
+        }
+        const failure = new ValidationError(`ReadWeave 后台自动恢复已连续尝试 ${MAX_BACKGROUND_GENERATION_ATTEMPTS} 次，仍未得到通过全部检查的结果`);
+        failure.cause = latestError;
+        throw failure;
+    };
+
+    void generateUntilClean().then(result => {
         if (cancelledJobs.has(jobId)) return;
         setJobState(jobId, "complete", { result, unread: true });
     }).catch(error => {
         if (cancelledJobs.has(jobId)) return;
         const message = error instanceof Error ? error.message : "ReadWeave generation failed for an unknown reason.";
-        appendProgress(jobId, { stage: "failed", round: 0, message: "生成失败，等待用户处理。", issues: [ message ] });
+        appendProgress(jobId, { stage: "failed", round: 0, message: "内部自动恢复已完成，本轮未产生可审核内容", issues: [ message ] });
         setJobState(jobId, "failed", { error: message });
     }).finally(() => {
         activeJobs.delete(jobId);
@@ -307,6 +372,34 @@ export function initializeReadWeaveGenerationJobs() {
         if (!row.isProtected || protectedSession.isProtectedSessionAvailable()) {
             appendProgress(row.jobId, { stage: "queued", round: 0, message: "服务器恢复了未完成任务，正在安全重启生成流程。", issues: [] });
         }
+    }
+    const legacyRejected = sql.getRows<JobRow>(/* sql */`
+        SELECT * FROM readweave_generation_jobs
+        WHERE status IN ('complete', 'failed')
+        ORDER BY updatedAt
+    `);
+    for (const row of legacyRejected) {
+        if (row.isProtected && !protectedSession.isProtectedSessionAvailable()) continue;
+        const storedResult = parseJson<ReadWeaveGenerateResponse>(decodeStoredValue(row.resultJson, row.isProtected));
+        const storedError = decodeStoredValue(row.error, row.isProtected) ?? "";
+        const hasRejectedDraft = row.status === "complete" && Boolean(storedResult?.reviewIssues?.length);
+        const hasRecoverableProtocolFailure = row.status === "failed"
+            && /verification checkpoint|verification repair plan|invalid verification|检查协议|修复计划/iu.test(storedError);
+        if (!hasRejectedDraft && !hasRecoverableProtocolFailure) continue;
+        sql.execute("DELETE FROM readweave_generation_events WHERE jobId = ?", [ row.jobId ]);
+        sql.execute(/* sql */`
+            UPDATE readweave_generation_jobs
+            SET status = 'queued', error = NULL, unread = 0, updatedAt = ?
+            WHERE jobId = ?
+        `, [ new Date().toISOString(), row.jobId ]);
+        appendProgress(row.jobId, {
+            stage: "queued",
+            round: 0,
+            message: hasRejectedDraft
+                ? "检测到旧版未通过内部检查的草稿，正在后台自动重建"
+                : "检测到旧版检查协议中断，正在后台自动恢复",
+            issues: []
+        });
     }
     const queuedIds = sql.getColumn<string>("SELECT jobId FROM readweave_generation_jobs WHERE status = 'queued' ORDER BY createdAt");
     queuedIds.forEach(runJob);
@@ -391,24 +484,76 @@ export function markReadWeaveGenerationJobViewed(jobId: string): ReadWeaveGenera
     return getReadWeaveGenerationJob(jobId);
 }
 
-export function regenerateReadWeaveGenerationJob(jobId: string, feedbackValue: unknown): ReadWeaveGenerationJob {
+interface ReadWeaveRegenerateRequest {
+    feedback?: unknown;
+    title?: unknown;
+    optimizeQuestion?: unknown;
+    termIdentity?: unknown;
+    fragments?: unknown;
+}
+
+export function regenerateReadWeaveGenerationJob(jobId: string, inputValue: unknown): ReadWeaveGenerationJob {
     const row = rowFor(jobId);
     if (row.status === "running" || row.status === "queued") throw new ValidationError("ReadWeave generation is already running.");
+    const input: ReadWeaveRegenerateRequest = typeof inputValue === "string"
+        ? { feedback: inputValue }
+        : inputValue === undefined || inputValue === null
+            ? {}
+            : typeof inputValue === "object" && !Array.isArray(inputValue)
+                ? inputValue as ReadWeaveRegenerateRequest
+                : (() => { throw new ValidationError("Regeneration request must be an object."); })();
+    const feedbackValue = input.feedback;
     if (feedbackValue !== undefined && feedbackValue !== null && typeof feedbackValue !== "string") {
         throw new ValidationError("Regeneration feedback must be text.");
     }
     const feedback = typeof feedbackValue === "string" ? feedbackValue.trim() : "";
     if (feedback.length > 4_000) throw new ValidationError("Regeneration feedback exceeds 4000 characters.");
-    const request = { ...requestFor(row), feedback: feedback || undefined };
+    const previousRequest = requestFor(row);
+    const request: ReadWeaveGenerateRequest = { ...previousRequest, feedback: feedback || undefined };
+    if (Object.hasOwn(input, "title")) {
+        if (typeof input.title !== "string" || !input.title.trim()) {
+            throw new ValidationError("Regeneration title must be non-empty text.");
+        }
+        if (input.title.trim().length > 10_000) throw new ValidationError("Regeneration title exceeds 10000 characters.");
+        request.title = input.title.trim();
+    }
+    if (Object.hasOwn(input, "optimizeQuestion")) {
+        if (input.optimizeQuestion !== undefined && typeof input.optimizeQuestion !== "boolean") {
+            throw new ValidationError("optimizeQuestion must be boolean.");
+        }
+        request.optimizeQuestion = input.optimizeQuestion as boolean | undefined;
+    }
+    if (Object.hasOwn(input, "termIdentity")) {
+        if (input.termIdentity !== undefined
+            && (typeof input.termIdentity !== "object" || input.termIdentity === null || Array.isArray(input.termIdentity))) {
+            throw new ValidationError("termIdentity must be an object.");
+        }
+        request.termIdentity = input.termIdentity as ReadWeaveGenerateRequest["termIdentity"];
+    }
+    if (Object.hasOwn(input, "fragments")) {
+        if (!Array.isArray(input.fragments) || input.fragments.length === 0 || input.fragments.length > 300
+            || input.fragments.some(fragment => !fragment
+                || typeof fragment !== "object"
+                || typeof (fragment as { id?: unknown }).id !== "string"
+                || typeof (fragment as { role?: unknown }).role !== "string"
+                || typeof (fragment as { text?: unknown }).text !== "string")) {
+            throw new ValidationError("Regeneration context fragments are invalid.");
+        }
+        request.fragments = structuredClone(input.fragments) as ReadWeaveGenerateRequest["fragments"];
+    }
     const now = new Date().toISOString();
     sql.transactional(() => {
         sql.execute(/* sql */`
             UPDATE readweave_generation_jobs
-            SET requestJson = ?, status = 'queued', error = NULL, unread = 0, feedback = ?, updatedAt = ?
+            SET title = ?, sourceExcerpt = ?, requestJson = ?, status = 'queued', error = NULL,
+                unread = 0, feedback = ?, createdAt = ?, updatedAt = ?
             WHERE jobId = ?
         `, [
+            request.title,
+            sourceExcerpt(request),
             encodeStoredValue(JSON.stringify(request), !!row.isProtected),
             encodeStoredValue(feedback || null, !!row.isProtected),
+            now,
             now,
             jobId
         ]);
@@ -418,7 +563,9 @@ export function regenerateReadWeaveGenerationJob(jobId: string, feedbackValue: u
             round: 0,
             message: feedback
                 ? "已收到修正意见，旧草稿会保留到新结果成功。"
-                : "已按原问题重新排队，旧草稿会保留到新结果成功。",
+                : request.title !== previousRequest.title
+                    ? "已按当前问题重新排队，旧草稿会保留到新结果成功。"
+                    : "已按原问题重新排队，旧草稿会保留到新结果成功。",
             issues: []
         });
     });

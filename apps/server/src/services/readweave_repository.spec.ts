@@ -2,6 +2,7 @@ import { becca, cls, hidden_subtree as hiddenSubtreeService, note_service as not
 import { beforeAll, describe, expect, it } from "vitest";
 
 import {
+    deleteReadWeaveLink,
     editReadWeaveLink,
     exportReadWeave,
     getAnchorSummaries,
@@ -122,6 +123,67 @@ describe("ReadWeave repository", () => {
         });
     });
 
+    it("deletes only the selected link and cleans up an object after its final link is removed", () => {
+        cls.init(() => {
+            const firstArticle = noteService.createNewNote({
+                parentNoteId: "root",
+                title: "ReadWeave deletion article A",
+                type: "text",
+                mime: "text/html",
+                content: "<p>Shared deletion source A.</p>"
+            }).note;
+            const secondArticle = noteService.createNewNote({
+                parentNoteId: "root",
+                title: "ReadWeave deletion article B",
+                type: "text",
+                mime: "text/html",
+                content: "<p>Shared deletion source B.</p>"
+            }).note;
+            const first = saveReadWeaveEntry({
+                articleId: firstArticle.noteId,
+                anchorId: "rw_delete_a",
+                anchorType: "range",
+                kind: "question",
+                title: "共享对象删除时应发生什么？",
+                body: professionalAnswer("删除当前片段时只解除当前链接，不影响其他文章中的共享内容"),
+                sourceExcerpt: "Shared deletion source A.",
+                calloutType: "note"
+            });
+            const second = saveReadWeaveEntry({
+                articleId: secondArticle.noteId,
+                anchorId: "rw_delete_b",
+                anchorType: "range",
+                kind: "question",
+                title: first.title,
+                body: first.body,
+                sourceExcerpt: "Shared deletion source B.",
+                calloutType: "note",
+                reuseObjectId: first.objectId
+            });
+
+            expect(deleteReadWeaveLink(first.linkId)).toEqual({
+                deleted: true,
+                linkId: first.linkId,
+                objectId: first.objectId,
+                objectDeleted: false,
+                remainingLinkCount: 1
+            });
+            expect(getEntriesForAnchor(firstArticle.noteId, "rw_delete_a")).toEqual([]);
+            expect(getEntriesForAnchor(secondArticle.noteId, "rw_delete_b")).toHaveLength(1);
+            expect(getReadWeaveImpact(first.objectId)).toMatchObject({ linkCount: 1, articleCount: 1 });
+
+            expect(deleteReadWeaveLink(second.linkId)).toEqual({
+                deleted: true,
+                linkId: second.linkId,
+                objectId: second.objectId,
+                objectDeleted: true,
+                remainingLinkCount: 0
+            });
+            expect(getEntriesForAnchor(secondArticle.noteId, "rw_delete_b")).toEqual([]);
+            expect(becca.getNote(first.objectId)).toBeFalsy();
+        });
+    });
+
     it("allows multiple questions but only one definition per fragment while allowing nested definitions", () => {
         cls.init(() => {
             const article = noteService.createNewNote({
@@ -186,7 +248,7 @@ describe("ReadWeave repository", () => {
                 sourceExcerpt: "matrix",
                 kind: "term",
                 title: "矩阵",
-                body: professionalAnswer("矩阵是按行列组织的数值数组"),
+                body: professionalAnswer("矩阵（Matrix）是按行列组织的数值数组，用于表示线性变换和多维数据"),
                 termIdentity: { chineseName: "矩阵", englishName: "Matrix" }
             })).not.toThrow();
 
@@ -196,9 +258,82 @@ describe("ReadWeave repository", () => {
                 sourceExcerpt: "matrix operations",
                 kind: "term",
                 title: "矩阵运算",
-                body: professionalAnswer("矩阵运算是作用于矩阵的数学运算"),
+                body: professionalAnswer("矩阵运算（Matrix Operation）是作用于矩阵并产生标量、向量或矩阵结果的数学运算"),
                 termIdentity: { chineseName: "矩阵运算", englishName: "Matrix Operation" }
             })).toThrow(/different text fragment/);
+        });
+    });
+
+    it("applies a compact semantic save gate to definitions and keeps the canonical identity aligned with the body", () => {
+        cls.init(() => {
+            const article = noteService.createNewNote({
+                parentNoteId: "root",
+                title: "ReadWeave definition quality gate",
+                type: "text",
+                mime: "text/html",
+                content: "<p>Matrix and NPU terminology.</p>"
+            }).note;
+            const base = {
+                articleId: article.noteId,
+                anchorType: "range" as const,
+                kind: "term" as const,
+                calloutType: "tip" as const
+            };
+
+            expect(() => saveReadWeaveEntry({
+                ...base,
+                anchorId: "rw_shallow_definition",
+                sourceExcerpt: "Matrix",
+                title: "矩阵",
+                body: "矩阵（Matrix）是一种数学概念。",
+                termIdentity: { chineseName: "矩阵", englishName: "Matrix" }
+            })).toThrow(/定义过于简略|定义过于宽泛/);
+
+            expect(() => saveReadWeaveEntry({
+                ...base,
+                anchorId: "rw_circular_definition",
+                sourceExcerpt: "Matrix",
+                title: "矩阵",
+                body: "矩阵（Matrix）就是矩阵（Matrix）；矩阵（Matrix）是一个常见、重要且应用广泛的数学对象，但这段文字没有给出任何可区分特征。",
+                termIdentity: { chineseName: "矩阵", englishName: "Matrix" }
+            })).toThrow(/同义反复/);
+
+            expect(() => saveReadWeaveEntry({
+                ...base,
+                anchorId: "rw_mismatched_identity",
+                sourceExcerpt: "NPU",
+                title: "NPU",
+                body: "神经网络处理单元是一类面向神经网络计算的专用处理器；它通过并行乘加数据路径加速张量运算，并不等同于通用中央处理器。",
+                termIdentity: { abbreviation: "NPU", chineseName: "神经网络处理单元", englishName: "Neural Processing Unit" }
+            })).toThrow(/未使用规范术语身份/);
+
+            const saved = saveReadWeaveEntry({
+                ...base,
+                anchorId: "rw_compact_definition",
+                sourceExcerpt: "Matrix",
+                title: "矩阵",
+                body: "矩阵（Matrix）是按行和列排列的矩形数表；它用于表示线性方程组、线性变换或多维数据，行数与列数共同限定其维度。",
+                termIdentity: { chineseName: "矩阵", englishName: "Matrix" }
+            });
+            expect(saved).toMatchObject({
+                kind: "term",
+                title: "矩阵（Matrix）",
+                body: expect.stringContaining("按行和列排列")
+            });
+
+            const tess = saveReadWeaveEntry({
+                ...base,
+                anchorId: "rw_tess_used_for_predicate",
+                sourceExcerpt: "TESS",
+                title: "TESS",
+                body: "TESS 凌日系外行星巡天卫星（Transiting Exoplanet Survey Satellite）用于通过恒星亮度的周期性下降寻找候选系外行星；",
+                termIdentity: {
+                    abbreviation: "TESS",
+                    chineseName: "凌日系外行星巡天卫星",
+                    englishName: "Transiting Exoplanet Survey Satellite"
+                }
+            });
+            expect(tess.title).toBe("TESS 凌日系外行星巡天卫星（Transiting Exoplanet Survey Satellite）");
         });
     });
 
@@ -231,6 +366,90 @@ describe("ReadWeave repository", () => {
             expect(saved).toMatchObject({
                 kind: "term",
                 title: "ORCID 开放研究者与贡献者标识符（Open Researcher and Contributor ID）"
+            });
+        });
+    });
+
+    it("requires and persists the evidence-plan attestation when saving a non-expandable MAVERICK method", () => {
+        cls.init(() => {
+            const article = noteService.createNewNote({
+                parentNoteId: "root",
+                title: "ReadWeave non-expandable method save gate",
+                type: "text",
+                mime: "text/html",
+                content: "<p>MAVERICK is a placement method name.</p>"
+            }).note;
+            const title = "MAVERICK 在当前布局语境中是什么方法？";
+            const body = "MAVERICK 是一种面向芯片元件位置约束的布局优化方法；它通过分析候选位置之间的冲突来调整元件分布，并把适用边界限制在资料明确描述的布局任务。";
+            const verifiedNonExpandableArtifact = { originalName: "MAVERICK", entityType: "method" as const };
+
+            const saved = saveReadWeaveEntry({
+                articleId: article.noteId,
+                anchorId: "rw_maverick_verified",
+                anchorType: "range",
+                sourceExcerpt: "MAVERICK",
+                kind: "question",
+                title,
+                body,
+                calloutType: "note",
+                verifiedNonExpandableArtifact
+            });
+
+            expect(saved.verifiedNonExpandableArtifact).toEqual(verifiedNonExpandableArtifact);
+            expect(saved.body).toContain("MAVERICK 是一种");
+            expect(() => saveReadWeaveEntry({
+                articleId: article.noteId,
+                anchorId: "rw_maverick_unverified",
+                anchorType: "range",
+                sourceExcerpt: "MAVERICK method",
+                kind: "question",
+                title,
+                body,
+                calloutType: "note"
+            })).toThrow(/缩写 MAVERICK/);
+            expect(() => saveReadWeaveEntry({
+                articleId: article.noteId,
+                anchorId: "rw_maverick_wrong_subject",
+                anchorType: "range",
+                sourceExcerpt: "other method",
+                kind: "question",
+                title: "另一个布局方法是什么？",
+                body,
+                calloutType: "note",
+                verifiedNonExpandableArtifact
+            })).toThrow(/exactly match the current title or subject/);
+        });
+    });
+
+    it("uses the extracted question subject when rechecking a generated answer during save", () => {
+        cls.init(() => {
+            const article = noteService.createNewNote({
+                parentNoteId: "root",
+                title: "ReadWeave generated question save parity",
+                type: "text",
+                mime: "text/html",
+                content: "<p>BS-PDN-Last</p>"
+            }).note;
+
+            const saved = saveReadWeaveEntry({
+                articleId: article.noteId,
+                anchorId: "rw_bs_pdn_last_question",
+                anchorType: "range",
+                sourceExcerpt: "BS-PDN-Last:",
+                kind: "question",
+                title: "BS-PDN-Last是什么",
+                body: "BS-PDN-Last 是一种面向具有多功能背面金属层的最优电源分配网络设计方法；它以具有多功能背面金属层为设计对象，核心目标是优化电源分配网络结构；其适用范围是采用具有多功能背面金属层的供电网络设计问题，不等同于电源分配网络这一通用概念；该名称是方法原名，不是可展开的英文缩写",
+                calloutType: "note",
+                verifiedNonExpandableArtifact: {
+                    originalName: "BS-PDN-Last",
+                    entityType: "method"
+                }
+            });
+
+            expect(saved).toMatchObject({
+                kind: "question",
+                title: "BS-PDN-Last是什么",
+                body: expect.stringContaining("BS-PDN-Last")
             });
         });
     });

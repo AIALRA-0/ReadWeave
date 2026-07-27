@@ -4,6 +4,7 @@ import {
     type ReadWeaveAnchorSummary,
     type ReadWeaveAnchorType,
     type ReadWeaveCalloutType,
+    type ReadWeaveDeleteResult,
     type ReadWeaveEditRequest,
     type ReadWeaveExport,
     type ReadWeaveImpact,
@@ -11,12 +12,20 @@ import {
     type ReadWeaveObject,
     type ReadWeaveResolvedEntry,
     type ReadWeaveSaveRequest,
-    type ReadWeaveTermIdentity
+    type ReadWeaveTermIdentity,
+    type ReadWeaveVerifiedNonExpandableArtifact
 } from "@triliumnext/commons";
 import { becca, type BNote, note_service as noteService, NotFoundError, ValidationError } from "@triliumnext/core";
 import crypto from "crypto";
 
-import { findReadWeaveQualityIssues, formatReadWeaveTermIdentity, validateReadWeaveTermIdentity } from "./readweave_ai.js";
+import {
+    buildReadWeaveTaskProfile,
+    findReadWeaveQualityIssues,
+    findReadWeaveTermDefinitionSemanticIssues,
+    formatReadWeaveTermIdentity,
+    parseFormattedReadWeaveTermIdentity,
+    validateReadWeaveTermIdentity
+} from "./readweave_ai.js";
 import { normalizeReadWeaveTitle } from "./readweave_engine.js";
 import { newEntityId } from "./utils.js";
 
@@ -53,18 +62,33 @@ function requireCalloutType(value: unknown, kind: ReadWeaveObject["kind"]): Read
     return value as ReadWeaveCalloutType;
 }
 
-function parseLegacyTermTitle(title: string): ReadWeaveTermIdentity | undefined {
-    const canonical = title.match(/^(?:([A-Za-z][A-Za-z0-9.+/-]{1,30}) )?([^（）]+?)(?:（([A-Za-z][^（）]*)）)?$/);
-    if (canonical) {
-        const [ , abbreviation, chineseName, englishName ] = canonical;
-        if (chineseName?.trim()) {
-            try {
-                return validateReadWeaveTermIdentity({ abbreviation, chineseName, englishName });
-            } catch {
-                return undefined;
-            }
-        }
+function normalizeVerifiedNonExpandableArtifact(
+    value: unknown,
+    title: string
+): ReadWeaveVerifiedNonExpandableArtifact | undefined {
+    if (value === undefined) return undefined;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new ValidationError("The verified non-expandable artifact metadata is invalid.");
     }
+    const candidate = value as Partial<ReadWeaveVerifiedNonExpandableArtifact>;
+    const originalName = typeof candidate.originalName === "string" ? candidate.originalName.normalize("NFKC").trim() : "";
+    if (!originalName || originalName.length > 100
+        || (candidate.entityType !== "method" && candidate.entityType !== "system" && candidate.entityType !== "product")) {
+        throw new ValidationError("The verified non-expandable artifact metadata is invalid.");
+    }
+    const normalizedTitle = title.normalize("NFKC");
+    const index = normalizedTitle.indexOf(originalName);
+    const before = index > 0 ? normalizedTitle[index - 1] : "";
+    const after = index >= 0 ? normalizedTitle[index + originalName.length] ?? "" : "";
+    if (index < 0 || /[\p{Script=Latin}\p{N}_]/u.test(before) || /[\p{Script=Latin}\p{N}_]/u.test(after)) {
+        throw new ValidationError("The verified non-expandable artifact must exactly match the current title or subject.");
+    }
+    return { originalName, entityType: candidate.entityType };
+}
+
+function parseLegacyTermTitle(title: string): ReadWeaveTermIdentity | undefined {
+    const canonical = parseFormattedReadWeaveTermIdentity(title);
+    if (canonical) return canonical;
     const oldFormat = title.match(/^([A-Za-z][A-Za-z0-9.+/-]{1,30})（([^，]+)，([A-Za-z][^）]+)）$/);
     if (!oldFormat) return undefined;
     try {
@@ -168,6 +192,7 @@ function resolveLink(link: ReadWeaveLink): ReadWeaveResolvedEntry | null {
         body: link.displayBody || object.body,
         calloutType: link.displayCalloutType || object.calloutType,
         termIdentity: object.termIdentity,
+        verifiedNonExpandableArtifact: object.verifiedNonExpandableArtifact,
         canonicalTitle: object.title,
         canonicalBody: object.body,
         canonicalCalloutType: object.calloutType,
@@ -213,9 +238,30 @@ export function getAnchorSummaries(articleIdValue: unknown): ReadWeaveAnchorSumm
     }).toSorted((left, right) => left.anchorId.localeCompare(right.anchorId));
 }
 
-function normalizeObjectInput(request: Pick<ReadWeaveSaveRequest, "kind" | "title" | "body" | "calloutType" | "termIdentity">) {
+function findTermDefinitionQualityIssues(body: string, title: string, termIdentity: ReadWeaveTermIdentity | undefined): string[] {
+    const issues = new Set<string>();
+    const canonicalIdentity = termIdentity ? formatReadWeaveTermIdentity(termIdentity) : title;
+    const normalizedDefinition = body.normalize("NFKC")
+        .replace(/^(?:定义与命名|定义|术语)[：:]\s*/u, "")
+        .trimStart();
+    if (!normalizedDefinition.startsWith(canonicalIdentity.normalize("NFKC"))) {
+        issues.add(`定义正文未使用规范术语身份“${canonicalIdentity}”`);
+    }
+
+    for (const issue of findReadWeaveTermDefinitionSemanticIssues(body, title, termIdentity)) issues.add(issue);
+    return Array.from(issues);
+}
+
+function normalizeObjectInput(request: Pick<ReadWeaveSaveRequest, "kind" | "title" | "body" | "calloutType" | "termIdentity" | "verifiedNonExpandableArtifact">) {
     const kind = request.kind;
     if (kind !== "question" && kind !== "term") throw new ValidationError("kind must be question or term.");
+    const rawIdentity = request.termIdentity && typeof request.termIdentity === "object"
+        ? request.termIdentity as Partial<ReadWeaveTermIdentity>
+        : undefined;
+    if (typeof rawIdentity?.abbreviation === "string" && typeof rawIdentity.englishName === "string"
+        && normalizeReadWeaveTitle(rawIdentity.abbreviation) === normalizeReadWeaveTitle(rawIdentity.englishName)) {
+        throw new ValidationError("The English full name must expand the abbreviation. For an unexpanded product or method name, omit the abbreviation field.");
+    }
     const candidateIdentity = kind === "term" ? validateReadWeaveTermIdentity(request.termIdentity) : undefined;
     if (candidateIdentity?.abbreviation && candidateIdentity.englishName
         && normalizeReadWeaveTitle(candidateIdentity.abbreviation) === normalizeReadWeaveTitle(candidateIdentity.englishName)) {
@@ -229,27 +275,31 @@ function normalizeObjectInput(request: Pick<ReadWeaveSaveRequest, "kind" | "titl
     const termIdentity = structuredTitle ? candidateIdentity : undefined;
     const title = structuredTitle || requireText(request.title, "title", 1_000);
     const body = requireText(request.body, "body", 50_000);
-    // The general quality scanner correctly validates the leading canonical
-    // abbreviation, but it cannot know that an all-caps word such as "ID" is
-    // part of the declared English full name. Mask only those inner tokens in
-    // an exact, already-canonical identity occurrence so real bare
-    // abbreviations elsewhere in the definition are still reported.
-    let qualityBody = body;
-    if (termIdentity?.englishName) {
-        const canonicalIdentity = formatReadWeaveTermIdentity(termIdentity);
-        const safeEnglishName = termIdentity.englishName.replace(/\b[A-Z][A-Z0-9.+/-]{1,}\b/g, token => token.toLocaleLowerCase());
-        const qualityIdentity = formatReadWeaveTermIdentity({ ...termIdentity, englishName: safeEnglishName });
-        if (canonicalIdentity && canonicalIdentity !== qualityIdentity) {
-            qualityBody = qualityBody.split(canonicalIdentity).join(qualityIdentity);
-        }
+    const verifiedNonExpandableArtifact = normalizeVerifiedNonExpandableArtifact(request.verifiedNonExpandableArtifact, title);
+    const qualityBody = body;
+    const qualityTarget = kind === "question"
+        ? title
+        : `“${title}”在当前语境中是什么，它的角色、机制和适用边界是什么？`;
+    const qualityProfile = buildReadWeaveTaskProfile(kind, title);
+    const qualityIssues = new Set(findReadWeaveQualityIssues(qualityBody, qualityTarget, {
+        kind,
+        subject: qualityProfile.subject,
+        knowledgeScope: qualityProfile.knowledgeScope,
+        termIdentity,
+        verifiedNonExpandableArtifact
+    }));
+    if (kind === "term") {
+        for (const issue of findTermDefinitionQualityIssues(body, title, termIdentity)) qualityIssues.add(issue);
     }
-    const qualityIssues = findReadWeaveQualityIssues(qualityBody, kind === "question" ? title : "");
-    if (qualityIssues.length > 0) throw new ValidationError(`The reviewed answer does not meet ReadWeave formatting rules: ${qualityIssues.join("; ")}`);
+    if (qualityIssues.size > 0) {
+        throw new ValidationError(`The reviewed content does not meet ReadWeave quality requirements: ${Array.from(qualityIssues).join("; ")}`);
+    }
     return {
         kind,
         termIdentity,
         title,
         body,
+        verifiedNonExpandableArtifact,
         calloutType: requireCalloutType(request.calloutType, kind)
     };
 }
@@ -367,7 +417,11 @@ export function getReadWeaveImpact(objectIdValue: unknown): ReadWeaveImpact {
 }
 
 function updateCanonicalObject(note: BNote, object: ReadWeaveObject, request: ReadWeaveEditRequest): ReadWeaveObject {
-    const input = normalizeObjectInput({ kind: object.kind, ...request });
+    const input = normalizeObjectInput({
+        kind: object.kind,
+        ...request,
+        verifiedNonExpandableArtifact: request.verifiedNonExpandableArtifact ?? object.verifiedNonExpandableArtifact
+    });
     const updated: ReadWeaveObject = {
         ...object,
         ...input,
@@ -400,7 +454,8 @@ export function editReadWeaveLink(linkIdValue: unknown, request: ReadWeaveEditRe
             body: request.body,
             sourceExcerpt: object.sourceExcerpt,
             calloutType: request.calloutType,
-            termIdentity: request.termIdentity
+            termIdentity: request.termIdentity,
+            verifiedNonExpandableArtifact: request.verifiedNonExpandableArtifact ?? object.verifiedNonExpandableArtifact
         }, object);
         link.objectId = variant.objectId;
         link.displayTitle = undefined;
@@ -410,7 +465,11 @@ export function editReadWeaveLink(linkIdValue: unknown, request: ReadWeaveEditRe
         linkNote.setRelation("readweaveObject", variant.objectId);
         linkNote.setContent(JSON.stringify(link, null, 2));
     } else if (request.mode === "display-only") {
-        const input = normalizeObjectInput({ kind: object.kind, ...request });
+        const input = normalizeObjectInput({
+            kind: object.kind,
+            ...request,
+            verifiedNonExpandableArtifact: request.verifiedNonExpandableArtifact ?? object.verifiedNonExpandableArtifact
+        });
         link.displayTitle = input.title;
         link.displayBody = input.body;
         link.displayCalloutType = input.calloutType;
@@ -420,6 +479,29 @@ export function editReadWeaveLink(linkIdValue: unknown, request: ReadWeaveEditRe
         throw new ValidationError("Unknown edit mode.");
     }
     return resolveLink(link)!;
+}
+
+export function deleteReadWeaveLink(linkIdValue: unknown): ReadWeaveDeleteResult {
+    const linkId = requireId(linkIdValue, "linkId");
+    const { note: linkNote, link } = getReadWeaveLink(linkId);
+    requireReadableArticle(link.articleId);
+    const remainingLinks = listReadWeaveLinks()
+        .filter(candidate => candidate.linkId !== linkId && candidate.objectId === link.objectId);
+    const objectDeleted = remainingLinks.length === 0;
+
+    linkNote.deleteNote();
+    if (objectDeleted) {
+        const objectNote = becca.getNote(link.objectId);
+        if (objectNote) objectNote.deleteNote();
+    }
+
+    return {
+        deleted: true,
+        linkId,
+        objectId: link.objectId,
+        objectDeleted,
+        remainingLinkCount: remainingLinks.length
+    };
 }
 
 export function exportReadWeave(articleIdValue?: unknown): ReadWeaveExport {

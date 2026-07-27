@@ -79,6 +79,16 @@ describe("ReadWeave persisted generation jobs", () => {
     });
 
     it("persists live events, unread results and incremental cursors", async () => {
+        generateMock.mockImplementationOnce(async (_request, onProgress) => {
+            onProgress?.({ stage: "drafting", round: 1, message: "正在生成测试首稿。  ", issues: [] });
+            onProgress?.({
+                stage: "checking",
+                round: 2,
+                message: "模型返回“failed.”。",
+                issues: [ "作者姓名不应作为术语。", "联网失败（timeout.）" ]
+            });
+            return result();
+        });
         const started = startReadWeaveGenerationJob(request);
         expect(started.sourceExcerpt).toBe("测试片段");
         const completed = await waitForStatus(started.jobId, "complete");
@@ -87,15 +97,59 @@ describe("ReadWeave persisted generation jobs", () => {
 
         const firstPage = getReadWeaveGenerationEvents(started.jobId, 0);
         expect(firstPage.events.length).toBeGreaterThanOrEqual(3);
+        expect(firstPage.events.map(event => event.message)).toContain("正在生成测试首稿");
+        expect(firstPage.events.map(event => event.message)).toContain("模型返回“failed”");
+        expect(firstPage.events.flatMap(event => event.issues)).toEqual(expect.arrayContaining([
+            "作者姓名不应作为术语",
+            "联网失败（timeout）"
+        ]));
         expect(firstPage.events.some(event => event.issueGroups?.[0]?.category === "entity")).toBe(true);
         expect(getReadWeaveGenerationEvents(started.jobId, firstPage.nextSequence).events).toEqual([]);
 
         expect(markReadWeaveGenerationJobViewed(started.jobId).unread).toBe(false);
     });
 
+    it("automatically regenerates an internally rejected draft and only completes with a clean result", async () => {
+        generateMock
+            .mockResolvedValueOnce({
+                ...result("这是仍含内部质量问题的首稿；"),
+                reviewIssues: [ "英文名称格式尚未通过" ]
+            })
+            .mockResolvedValueOnce(result("这是自动修复后通过全部检查的回答；"));
+
+        const started = startReadWeaveGenerationJob(request);
+        const completed = await waitForStatus(started.jobId, "complete");
+
+        expect(generateMock).toHaveBeenCalledTimes(2);
+        expect(completed.result?.body).toContain("通过全部检查");
+        expect(completed.result?.reviewIssues).toBeUndefined();
+        expect(completed.progress.some(event => event.message.includes("正在自动重试第 2 次"))).toBe(true);
+        expect(generateMock.mock.calls[1][0].feedback).toContain("英文名称格式尚未通过");
+    });
+
+    it("feeds a thrown internal protocol failure into the next automatic regeneration", async () => {
+        generateMock
+            .mockRejectedValueOnce(new Error("内部检查协议未能形成有效修复计划"))
+            .mockResolvedValueOnce(result("这是自动恢复后通过全部检查的回答；"));
+
+        const started = startReadWeaveGenerationJob(request);
+        const completed = await waitForStatus(started.jobId, "complete");
+
+        expect(generateMock).toHaveBeenCalledTimes(2);
+        expect(completed.result?.body).toContain("自动恢复后通过");
+        expect(generateMock.mock.calls[1][0].feedback).toContain("内部检查协议未能形成有效修复计划");
+        expect(completed.progress.some(event => event.message.includes("正在自动恢复第 2 次"))).toBe(true);
+        expect(completed.progress.find(event => event.message.includes("正在自动恢复第 2 次"))?.issues)
+            .toEqual([ "内部检查协议未能形成有效修复计划" ]);
+    });
+
     it("allows regeneration without feedback while retaining the previous result and resetting progress", async () => {
         const started = startReadWeaveGenerationJob(request);
         await waitForStatus(started.jobId, "complete");
+        sql.execute("UPDATE readweave_generation_jobs SET createdAt = ? WHERE jobId = ?", [
+            "2020-01-01T00:00:00.000Z",
+            started.jobId
+        ]);
         const originalEvents = getReadWeaveGenerationEvents(started.jobId, 0).events;
         expect(originalEvents.some(event => event.message === "正在生成测试首稿")).toBe(true);
 
@@ -105,10 +159,12 @@ describe("ReadWeave persisted generation jobs", () => {
         expect(regenerating.status).toBe("running");
         expect(regenerating.result?.body).toContain("持久化");
         expect(regenerating.feedback).toBeUndefined();
+        expect(Date.parse(regenerating.createdAt)).toBeGreaterThan(Date.parse("2020-01-01T00:00:00.000Z"));
 
         const resetEvents = getReadWeaveGenerationEvents(started.jobId, 0);
         expect(resetEvents.events).toHaveLength(1);
         expect(resetEvents.events[0]).toMatchObject({ sequence: 1, stage: "queued" });
+        expect(resetEvents.events[0].elapsedMs).toBeLessThan(1_000);
         expect(resetEvents.events.some(event => event.message === "正在生成测试首稿")).toBe(false);
         expect(resetEvents.nextSequence).toBe(1);
 
@@ -118,6 +174,39 @@ describe("ReadWeave persisted generation jobs", () => {
         expect(completed.feedback).toBeUndefined();
         expect(discardReadWeaveGenerationJob(started.jobId)).toEqual({ discarded: true });
         expect(() => getReadWeaveGenerationJob(started.jobId)).toThrow();
+    });
+
+    it("regenerates with the question, selection and options currently shown in the editor", async () => {
+        const started = startReadWeaveGenerationJob(request);
+        await waitForStatus(started.jobId, "complete");
+        generateMock.mockClear();
+
+        const updatedFragments: ReadWeaveGenerateRequest["fragments"] = [
+            { id: "selected", role: "selected", text: "BS-PDN-Last:" },
+            {
+                id: "section",
+                role: "section",
+                text: "BS-PDN-Last：面向具有多功能背面金属层的最优电源分配网络设计"
+            }
+        ];
+        const regenerating = regenerateReadWeaveGenerationJob(started.jobId, {
+            title: "BS-PDN-Last是什么",
+            optimizeQuestion: true,
+            fragments: updatedFragments
+        });
+        expect(regenerating.title).toBe("BS-PDN-Last是什么");
+        expect(regenerating.sourceExcerpt).toBe("BS-PDN-Last:");
+
+        const completed = await waitForStatus(started.jobId, "complete");
+        expect(completed.title).toBe("BS-PDN-Last是什么");
+        expect(completed.sourceExcerpt).toBe("BS-PDN-Last:");
+        expect(generateMock).toHaveBeenCalledTimes(1);
+        expect(generateMock.mock.calls[0][0]).toMatchObject({
+            title: "BS-PDN-Last是什么",
+            optimizeQuestion: true,
+            fragments: updatedFragments
+        });
+        expect(completed.progress[0]?.message).toContain("当前问题");
     });
 
     it("recovers a persisted running job after server initialization", async () => {
@@ -133,6 +222,60 @@ describe("ReadWeave persisted generation jobs", () => {
         initializeReadWeaveGenerationJobs();
         const recovered = await waitForStatus(jobId, "complete");
         expect(recovered.progress.some(event => event.message.includes("服务器恢复了未完成任务"))).toBe(true);
+    });
+
+    it("automatically rebuilds legacy rejected drafts and recoverable verification failures on startup", async () => {
+        const now = new Date().toISOString();
+        const dirtyJobId = "legacy_dirty_complete";
+        const protocolJobId = "legacy_protocol_failure";
+        const insert = (jobId: string, status: "complete" | "failed", storedResult: ReadWeaveGenerateResponse | null, error: string | null) => {
+            sql.execute(/* sql */`
+                INSERT INTO readweave_generation_jobs (
+                    jobId, articleId, anchorId, anchorType, kind, title, sourceExcerpt,
+                    requestJson, status, resultJson, error, unread, feedback, isProtected, createdAt, updatedAt
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, 0, ?, ?)
+            `, [
+                jobId,
+                request.articleId,
+                `${request.anchorId}-${jobId}`,
+                request.anchorType,
+                request.kind,
+                request.title,
+                "测试片段",
+                JSON.stringify({ ...request, anchorId: `${request.anchorId}-${jobId}` }),
+                status,
+                storedResult ? JSON.stringify(storedResult) : null,
+                error,
+                now,
+                now
+            ]);
+            sql.execute(/* sql */`
+                INSERT INTO readweave_generation_events (jobId, sequence, progressJson, createdAt)
+                VALUES (?, 9, ?, ?)
+            `, [ jobId, JSON.stringify({ stage: "failed", round: 0, message: "旧日志", issues: [ "旧错误" ] }), now ]);
+        };
+        insert(dirtyJobId, "complete", {
+            ...result("旧版未通过内部检查的草稿；"),
+            reviewIssues: [ "旧版格式检查未通过" ]
+        }, null);
+        insert(protocolJobId, "failed", null, "Invalid verification repair plan");
+        generateMock
+            .mockResolvedValueOnce(result("旧版脏草稿已自动重建；"))
+            .mockResolvedValueOnce(result("检查协议失败已自动恢复；"));
+
+        initializeReadWeaveGenerationJobs();
+        const [ rebuilt, recovered ] = await Promise.all([
+            waitForStatus(dirtyJobId, "complete"),
+            waitForStatus(protocolJobId, "complete")
+        ]);
+
+        expect(rebuilt.result?.reviewIssues).toBeUndefined();
+        expect(rebuilt.result?.body).toContain("自动重建");
+        expect(recovered.result?.body).toContain("自动恢复");
+        expect(rebuilt.progress.some(event => event.message.includes("旧版未通过内部检查"))).toBe(true);
+        expect(recovered.progress.some(event => event.message.includes("旧版检查协议中断"))).toBe(true);
+        expect(rebuilt.progress.some(event => event.message === "旧日志")).toBe(false);
+        expect(recovered.progress.some(event => event.message === "旧日志")).toBe(false);
     });
 
     it("reuses the same unsaved definition job for an identical fragment", () => {
@@ -161,7 +304,7 @@ describe("ReadWeave persisted generation jobs", () => {
         expect(completed.result?.termIdentity).toEqual({
             abbreviation: undefined,
             chineseName: "背面供电网络设计方法",
-            englishName: "BS-PDN-Last"
+            englishName: undefined
         });
     });
 

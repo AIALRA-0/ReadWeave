@@ -2,6 +2,7 @@ import { parseReadWeaveAnchorIds } from "@triliumnext/ckeditor5";
 
 export const READWEAVE_RANGE_ANCHOR_SELECTOR = "[data-readweave-range-anchor-id]";
 export const READWEAVE_PARAGRAPH_ANCHOR_SELECTOR = "[data-readweave-anchor-id]";
+const PROVISIONAL_READWEAVE_ANCHORS_BY_ROOT = new WeakMap<HTMLElement, Set<string>>();
 
 export interface ReadWeaveAnchorDescriptor {
     anchorId: string;
@@ -16,6 +17,32 @@ export function readWeaveAnchorIdsOf(element: Element | null | undefined): strin
 export function matchingReadWeaveAnchorElements(root: HTMLElement, anchorId: string): HTMLElement[] {
     return Array.from(root.querySelectorAll<HTMLElement>(`${READWEAVE_RANGE_ANCHOR_SELECTOR},${READWEAVE_PARAGRAPH_ANCHOR_SELECTOR}`))
         .filter(element => readWeaveAnchorIdsOf(element).includes(anchorId));
+}
+
+/** Protect a newly created model range until a server job or saved entry owns it. */
+export function protectReadWeaveProvisionalAnchor(root: HTMLElement, anchorId: string): void {
+    const anchorIds = PROVISIONAL_READWEAVE_ANCHORS_BY_ROOT.get(root) ?? new Set<string>();
+    anchorIds.add(anchorId);
+    PROVISIONAL_READWEAVE_ANCHORS_BY_ROOT.set(root, anchorIds);
+}
+
+export function provisionalReadWeaveAnchorIds(root: HTMLElement): string[] {
+    return [ ...(PROVISIONAL_READWEAVE_ANCHORS_BY_ROOT.get(root) ?? []) ];
+}
+
+export function releaseReadWeaveProvisionalAnchors(root: HTMLElement, durableAnchorIds: Iterable<string>): void {
+    const provisional = PROVISIONAL_READWEAVE_ANCHORS_BY_ROOT.get(root);
+    if (!provisional) return;
+    for (const anchorId of durableAnchorIds) provisional.delete(anchorId);
+    if (!provisional.size) PROVISIONAL_READWEAVE_ANCHORS_BY_ROOT.delete(root);
+}
+
+export function forgetReadWeaveProvisionalAnchor(root: HTMLElement, anchorId: string): void {
+    releaseReadWeaveProvisionalAnchors(root, [ anchorId ]);
+}
+
+export function clearReadWeaveProvisionalAnchors(root: HTMLElement): void {
+    PROVISIONAL_READWEAVE_ANCHORS_BY_ROOT.delete(root);
 }
 
 export function exactReadWeaveAnchorIdForExcerpt(root: HTMLElement, candidateIds: string[], excerpt: string): string | undefined {
@@ -51,6 +78,31 @@ export function exactReadWeaveExcerptRange(
         normalizedStart = normalized.text.indexOf(needle, normalizedStart + 1);
     }
     return candidates.length === 1 ? candidates[0] : undefined;
+}
+
+/** Locate one unambiguous excerpt when a persisted job outlived its DOM mark. */
+export function uniqueReadWeaveExcerptRange(root: HTMLElement, blockSelector: string, excerpt: string): Range | undefined {
+    const needle = normalizeAnchorText(excerpt);
+    if (!needle) return undefined;
+    const blocks = Array.from(root.querySelectorAll<HTMLElement>(blockSelector))
+        .filter(block => !block.querySelector(blockSelector));
+    const candidates: Range[] = [];
+    for (const block of blocks) {
+        const normalized = normalizedTextWithRawOffsets(block.textContent ?? "");
+        let normalizedStart = normalized.text.indexOf(needle);
+        while (normalizedStart >= 0) {
+            const normalizedEnd = normalizedStart + needle.length;
+            const rawStart = normalized.starts[normalizedStart];
+            const rawEnd = normalized.ends[normalizedEnd - 1];
+            const candidate = rawStart !== undefined && rawEnd !== undefined
+                ? domRangeForCharacterOffsets(block, rawStart, rawEnd)
+                : undefined;
+            if (candidate) candidates.push(candidate);
+            if (candidates.length > 1) return undefined;
+            normalizedStart = normalized.text.indexOf(needle, normalizedStart + 1);
+        }
+    }
+    return candidates[0];
 }
 
 /**
