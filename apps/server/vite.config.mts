@@ -20,7 +20,28 @@ export default defineConfig(() => ({
       // resolve, so any env var assigned there is too late for module-load
       // constants in transitively-imported files.
       TRILIUM_ENV: "dev",
-      TRILIUM_PUBLIC_SERVER: "http://localhost:4200"
+      TRILIUM_PUBLIC_SERVER: "http://localhost:4200",
+      // Vitest's explicit env object is isolated from the invoking shell.
+      // Forward opt-in live-test settings without storing any credential in
+      // source control so a green "live" run cannot silently be a skipped run.
+      READWEAVE_LIVE_AI: process.env.READWEAVE_LIVE_AI ?? "",
+      READWEAVE_BENCHMARK_AI: process.env.READWEAVE_BENCHMARK_AI ?? "",
+      READWEAVE_BENCHMARK_REPETITIONS: process.env.READWEAVE_BENCHMARK_REPETITIONS ?? "",
+      READWEAVE_BENCHMARK_FILTER: process.env.READWEAVE_BENCHMARK_FILTER ?? "",
+      READWEAVE_BENCHMARK_SEARCH: process.env.READWEAVE_BENCHMARK_SEARCH ?? "",
+      READWEAVE_BENCHMARK_CONCURRENCY: process.env.READWEAVE_BENCHMARK_CONCURRENCY ?? "",
+      READWEAVE_PRINT_LIVE_BODY: process.env.READWEAVE_PRINT_LIVE_BODY ?? "",
+      READWEAVE_PRINT_REJECTED_BODY: process.env.READWEAVE_PRINT_REJECTED_BODY ?? "",
+      READWEAVE_DEEPSEEK_API_KEY: process.env.READWEAVE_DEEPSEEK_API_KEY ?? "",
+      READWEAVE_API_BASE_URL: process.env.READWEAVE_API_BASE_URL ?? "",
+      READWEAVE_DEEPSEEK_MODEL: process.env.READWEAVE_DEEPSEEK_MODEL ?? "",
+      SERPER_API_KEY: process.env.SERPER_API_KEY ?? "",
+      TAVILY_API_KEY: process.env.TAVILY_API_KEY ?? "",
+      BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY ?? "",
+      JINA_API_KEY: process.env.JINA_API_KEY ?? "",
+      SEMANTIC_SCHOLAR_API_KEY: process.env.SEMANTIC_SCHOLAR_API_KEY ?? "",
+      OPENALEX_API_KEY: process.env.OPENALEX_API_KEY ?? "",
+      UNPAYWALL_EMAIL: process.env.UNPAYWALL_EMAIL ?? ""
     },
     include: [
       '{src,spec}/**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}',

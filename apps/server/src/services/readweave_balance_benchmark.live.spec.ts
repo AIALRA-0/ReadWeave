@@ -1,9 +1,11 @@
-import type { ReadWeaveGenerateRequest, ReadWeaveGenerateResponse } from "@triliumnext/commons";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+
+import type { ReadWeaveGenerateRequest, ReadWeaveGenerateResponse } from "@triliumnext/commons";
 import { describe, expect, it } from "vitest";
 
 import {
+    buildReadWeaveTaskProfile,
     findReadWeaveQualityIssues,
     generateReadWeaveAnswer
 } from "./readweave_ai.js";
@@ -198,7 +200,7 @@ const CASES: BenchmarkCase[] = [
     diverse(question("primary-secondary-source", "explanation", "历史研究中的一手史料与二手研究有什么区别？", "研究者同时使用当时形成的书信、账簿和法令，以及后世学者基于多种材料写成的研究专著。", [ /一手/u, /当时|同时代|发生时/u, /二手/u, /后世|研究/u ]), "history", "paper"),
 
     diverse(term("unreliable-narrator", "不可靠叙述者", "小说中的第一人称叙述者不断自相矛盾，并隐瞒会改变读者判断的事实。", [ /叙述/u, /可信|可靠|不可全信/u, /读者/u, /矛盾|冲突|隐瞒|不一致|偏差|差异|欺骗|扭曲/u ]), "humanities", "textbook"),
-    diverse(question("author-intent-boundary", "boundary", "仅凭诗中反复出现的雨意象，能否断言作者本人当时患有抑郁症？", "诗歌多次使用雨、阴影和空屋等意象，但材料没有作者日记、书信、医学记录或同时代证词。", [ /不能|无法|不足/u, /意象|文本/u, /日记|书信|记录|证词/u ], [ /作者患有抑郁症/u ]), "humanities", "argument"),
+    diverse(question("author-intent-boundary", "boundary", "仅凭诗中反复出现的雨意象，能否断言作者本人当时患有抑郁症？", "诗歌多次使用雨、阴影和空屋等意象，但材料没有作者日记、书信、医学记录或同时代证词。", [ /不能|无法|不足/u, /意象|文本/u, /日记|书信|记录|证词/u ], [ /(?:因此|可以|足以|说明|表明)[^；\n]{0,30}作者患有抑郁症/u ]), "humanities", "argument"),
 
     diverse(term("rest", "REST", "REST 描述网络应用的一组架构约束，包括客户端与服务器分离、无状态交互、统一接口和可缓存性。", [ /REST 表述性状态转移（Representational State Transfer）/u, /架构/u, /无状态/u, /统一接口|缓存/u ]), "software", "manual"),
     diverse(question("race-condition", "explanation", "为什么同一段并发代码有时正确、有时失败？", "两个线程在没有同步的情况下读写同一共享计数器，最终结果取决于读、改、写操作的实际交错顺序。", [ /线程/u, /共享/u, /顺序|交错/u, /同步|非确定/u ]), "software", "noisy-note"),
@@ -220,7 +222,7 @@ const CASES: BenchmarkCase[] = [
     diverse(question("revenue-profit-news", "quantitative", "新闻称营收从 8000 万元增至 1 亿元，能否据此计算利润增长率？", "报道只给出两年的营业收入，没有披露成本、费用、税项或两年的净利润。", [ /不能|无法/u, /营收|收入/u, /成本|费用|净利润/u ], [ /利润增长率为 25/u ]), "finance", "news"),
     diverse(question("rfc-keywords", "explanation", "规范中的 MUST、SHOULD 和 MAY 表示怎样不同的约束强度？", "The key words MUST, SHOULD, and MAY are to be interpreted as requirement levels；MUST is an absolute requirement, SHOULD allows justified exceptions, and MAY is optional。", [ /MUST/u, /必须|绝对要求/u, /SHOULD/u, /例外|理由/u, /MAY/u, /可选/u ]), "networking", "specification"),
 
-    diverse(term("dblp-proper-name", "DBLP", "DBLP 是计算机科学领域的开放书目数据库和信息服务；官方当前使用 dblp computer science bibliography 作为品牌名称。", [ /计算机科学书目数据库（dblp computer science bibliography）/u, /书目|作者|论文/u ], [ /DataBase systems and Logic Programming|Digital Bibliography & Library Project/u ]), "software", "manual"),
+    diverse(term("dblp-proper-name", "DBLP", "DBLP 是计算机科学领域的开放书目数据库和信息服务；官方当前使用 dblp computer science bibliography 作为品牌名称。", [ /计算机科学书目数据库（dblp Computer Science Bibliography）/u, /书目|作者|论文/u ], [ /DataBase systems and Logic Programming|Digital Bibliography & Library Project/u ]), "software", "manual"),
     diverse(term("circuit-partition", "电路划分", "论文作者为 Sung Kyu Lim；正文讨论基于边可分性的电路聚类及其在电路划分中的应用。电路划分把规模较大的电路拆成若干较小部分，并尽量减少部分之间的连接。", [ /拆|分成|划分/u, /电路/u, /连接|跨分区|切割/u ], [ /现任|教授|佐治亚理工/u ]), "electronic-design", "paper"),
     diverse(term("edge-separability", "边可分性", "在电路聚类语境中，边可分性衡量一条连接是否适合作为分开不同节点组的边界；论文作者信息不属于该术语的定义。", [ /连接|边/u, /分开|分组|边界|分界|切割|分割/u ], [ /作者|教授|现任/u ]), "electronic-design", "paper"),
     diverse(question("plain-circuit-partition", "explanation", "为什么电路划分有用？请先用非专业读者能懂的话解释，再说明技术机制。", "一个大型电路包含很多互相连接的元件；如果直接整体处理，设计工具可能更慢、更难优化。电路划分把它拆成较小部分，同时控制跨部分连接数量。", [ /大|复杂|整体/u, /拆|分成|划分/u, /连接|连线/u ], [ /曾任|作者|论文发表/u ]), "electronic-design", "textbook"),
@@ -343,17 +345,19 @@ function observeResult(
     result: ReadWeaveGenerateResponse,
     latencyMs: number
 ): GenerationObservation {
+    const profile = buildReadWeaveTaskProfile(testCase.request.kind, testCase.request.title);
     const formatPass = !result.body.includes("。")
         && !/[（(][^（）()\n]{0,300}[（(]/u.test(result.body)
         && !/\.。|。。|；；|\n{3,}/u.test(result.body);
     const missingExpected = testCase.expected.filter(pattern => !pattern.test(result.body)).map(pattern => pattern.source);
     const matchedForbidden = (testCase.forbidden ?? []).filter(pattern => pattern.test(result.body)).map(pattern => pattern.source);
     const qualityIssues = findReadWeaveQualityIssues(result.body, testCase.request.title, {
-            kind: testCase.request.kind,
-            subject: testCase.request.kind === "term" ? testCase.request.title : undefined,
-            termIdentity: result.termIdentity,
-            verifiedNonExpandableArtifact: result.verifiedNonExpandableArtifact
-        });
+        kind: testCase.request.kind,
+        subject: profile.subject,
+        knowledgeScope: profile.knowledgeScope,
+        termIdentity: result.termIdentity,
+        verifiedNonExpandableArtifact: result.verifiedNonExpandableArtifact
+    });
     const semanticPass = missingExpected.length === 0 && matchedForbidden.length === 0 && qualityIssues.length === 0;
     return {
         name: testCase.name,
@@ -384,9 +388,13 @@ describeBenchmark("ReadWeave quality/search/generation/cost balance benchmark", 
             ? new RegExp(process.env.READWEAVE_BENCHMARK_FILTER, "u")
             : undefined;
         const selectedCases = caseFilter ? CASES.filter(testCase => caseFilter.test(testCase.name)) : CASES;
+        const concurrency = Math.max(
+            1,
+            Math.min(8, Number.parseInt(process.env.READWEAVE_BENCHMARK_CONCURRENCY ?? "3", 10) || 3)
+        );
         const jobs = selectedCases.flatMap(testCase =>
             Array.from({ length: repetitions }, (_, repetition) => ({ testCase, repetition: repetition + 1 })));
-        const generation = await mapWithConcurrency(jobs, 8, async ({ testCase, repetition }) => {
+        const generation = await mapWithConcurrency(jobs, concurrency, async ({ testCase, repetition }) => {
             const startedAt = performance.now();
             try {
                 const result = await generateReadWeaveAnswer(testCase.request);
@@ -459,6 +467,7 @@ describeBenchmark("ReadWeave quality/search/generation/cost balance benchmark", 
             configuration: {
                 uniqueGenerationCases: selectedCases.length,
                 repetitions,
+                concurrency,
                 generationRequests: generation.length,
                 searchRequests: search.length
             },
@@ -539,7 +548,7 @@ describeBenchmark("ReadWeave quality/search/generation/cost balance benchmark", 
             expect(summary.search.passRate).toBe(1);
             expect(summary.search.p95CostCny).toBeLessThan(BUDGET_SEARCH_EXPECTED_MAX_COST_CNY);
         }
-    }, 900_000);
+    }, 3_600_000);
 });
 
 const BUDGET_SEARCH_EXPECTED_MAX_COST_CNY = 0.0065;

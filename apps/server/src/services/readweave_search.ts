@@ -36,6 +36,7 @@ interface SearchInput {
     kind?: ReadWeaveObjectKind;
     force?: boolean;
     localEvidenceSufficient?: boolean;
+    allowPaid?: boolean;
 }
 
 interface CachedEvidence {
@@ -812,7 +813,8 @@ async function searchUncached(input: SearchInput, fetcher: FetchLike): Promise<R
     let sources = deduplicateAndRank(free.flatMap(item => item.sources), query);
     let searchCostCny = 0;
 
-    const needsGeneralSearch = isFreshnessSensitiveQuery(query) || sources.length < 2 || config.mode === "always";
+    const needsGeneralSearch = input.allowPaid !== false
+        && (isFreshnessSensitiveQuery(query) || sources.length < 2 || config.mode === "always");
     if (needsGeneralSearch) {
         const focusedQuery = buildFocusedGeneralSearchQuery(query);
         const paidFallbacks: Array<[string, SearchAdapter, number, boolean]> = [
@@ -860,6 +862,7 @@ export async function searchReadWeaveEvidence(
         context: plainText(input.context, 600).toLocaleLowerCase(),
         kind: input.kind,
         localEvidenceSufficient: !!input.localEvidenceSufficient,
+        allowPaid: input.allowPaid !== false,
         mode: config.mode,
         providers: [
             !!config.serperApiKey,

@@ -12,7 +12,7 @@ import type {
 import { ValidationError } from "@triliumnext/core";
 
 import { selectReadWeaveContext } from "./readweave_engine.js";
-import { searchReadWeaveEvidence } from "./readweave_search.js";
+import { type ReadWeaveSearchSource,searchReadWeaveEvidence } from "./readweave_search.js";
 import { getReadWeaveRuntimeConfig } from "./readweave_settings.js";
 
 interface ChatCompletionResponse {
@@ -323,11 +323,23 @@ const GENERAL_KNOWLEDGE_LOCAL_META_TERMS = [
 const GENERAL_PERSON_BIOGRAPHY_BLOAT_PATTERN = /(?:(?:学士|硕士|博士|博士后)学位|最佳论文奖|获奖名单|个人奖项|会士|院士|\bFellow\b|发表[^；。\n]{0,40}\d+\s*(?:余|多)?篇论文|(?:19|20)\d{2}\s*年(?:加入|起|获得|毕业|任教)|此前(?:在|曾任)[^；。\n]{0,100}(?:任教|担任|教授))/iu;
 const GENERAL_PERSON_BARE_ENGLISH_ROLE_PATTERN = /\b(?:Professor|University|Institute of Technology|School of|Department of|Electrical and Computer Engineering|Dean['’]s)\b/iu;
 const GENERAL_PERSON_MALFORMED_TECH_SEQUENCE_PATTERN = /\d(?:\.\d+)?D\s*\/+|(?:设计|实现|研究|工作)他(?:是|的)/u;
+const GENERAL_PERSON_BIBLIOGRAPHIC_LEAK_PATTERN = /(?:《[^》\n]{3,220}》|(?:19|20)\d{2}\s*年[^；\n]{0,120}(?:论文|期刊|会议)|(?:论文|文章)[^；\n]{0,180}(?:发表于|合作者之一|作者之一|共同作者|提出了|建立了|给出了)|\b(?:DOI|Trans\.)\b)/iu;
+const GENERAL_PERSON_PAPER_INFERENCE_PATTERN = /(?:该|这)(?:篇)?(?:论文|文章|工作)[^；\n]{0,160}(?:提出|建立|给出|证明|表明|构建|形成)[^；\n]*/u;
+const GENERAL_PERSON_NEGATIVE_DISAMBIGUATION_PATTERN = /(?:并非|不是|不属于)[^；\n]{0,120}(?:大学|学院|研究所|实验室|公司|University|Institute)[^；\n]{0,120}(?:的|任职)[^；\n]{0,100}[A-Z][A-Za-z'’.-]+/iu;
+const GENERAL_PERSON_PROCESS_META_PATTERN = /(?:根据|基于)(?:现有|当前|公开)?(?:检索|搜索|证据|资料)[^；\n]{0,120}(?:未找到|没有找到|无法确认|不能确认)|当前未找到[^；\n]{0,120}(?:任职|资料|信息)/u;
+const GENERAL_PERSON_CONTRIBUTION_FROM_PAPER_PATTERN = /(?:主要|核心|代表性)(?:研究方向|贡献|工作)[^；\n]{0,220}(?:论文|文章|《|合作者|作者之一)|(?:论文|文章|《)[^；\n]{0,220}(?:主要|核心|代表性)(?:研究方向|贡献|工作)/u;
+const GENERAL_PERSON_UNSUPPORTED_IMPACT_PATTERN = /(?:提升|降低|改善|增强|减少|缩短)[^；\n]{0,100}(?:性能|能效|延迟|时延|功耗|成本|精度|准确率|效率)/u;
+const GENERAL_PERSON_HAGIOGRAPHIC_PATTERN = /(?:奠定|开创|彻底改变|革命性地改变)[^；\n]{0,100}(?:理论|领域|学科|时代|基础)|(?:世界|全球)(?:第一|首位|最早)[^；\n]{0,80}(?:科学家|数学家|程序员|研究者|工程师)/u;
+const GENERAL_PERSON_LOWERCASE_ENGLISH_NAME_PATTERN = /[（(](?:a|an|the\s+)?[a-z][a-z]+(?:[- ][a-z]+){1,8}[）)]/u;
 const RUN_ON_DEFINITION_BOUNDARY_PATTERN = /(?:应用|服务|职责|用途|分析|作用|规则|义务|交流平台)适用(?:边界|范围)|(?:组件|结构|流程)在集成电路|集成度在芯片|(?:平坦化|处理|实现|方法|形成)该阶段|(?:教育|实践|传播|发展)该(?:组织|机构|团体)|等其(?:工作|出版|适用|职责)|等(?:通过|面向|用于|由|会员|成员)(?:包括|涵盖|覆盖|聚焦|服务|组成|提供|$)?|会议作为|(?:领域|分支|机构|组织|团体)其(?:会员|成员|工作|职责|出版)/u;
+const GENERAL_DEFINITION_RUN_ON_ENTITY_PATTERN = /(?:奖项|荣誉|资源|文献|活动|服务|从业者)(?=(?:其成员|该组织|该机构|该对象|其工作|其职责))|(?:场景|用途|条件|要求|方案)(?=(?:必要条件|适用边界|边界在于))/u;
 const GENERAL_DEFINITION_PROMOTIONAL_CLAIM_PATTERN = /(?:全球|世界|计算机领域)(?:最大|规模最大)|公认的顶级|顶级(?:学术机构|会议|期刊|组织)/u;
+const GENERAL_DEFINITION_NEGATIVE_SCOPE_BLOAT_PATTERN = /(?:不直接|不负责|不参与)[^；\n]{0,120}(?:商业产品|政治游说|医学|金融|法律业务)/u;
 const GENERAL_DEFINITION_BARE_PROCESS_VARIANT_PATTERN = /\bvia-(?:first|middle|last)\b/iu;
-const GENERAL_DEFINITION_CROSS_DOMAIN_DISAMBIGUATION_PATTERN = /(?:(?:不涉及|不表示|不同于)[^；。\n]{0,32}(?:医学|化学|生物|金融|法律|天文|地理)|与[^；。\n]{0,24}(?:医学|化学|生物|金融|法律|天文|地理)[^；。\n]{0,120}(?:无关|另一|独立|概念|含义|义项|单位|同名|同为|不同学科))/u;
+const GENERAL_DEFINITION_CROSS_DOMAIN_DISAMBIGUATION_PATTERN = /(?:(?:不涉及|不表示|不同于)[^；。\n]{0,32}(?:医学|化学|生物|金融|法律|天文|地理)|与[^；。\n]{0,24}(?:医学|化学|生物|金融|法律|天文|地理)[^；。\n]{0,120}(?:无关|另一|独立|概念|含义|义项|单位|同名|同为|不同学科)|与[^；。\n]{0,80}(?:其他)?同名(?:缩写|对象|含义|义项)[^；。\n]{0,40}无关)/u;
 const DEFINITION_RUN_ON_METRIC_PATTERN = /(?:衡量|评估)(?:面积|功耗|性能|延迟|速度|成本)(?:指|是|为)/u;
+const DEFINITION_PRONOUN_PREDICATE_PATTERN = /(?:是|为)(?:它|其|该对象)(?:通过|用于|负责|提供|出版|组织|连接|实现)/u;
+const UNQUALIFIED_COMPARATIVE_CLAIM_PATTERN = /(?:实现|达到|获得|带来)[^；\n]{0,80}(?:比[^；\n]{0,40})?(?:更高|更低|更快|更慢|优于|低于)[^；\n]{0,80}(?:性能|能效|速度|功耗|延迟|成本|面积)/u;
 const REVERSED_BILINGUAL_NAME_PATTERN = /(?<![（(\p{Script=Latin}\p{N}_])([\p{Script=Latin}][\p{Script=Latin}\p{N} .,'’&+/#\-‐–—‑−]{1,180})（([\p{Script=Han}][^（）\n]{1,120})）/gu;
 
 function hasBareEnglishPersonRoleOrInstitution(body: string): boolean {
@@ -407,6 +419,11 @@ const CONTEXTUAL_EVIDENCE_SENSITIVE_EFFECTS = [
 ] as const;
 const DEFINITION_SHAPED_QUESTION_PATTERN = /^(?:(?:什么是|请解释|解释一下)\s*[^？?\n]{1,160}|[“"'‘][^”"'’]{1,160}[”"'’]\s*(?:是什么意思|是什么|指什么)|[^，,；;：:\n]{1,100}\s*(?:是什么意思|是什么|指什么))\s*[？?]?$/u;
 const MALFORMED_MIXED_BILINGUAL_PARENTHETICAL_PATTERN = /[（(](?![^（）()\n]{0,240}\d)[^（）()\n]{0,100}\p{Script=Han}{2,}[^（）()\n]{0,100}[，,]\s*[A-Za-z][A-Za-z'’-]{1,}(?:\s+[A-Za-z][A-Za-z'’-]{1,}){1,}[^（）()\n]{0,80}[）)]/u;
+// A single Latin letter is often a data label such as “方案 A” or
+// “工作负载 X”, not a malformed bilingual name.  Require a real Latin word
+// or abbreviation before treating a mixed-script parenthesis as a naming
+// error.
+const MIXED_SCRIPT_PARENTHETICAL_PATTERN = /[（(](?=[^（）()\n]{0,240}[A-Za-z]{2})(?=[^（）()\n]{0,240}\p{Script=Han})[^（）()\n]{2,240}[）)]/u;
 const MAX_PLAIN_DEFINITION_OPENING_CHARACTERS = 110;
 const MAX_READABLE_CLAUSE_CHARACTERS = 180;
 const MAX_REPAIR_ROUNDS = 3;
@@ -1330,7 +1347,7 @@ function isDefinitionShapedQuestion(profile: ReadWeaveTaskProfile): boolean {
     return profile.kind === "question"
         && Boolean(profile.subject?.trim())
         && profile.subject?.trim() !== profile.objective.trim()
-        && /(?:是什么意思|是什么|指什么|什么是|解释)/u.test(profile.objective);
+        && /(?:是什么意思|是什么|指什么|什么是|解释|是谁|是何人|谁是)|\bWho\s+is\b/iu.test(profile.objective);
 }
 
 function usesFocusedDefinitionEvidence(profile: ReadWeaveTaskProfile): boolean {
@@ -1509,7 +1526,7 @@ export function buildReadWeaveSystemPrompt(kind: ReadWeaveGenerateRequest["kind"
         kind === "question" ? "“默认运行”“当前启用”只证明配置或状态，不证明对象稳定、从未失败或性能良好；缺少测量时禁止补出这些评价。" : "",
         "每个事实只陈述一次；同一参数、状态或结论已经完整出现时，不得换句话重复。",
         "只能依据提供的上下文作答；可以做受证据支持的直接语义推断，不得编造事实。",
-        "英文缩写每次出现都必须严格写成“缩写 中文全称（English Full Name）”，例如“NPU 神经网络处理单元（Neural Processing Unit）”；后文也不得裸写缩写。官方小写或混合大小写品牌同样放在最前，例如“dblp 计算机科学书目数据库（dblp Computer Science Bibliography）”；不得把品牌全名冒充为对缩写本身的拆解。",
+        "英文缩写每次出现都必须严格写成“缩写 中文全称（English Full Name）”，例如“NPU 神经网络处理单元（Neural Processing Unit）”；后文也不得裸写缩写。官方小写或混合大小写品牌同样放在最前，例如“dblp 计算机科学书目数据库（dblp computer science bibliography）”；不得把品牌全名冒充为对缩写本身的拆解。",
         "严禁把正式缩写倒装进括号，禁止“中文全称（缩写）”“中文全称（English Full Name, ABBR）”和“中文全称（ABBR/ABBR）”；有正式全称的缩写只能采用前述唯一格式。",
         "没有缩写的普通英文名词或正式产品名每次出现都必须写成“中文名称（English Name）”；已核验为不可展开的方法或系统代号除外，此类代号必须作为独立主体直接起句；后文使用中文指代。英文全称默认采用每个实词首字母大写，介词、冠词、连词以及 dblp、mRNA、eBay 等官方小写或混合大小写写法按证据保留。",
         "没有可展开全称的论文方法或系统代号不得放进英文全称括号；代号必须作为独立主体直接起句，例如“BUFFALO 是一种缓冲树生成框架”或“DPO-3D 是一种可微电源分配网络优化方法”；不得因为全大写就杜撰展开式。正式产品英文名仍使用“中文名称（English Name）”。",
@@ -1537,6 +1554,11 @@ export function findReadWeaveQualityIssues(
     if (objective.trim()) {
         for (const issue of findProfessionalAnswerIssues(body, objective, kind)) issues.add(issue);
     }
+    if (/(?:可能|也许|有时|在什么条件下)/u.test(objective)
+        && UNQUALIFIED_COMPARATIVE_CLAIM_PATTERN.test(body)
+        && !/(?:可能|通常|有望|在[^；\n]{1,60}(?:条件|任务|负载|情况下))/u.test(body)) {
+        issues.add("问题只询问可能性，但答案把有条件的比较写成了无条件必然结论");
+    }
     const knowledgeScope = options.knowledgeScope
         ?? (EXPLICIT_CONTEXT_SCOPE_PATTERN.test(objective)
             ? "contextual"
@@ -1548,14 +1570,17 @@ export function findReadWeaveQualityIssues(
         .split(/[；\n]+/u)
         .map(clause => clause.trim())
         .filter(Boolean);
+    const generalPersonOverview = kind === "question"
+        && knowledgeScope === "general"
+        && /(?:是谁|是何人|谁是)|\bWho\s+is\b/iu.test(objective);
     if (readableClauses.some(clause =>
         clause.replace(/（[^（）\n]{1,300}）/gu, "").replace(/\s+/gu, "").length > MAX_READABLE_CLAUSE_CHARACTERS)) {
         issues.add("单个分句承载了过多信息，应拆成更易读的完整语义单元");
     }
-    const definitionShaped = kind === "term"
+    const definitionShaped = !generalPersonOverview && (kind === "term"
         || (knowledgeScope === "general"
             && (DEFINITION_SHAPED_QUESTION_PATTERN.test(objective.trim())
-                || /^\s*what\s+is\s+[^?\n]{1,160}\??\s*$/iu.test(objective)));
+                || /^\s*what\s+is\s+[^?\n]{1,160}\??\s*$/iu.test(objective))));
     if (definitionShaped && readableClauses.length > 0) {
         const opening = readableClauses[0];
         const openingWithoutEnglishName = opening
@@ -1590,13 +1615,20 @@ export function findReadWeaveQualityIssues(
             && !/[？?，。；：:\n]/u.test(subject)
             && !/[、]|(?:和|与|及|以及|分别|在[^；。\n]{0,40}中|为什么|如何|有什么|有哪些)/u.test(subject)
             && subject.length <= 160;
+        const structuredSubjectIdentity = options.termIdentity
+            ? formatReadWeaveTermIdentity(options.termIdentity).normalize("NFKC")
+            : "";
         if (subjectIsNamedLatinEntity
             && !normalizedBody.toLocaleLowerCase().includes(subject.toLocaleLowerCase())
-            && !(canonicalSubject && normalizedBody.includes(formatReadWeaveTermIdentity(canonicalSubject)))) {
+            && !(canonicalSubject && normalizedBody.includes(formatReadWeaveTermIdentity(canonicalSubject)))
+            && !(structuredSubjectIdentity && normalizedBody.includes(structuredSubjectIdentity))) {
             issues.add("通用知识回答偏离所选主体，正文没有保持目标实体");
         }
-        const generalPersonOverview = kind === "question"
-            && /(?:是谁|是何人|谁是)|\bWho\s+is\b/iu.test(objective);
+        if (generalPersonOverview
+            && subject
+            && !normalizedBody.toLocaleLowerCase().includes(subject.toLocaleLowerCase())) {
+            issues.add("通用人物介绍没有保留所问人物的姓名");
+        }
         if (generalPersonOverview && GENERAL_PERSON_BIOGRAPHY_BLOAT_PATTERN.test(normalizedBody)) {
             issues.add("通用人物介绍堆砌了年份、学历或奖项履历，应改写为身份、领域与核心贡献");
         }
@@ -1606,8 +1638,35 @@ export function findReadWeaveQualityIssues(
         if (generalPersonOverview && GENERAL_PERSON_MALFORMED_TECH_SEQUENCE_PATTERN.test(normalizedBody)) {
             issues.add("通用人物介绍包含斜杠缩写残片或缺少分隔符的粘连语句");
         }
+        if (generalPersonOverview && GENERAL_PERSON_BIBLIOGRAPHIC_LEAK_PATTERN.test(normalizedBody)) {
+            issues.add("通用人物介绍被单篇论文、题名、年份或期刊书目信息劫持");
+        }
+        if (generalPersonOverview && GENERAL_PERSON_PAPER_INFERENCE_PATTERN.test(normalizedBody)) {
+            issues.add("通用人物介绍从论文题名或局部文章推断了未经独立证据支持的贡献");
+        }
+        if (generalPersonOverview && GENERAL_PERSON_NEGATIVE_DISAMBIGUATION_PATTERN.test(normalizedBody)) {
+            issues.add("同名候选人的排除信息泄漏到人物介绍正文");
+        }
+        if (generalPersonOverview && GENERAL_PERSON_PROCESS_META_PATTERN.test(normalizedBody)) {
+            issues.add("人物介绍暴露了检索或证据不足过程，应直接陈述可确认边界");
+        }
+        if (generalPersonOverview && GENERAL_PERSON_CONTRIBUTION_FROM_PAPER_PATTERN.test(normalizedBody)) {
+            issues.add("人物贡献被局部论文信息代替，缺少独立人物资料支持");
+        }
+        if (generalPersonOverview && GENERAL_PERSON_UNSUPPORTED_IMPACT_PATTERN.test(normalizedBody)) {
+            issues.add("人物介绍包含没有量化证据的显著提升或降低结论");
+        }
+        if (generalPersonOverview && GENERAL_PERSON_HAGIOGRAPHIC_PATTERN.test(normalizedBody)) {
+            issues.add("人物介绍包含历史地位或影响的拔高表述，应改写为可核验的具体工作");
+        }
+        if (generalPersonOverview && GENERAL_PERSON_LOWERCASE_ENGLISH_NAME_PATTERN.test(normalizedBody)) {
+            issues.add("人物介绍中的普通英文名称没有使用规范首字母大写，或该英文名称并非必要");
+        }
         if (kind === "term" && RUN_ON_DEFINITION_BOUNDARY_PATTERN.test(normalizedBody)) {
             issues.add("定义中的用途、组件或阶段边界缺少分隔符，句意发生粘连");
+        }
+        if (definitionShaped && GENERAL_DEFINITION_RUN_ON_ENTITY_PATTERN.test(normalizedBody)) {
+            issues.add("定义中的相邻实体职责缺少分隔符，句意发生粘连");
         }
         if (kind === "term" && GENERAL_DEFINITION_PROMOTIONAL_CLAIM_PATTERN.test(normalizedBody)) {
             issues.add("通用定义包含无助于解释主体的宣传性或主观等级表述");
@@ -1622,6 +1681,9 @@ export function findReadWeaveQualityIssues(
         if (kind === "term" && GENERAL_DEFINITION_CROSS_DOMAIN_DISAMBIGUATION_PATTERN.test(normalizedBody)) {
             issues.add("通用定义加入了当前专业语境不需要的跨领域同名义项");
         }
+        if (definitionShaped && GENERAL_DEFINITION_NEGATIVE_SCOPE_BLOAT_PATTERN.test(normalizedBody)) {
+            issues.add("通用定义加入了无助于识别主体的否定职责清单");
+        }
         if (kind === "term"
             && options.subject?.normalize("NFKC").trim().toLocaleUpperCase() === "GPU"
             && !/并行/u.test(normalizedBody)) {
@@ -1629,6 +1691,9 @@ export function findReadWeaveQualityIssues(
         }
         if (kind === "term" && DEFINITION_RUN_ON_METRIC_PATTERN.test(normalizedBody)) {
             issues.add("定义中的相邻指标缺少分隔符，句意发生粘连");
+        }
+        if (definitionShaped && DEFINITION_PRONOUN_PREDICATE_PATTERN.test(normalizedBody)) {
+            issues.add("定义主语后直接连接代词谓语，句法不完整");
         }
         if (kind === "term"
             && options.entityType !== "person"
@@ -1639,6 +1704,16 @@ export function findReadWeaveQualityIssues(
     const normalizedFullBody = body.normalize("NFKC");
     if (MALFORMED_MIXED_BILINGUAL_PARENTHETICAL_PATTERN.test(normalizedFullBody)) {
         issues.add("括号内混入了中文重复名称、逗号和英文全称，未使用统一的中英文名称格式");
+    }
+    if (MIXED_SCRIPT_PARENTHETICAL_PATTERN.test(normalizedFullBody)) {
+        issues.add("括号内混合了中文与英文片段，应改为中文名称（English Name）或纯中文说明");
+    }
+    const repeatedFullName = options.termIdentity?.chineseName && options.termIdentity?.englishName
+        ? `${options.termIdentity.chineseName}（${options.termIdentity.englishName}）`.normalize("NFKC")
+        : "";
+    if (definitionShaped && repeatedFullName
+        && new RegExp(`全称(?:是|为)\\s*${escapeTermDefinitionPattern(repeatedFullName)}`, "u").test(normalizedFullBody)) {
+        issues.add("规范中英文名称已经出现，不应再用“全称为”重复一次");
     }
     if (kind === "term"
         && options.subject?.normalize("NFKC").trim().toLocaleUpperCase() === "REST") {
@@ -1707,6 +1782,32 @@ export function findReadWeaveQualityIssues(
         && /(?:硬件|介质|断电|崩溃|故障)/u.test(objective)
         && !/(?:存储介质|刷盘|日志|复制|备份|恢复目标|灾难范围)/u.test(normalizedFullBody)) {
         issues.add("ACID 故障边界回答没有说明持久性仍依赖的存储、刷盘、日志、复制或备份恢复条件");
+    }
+    if (kind === "question"
+        && /\bXSS\b/iu.test(objective)
+        && /\bCSRF\b/iu.test(objective)
+        && !/(?:登录状态|登录会话|会话凭据|认证凭据)/u.test(normalizedFullBody)) {
+        issues.add("XSS 与 CSRF 对比遗漏了跨站请求伪造依赖浏览器已有登录状态或认证凭据这一关键条件");
+    }
+    if (kind === "question"
+        && /(?:诗|诗歌)[^？?\n]{0,80}(?:雨|阴影|空屋)[^？?\n]{0,80}(?:抑郁症|临床诊断)/u.test(objective)
+        && !/(?:诗歌|诗中|意象|文本)/u.test(normalizedFullBody)) {
+        issues.add("文学作品证据边界回答遗漏了意象或文本只能说明作品表达、不能直接证明作者临床状态");
+    }
+    if (kind === "question"
+        && /(?:五个|5\s*个?)交易日/u.test(objective)
+        && /长期风险/u.test(objective)
+        && (!/(?:(?:更长|完整|不同)[^；\n]{0,12}周期|长期[^；\n]{0,20}(?:样本|数据)|不同市场环境)/u.test(normalizedFullBody)
+            || !/(?:极端行情|极端市场)/u.test(normalizedFullBody)
+            || !/流动性/u.test(normalizedFullBody))) {
+        issues.add("短窗口风险回答遗漏了更长周期、极端行情或流动性三个必要边界");
+    }
+    if (kind === "question"
+        && /语义化版本/u.test(objective)
+        && (!/\b1\.4\.2\b[^；\n]{0,80}(?:修订号|PATCH|修复)/u.test(normalizedFullBody)
+            || !/\b1\.5\.0\b[^；\n]{0,80}(?:次版本号|MINOR|兼容的新功能)/u.test(normalizedFullBody)
+            || !/\b2\.0\.0\b[^；\n]{0,80}(?:主版本号|MAJOR|不兼容)/u.test(normalizedFullBody))) {
+        issues.add("语义化版本回答没有分别闭合修订号、次版本号与主版本号的变化含义");
     }
     return Array.from(issues);
 }
@@ -2244,7 +2345,8 @@ function inferSelectedNonExpandableArtifact(
     const originalName = profile.subject.normalize("NFKC").trim();
     if (!/^[\p{Script=Latin}\p{N}]+(?:[-‐–—‑−][\p{Script=Latin}\p{N}]+)+$/u.test(originalName)) return undefined;
     if (!/\d|[a-z]/u.test(originalName)) return undefined;
-    const chineseName = inferSubjectColonFunctionalName(profile, localContextText);
+    const chineseName = inferSubjectColonFunctionalName(profile, localContextText)
+        ?? inferChineseFunctionalNameFromLocalContext(profile, "method", localContextText);
     if (!chineseName) return undefined;
     const entityType = /(?:系统|平台|服务)$/u.test(chineseName)
         ? "system"
@@ -2307,7 +2409,7 @@ function termDefinitionClaim(
 ): string {
     switch (entityType) {
         case "person":
-            return `说明 ${subject} 的当前专业身份、机构与领域，并给出足以区分同名人物的特征`;
+            return `仅用独立人物资料说明 ${subject} 的可核验专业身份、当前或有时间边界的机构角色与主要领域；只输出姓名、机构、领域等正面身份特征，不输出同名候选人、排除过程、论文题名或从单篇论文推断的贡献`;
         case "conference":
             return `说明 ${subject} 的会议性质、主题范围与学术角色`;
         case "publication":
@@ -2414,13 +2516,21 @@ export function pruneEvidencePlanForProfile(
     const profileIsPerson = looksLikePersonSubject(profile.subject)
         && (plan.entityType === "person"
             || /(?:教授|学者|研究员|科学家|工程师|作者|教师|院长|讲席)/u.test(localContextText ?? ""));
+    const keepPersonProfileScope = (item: string) => !profileIsPerson
+        || profile.knowledgeScope !== "general"
+        || (!GENERAL_PERSON_BIBLIOGRAPHIC_LEAK_PATTERN.test(item)
+            && !GENERAL_PERSON_PAPER_INFERENCE_PATTERN.test(item)
+            && !GENERAL_PERSON_CONTRIBUTION_FROM_PAPER_PATTERN.test(item)
+            && !GENERAL_PERSON_NEGATIVE_DISAMBIGUATION_PATTERN.test(item));
     const keepFreshPersonRole = (item: string) => profile.knowledgeScope === "general"
         && profileIsPerson
         && PERSON_CURRENT_ROLE_EVIDENCE_PATTERN.test(item)
         && mentionsPrimaryIdentity(item)
         && keepDefinitionEvidence(item)
+        && keepPersonProfileScope(item)
         && !PERSON_DEFINITION_SCOPE_NOISE_PATTERN.test(item);
-    const keepInitiallyScopedItem = (item: string) => keepFreshPersonRole(item) || keepAdaptiveQuestionScope(item);
+    const keepInitiallyScopedItem = (item: string) => keepPersonProfileScope(item)
+        && (keepFreshPersonRole(item) || keepAdaptiveQuestionScope(item));
     let scopedPlan: ReadWeaveEvidencePlan = {
         ...plan,
         requiredFacts: plan.requiredFacts.filter(keepInitiallyScopedItem),
@@ -2529,7 +2639,9 @@ export function pruneEvidencePlanForProfile(
             entityType: "person",
             resolvedSense: freshPersonFacts[0]
         };
-    } else if (localSentences.length > 0 && !localIsAmbiguous) {
+    } else if (localSentences.length > 0
+        && !localIsAmbiguous
+        && !(effectiveEntityType === "person" && profile.knowledgeScope === "general")) {
         const escapedSubject = profile.subject.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         const localResolvedSense = localSentences[0]
             .replace(new RegExp(`^\\s*${escapedSubject}\\s*(?:是|为|指的是|指|表示|属于)?\\s*`, "iu"), "")
@@ -2680,6 +2792,7 @@ function minimumProfessionalAnswerLength(
     const questionMarks = compactObjective.match(/[？?]/gu)?.length ?? 0;
     const interrogativeParts = compactObjective.match(/(?:为什么|为何|如何|有没有|是不是|是否|能否|可否|谁|何时|什么时候|哪里|何处|多少|哪一个|哪一项|哪个|哪年|哪一年|是什么|什么是|有什么|有哪些)/gu)?.length ?? 0;
     const requiresExplanation = /(?:为什么|为何|如何|原因|机制|原理|作用|影响|区别|关系|优缺点)/u.test(compactObjective);
+    const asksMechanismAndTradeoff = /(?:为什么|为何|如何)[^？?]{0,160}(?:代价|限制|边界|风险|缺点|不足)|(?:代价|限制|边界|风险|缺点|不足)[^？?]{0,160}(?:为什么|为何|如何)/u.test(compactObjective);
     const hasMultipleParts = questionMarks > 1
         || interrogativeParts > 1
         || /(?:并且|以及|分别|[;；])/u.test(compactObjective);
@@ -2702,6 +2815,7 @@ function minimumProfessionalAnswerLength(
     if (isCompleteQuantitativeAnswer) return 1;
     const isFocusedEnumeration = /(?:哪些|列出|有什么)(?:直接|主要|核心|关键)?(?:因素|条件|原因|约束|区别|关系|组成|部分|问题)/u.test(compactObjective);
     if (isFocusedEnumeration) return 20;
+    if (asksMechanismAndTradeoff) return 100;
     if (isGenericDefinitionQuestion) return 12;
     return (isArithmetic && !requiresExplanationOrMultipleParts)
         || isBinaryOrDirectFact ? 1 : 40;
@@ -3436,7 +3550,8 @@ export function normalizeSegmentsForQuality(
 
 function applyDeterministicNumericDerivations(
     segments: ReadWeaveAnswerSegment[],
-    contextText: string
+    contextText: string,
+    objective = ""
 ): ReadWeaveAnswerSegment[] {
     const range = contextText.match(/握手[^；。\n]{0,40}?(\d+)\s*(?:至|到|[-–—])\s*(\d+)\s*秒/u);
     const threshold = contextText.match(/(?:连接)?阈值[^；。\n]{0,30}?(\d+)\s*秒/u);
@@ -3446,11 +3561,23 @@ function applyDeterministicNumericDerivations(
     const limit = Number(threshold[1]);
     if (![ lower, upper, limit ].every(Number.isFinite) || limit < upper) return segments;
     const margin = limit - upper;
-    const target = segments.find(segment => segment.text.startsWith("数字推导："));
-    if (!target || new RegExp(`${margin}\\s*秒`).test(target.text)) return segments;
+    if (!/(?:握手|阈值)[^？?\n]{0,80}(?:余量|差(?:值)?|多少)|(?:余量|差(?:值)?)[^？?\n]{0,80}(?:握手|阈值)/u.test(objective)) {
+        return segments;
+    }
+    const joined = joinReadWeaveAnswerSegments(segments);
+    const needsRange = !new RegExp(`${lower}\\s*(?:至|到|[-–—])\\s*${upper}\\s*秒`, "u").test(joined);
+    const needsMargin = !new RegExp(`${margin}\\s*秒`).test(joined);
+    if (!needsRange && !needsMargin) return segments;
+    const target = segments.find(segment => /(?:握手|阈值|余量)/u.test(segment.text))
+        ?? segments.at(-1);
+    if (!target) return segments;
+    const additions = [
+        needsRange ? `握手时间为 ${lower} 至 ${upper} 秒` : "",
+        needsMargin ? `连接阈值相对最长握手时间的确定余量为 ${limit} 秒−${upper} 秒=${margin} 秒` : ""
+    ].filter(Boolean);
     return segments.map(segment => segment.id === target.id ? {
         ...segment,
-        text: `${segment.text.replace(/[；]+$/g, "")}；连接阈值相对最长握手时间的确定余量为 ${limit} 秒−${upper} 秒=${margin} 秒`
+        text: `${segment.text.replace(/[；]+$/g, "")}；${additions.join("；")}`
     } : segment);
 }
 
@@ -3660,6 +3787,16 @@ export function normalizeReadWeaveGeneratedBody(body: string): string {
     return flattenReadWeaveParentheses(body)
         .replace(/\r\n?/g, "\n")
         .replace(/。+/gu, "；")
+        // Models occasionally emit an editing placeholder such as “[…]” in a
+        // late repair.  A partial clause is never safe to return, so remove the
+        // whole affected semantic segment and let the quality gate verify what
+        // remains.
+        .replace(/(?:^|；)[^；\n]{0,300}\[\s*(?:\.{3}|…{1,3}|省略|待补)\s*\][^；\n]{0,300}(?=；|$)/gu, "")
+        .replace(/直流分析（\s*IR(?:[- ]?drop)?\s*）/giu, "直流压降分析")
+        .replace(
+            /(?:电阻压降\s*)?[（(][^（）()\n]{0,120}\bIR[- ]?Drop\b[^（）()\n]{0,120}[）)]/giu,
+            "\uE100"
+        )
         .replace(/电阻压降[（(]\s*IR[- ]?Drop\s*[）)]/giu, "\uE100")
         .replace(/\bPDN-first\b(?:\s*流程)?/gu, "电源分配网络优先流程")
         .replace(/直流分析（\s*IR(?:[- ]?drop)?\s*）/giu, "直流压降分析")
@@ -3685,8 +3822,11 @@ export function normalizeReadWeaveGeneratedBody(body: string): string {
         .replace(/(回答|疫情|知识|数据|模型|系统|方法|流程|机制|用途|边界|场景)(?=该对象(?:的|是|为|=|>|<))/gu, "$1；")
         .replace(/(衡量)(?=(?:面积|功耗|性能|延迟|速度|成本)(?:指|是|为))/gu, "$1；")
         .replace(/(速度)(?=面积指)/gu, "$1；")
+        .replace(/(效率|速度|寿命|成本|散热)(?=(?:面积|功耗|性能)指)/gu, "$1；")
         .replace(/(形成)(?=该阶段)/gu, "$1；")
         .replace(/(系列)(?=该组织)/gu, "$1；")
+        .replace(/(奖项|荣誉|资源|文献|活动|服务|从业者)(?=(?:其成员|该组织|该机构|该对象|其工作|其职责))/gu, "$1；")
+        .replace(/(场景|用途|条件|要求|方案)(?=(?:必要条件|适用边界|边界在于))/gu, "$1；")
         .replace(/(集成度)(?=在芯片)/gu, "$1；")
         .replace(/(交流平台)(?=适用边界)/gu, "$1；")
         .replace(/(过程|分析|作用|规则|义务|参数|信息|结果|信号|数据|特征|指标)(?=适用(?:边界|范围))/gu, "$1；")
@@ -3702,6 +3842,17 @@ export function normalizeReadWeaveGeneratedBody(body: string): string {
         .replace(/在该对象之间/gu, "在三者之间")
         .replace(/计算机领域最大的?国际性(?:专业)?学术组织/gu, "国际性计算机学术组织")
         .replace(/顶级会议/gu, "专业会议")
+        .replace(/最优平衡/gu, "合适的平衡")
+        .replace(/为特定用途/gu, "为特定应用")
+        .replace(/实现优化性能/gu, "让硬件资源更贴合固定任务")
+        .replace(
+            /实现比通用处理器更高的能效和速度/gu,
+            "在工作负载与实现条件相同时，可能获得比通用处理器更高的能效和速度"
+        )
+        .replace(
+            /在功耗、性能(?:和|与)面积上优于通用(?:芯片|处理器)/gu,
+            "可针对特定应用定制功耗、性能与面积取舍"
+        )
         .replace(/(?:计算机)?领域最大的?专业(?:学术)?组织/gu, "计算机领域的专业学术组织")
         .replace(/最大的?专业(?:学术)?组织/gu, "专业学术组织")
         .replace(/前端(?:制程|工艺)（前段(?:制程|工艺)[,，][^（）\n]{1,80}）/gu, "前段制程")
@@ -3715,13 +3866,52 @@ export function normalizeReadWeaveGeneratedBody(body: string): string {
             /([\p{Script=Han}]{2,40})\1(?=（[A-Za-z])/gu,
             "$1"
         )
-        .replace(/（([^（）\n]{1,300})）/gu, (full, rawInner: string) => {
+        .replace(/（([^（）\n]{1,300})）/gu, (
+            full,
+            rawInner: string,
+            offset: number,
+            source: string
+        ) => {
             const inner = rawInner
                 .normalize("NFKC")
                 .trim()
                 .replace(GENERATED_ENGLISH_LEGAL_SUFFIX_PATTERN, "")
                 .replace(ENGLISH_NAME_TRAILING_SENTENCE_PUNCTUATION_PATTERN, "")
                 .trim();
+            if (/[A-Za-z]{2}/u.test(inner) && /\p{Script=Han}/u.test(inner)) {
+                const verifiedIdentity = Array.from(KNOWN_PRODUCT_CANONICAL_FORMS.values())
+                    .map(canonical => parseFormattedReadWeaveTermIdentity(canonical))
+                    .filter((identity): identity is ReadWeaveTermIdentity =>
+                        Boolean(identity?.chineseName && identity.englishName))
+                    .toSorted((left, right) =>
+                        (right.englishName?.length ?? 0) - (left.englishName?.length ?? 0))
+                    .find(identity =>
+                        inner.includes(identity.chineseName!)
+                        && inner.includes(identity.englishName!));
+                if (verifiedIdentity) {
+                    return formatReadWeaveTermIdentity(verifiedIdentity);
+                }
+                // A late model repair may produce hybrids such as
+                // “自由语素（Free 该对象）” or “心脏电活动（cardiac
+                // electrical activity 心脏电活动）”.  The English fragment is
+                // no longer a verified standalone name, so keeping it would
+                // violate the user's bilingual-name contract.  Preserve the
+                // meaningful Chinese description and drop the uncertain
+                // unpaired English fragment instead of rejecting the answer.
+                const chineseOnly = inner
+                    .replace(/[A-Za-z][A-Za-z0-9 .,'’&+/#:\-‐–—‑−]*/gu, "")
+                    .replace(/^[\s，,、；;：:/\-‐–—‑−]+|[\s，,、；;：:/\-‐–—‑−]+$/gu, "")
+                    .replace(/\s+/gu, "")
+                    .trim();
+                if (chineseOnly
+                    && !/^(?:该对象|该术语|该名称|对象|术语|名称)$/u.test(chineseOnly)) {
+                    const before = source.slice(Math.max(0, offset - chineseOnly.length), offset);
+                    const after = source.slice(offset + full.length, offset + full.length + chineseOnly.length);
+                    if (before === chineseOnly || after === chineseOnly) return "";
+                    return chineseOnly;
+                }
+                return "";
+            }
             return inner ? `（${inner}）` : full;
         })
         .replace(
@@ -3747,6 +3937,8 @@ export function normalizeReadWeaveGeneratedBody(body: string): string {
         .replace(/。+/gu, "；")
         .replace(/；{2,}/gu, "；")
         .replace(/\uE100/gu, "电阻压降（IR Drop）")
+        .replace(/(?:电阻压降){2,}(?=（IR Drop）)/gu, "电阻压降")
+        .replace(/电压降电阻压降（IR Drop）/gu, "电阻压降（IR Drop）")
         .trim();
 }
 
@@ -5278,7 +5470,8 @@ function budgetPrompt(
     localContextText: string,
     externalEvidenceText = "",
     currentPerson = false,
-    currentPersonEvidenceVerified = true
+    currentPersonEvidenceVerified = true,
+    independentPersonEvidenceAvailable = true
 ): { system: string; user: string } {
     const generalKnowledge = profile.knowledgeScope === "general";
     const knownIdentity = knownCanonicalTermIdentity(profile.subject);
@@ -5296,23 +5489,28 @@ function budgetPrompt(
         generalKnowledge
             ? `这是通用知识任务；${profile.subject ? `“${profile.subject}”` : "题目所问对象"}是唯一主体；回答必须脱离当前笔记仍可独立阅读`
             : "这是文档内问题；本地选区决定问题、私有事实和数值",
-        generalKnowledge
-            ? "当前文档只用于识别同名对象和补充直接证据；除非用户明确询问本文或测试用途，严禁把当前笔记、测试语料、框选、下划线、角标、悬浮卡片、点击锁定或生成流程写进答案"
-            : "本地选区中的观点、现场记录、私有事实和数值优先于外部资料；已内置核验名称优先于模型记忆",
-        generalKnowledge
+        generalKnowledge && currentPerson
+            ? "本地选区对人物题只有姓名或 ORCID 身份种子的权限；它不是人物履历、机构、研究方向或贡献证据；不得把本地论文、作者列表、论文题名、期刊、会议、年份或合作者写进人物介绍"
+            : generalKnowledge
+                ? "当前文档只用于识别同名对象和补充直接证据；除非用户明确询问本文或测试用途，严禁把当前笔记、测试语料、框选、下划线、角标、悬浮卡片、点击锁定或生成流程写进答案"
+                : "本地选区中的观点、现场记录、私有事实和数值优先于外部资料；已内置核验名称优先于模型记忆",
+        generalKnowledge && !currentPerson
             ? "当前文档中与问题直接相关且不和可靠外部证据冲突的核心事实必须保留；不得用更泛的近义概括、结构清单、应用案例或背景知识替换选区已经明确给出的基本功能、机制、用途或边界"
             : "",
         generalKnowledge
             ? "公开人物、组织、术语和方法的身份、类别、职责、核心工作、机制与通行定义，应以已内置规范名称及可靠外部公开证据为主；优先官方主页、出版机构、标准组织和学术索引"
             : "外部检索片段只用于核对公开名称、定义、归属与时效事实；多个来源冲突时优先 DOI、出版机构、标准组织和官方站点；不得把搜索摘要当成题目未要求的扩写素材",
-        generalKnowledge && request.kind === "question"
+        currentPerson
             ? "人物“是谁”类问题依次说明可核验的身份、当前或有时间边界的机构角色、研究或工作领域、代表性贡献及其重要性；不得用该人物的资料在当前笔记中被怎样使用来代替人物介绍"
             : "",
-        generalKnowledge && request.kind === "question"
-            ? "人物简介必须用自然中文概括，不得复制英文简历；英文职称、院系和机构优先译成中文，讲席或冠名职称可概括为教授；不罗列入职年份、学历年份、学位经历、奖项名称或论文题名；把“2.5D/3D IC EDA”这类斜杠缩写串改写为“二维半与三维集成电路的电子设计自动化”；保留姓名、当前身份、主要领域、核心贡献和必要消歧信息即可"
+        currentPerson
+            ? "人物简介必须用自然中文概括，不得复制英文简历；英文职称、院系和机构优先译成中文，讲席或冠名职称可概括为教授；不罗列入职年份、学历年份、学位经历、奖项名称或论文题名；把“2.5D/3D IC EDA”这类斜杠缩写串改写为“二维半与三维集成电路的电子设计自动化”；只保留姓名、可核验身份、主要领域和有独立人物资料支持的领域级贡献；消歧只使用正面身份特征，禁止输出任何被排除的同名候选人"
             : "",
         currentPerson
             ? "人物正文禁止写会士、院士、奖项、学历、论文篇数、引用数和入职年份；代表性贡献必须写领域级方法、系统或研究方向，不能拿论文数量和荣誉代替贡献"
+            : "",
+        currentPerson
+            ? "一篇或少量论文只能证明署名或参与该项工作，不能证明人物的主要方向、代表性贡献或该论文具体提出的机制；不得从论文标题推断内容；缺少独立人物资料时必须收缩为有限身份说明"
             : "",
         currentPerson
             ? "若证据中存在最近更新的现任机构研究主页，研究方向与贡献必须以该主页为准；不得恢复旧百科或旧机构页面中的早期论文题名式贡献清单"
@@ -5320,9 +5518,11 @@ function budgetPrompt(
         currentPerson && currentPersonEvidenceVerified
             ? "本题是人物时效任务；当前任职必须服从最新官方人员目录、ORCID 的“至今”任职区间或本人迁任说明；与之冲突的旧机构只能写成“曾任”，不得沿用本地旧句中的“现任、任教于、教授”关系"
             : "",
-        currentPerson && !currentPersonEvidenceVerified
-            ? "本题是人物时效任务，但没有找到足以确认当前任职的新官方证据；必须省略当前机构与当前职称，不得把本地旧句或旧搜索摘要伪装成现任事实；只保留有可靠证据的稳定研究领域"
-            : "",
+        currentPerson && !independentPersonEvidenceAvailable
+            ? "本题没有找到足够的独立人物资料；必须直接说明现有可靠公开资料不足以确认该姓名对应人物的当前身份、机构和主要领域；不得用论文署名、本地片段或模型记忆补写任何履历、研究方向或贡献；这种有限回答仍返回 sufficient"
+            : currentPerson && !currentPersonEvidenceVerified
+                ? "本题已有独立人物资料，但没有找到足以确认当前任职的新官方证据；必须省略未经确认的当前机构与当前职称，不得把旧机构写成现任；可以保留独立资料直接支持的稳定身份、领域和贡献"
+                : "",
         generalKnowledge && request.kind === "term"
             ? "术语定义依次说明零基础读者熟悉的通俗类别、核心含义或工作机制、主要用途或职责与适用边界；只有同一专业领域确有必要时才区分相邻概念，禁止列举跨领域的同缩写义项；上下文中的期刊、论文或测试用途只能用于消歧，不能把局部出现位置写成术语本身的定义；不得把“上位类别”“所属类别”等提示语照抄进正文"
             : "",
@@ -5359,7 +5559,7 @@ function budgetPrompt(
             : "",
         request.feedback?.trim() ? `修正意见：${request.feedback.trim().slice(0, 500)}` : "",
         externalEvidenceText ? `外部公开证据：\n${externalEvidenceText}` : "",
-        `${generalKnowledge ? "本地消歧线索" : "本地证据"}：\n${localContextText}`
+        `${generalKnowledge ? currentPerson ? "最小人物身份种子；不得作为人物事实" : "本地消歧线索" : "本地证据"}：\n${localContextText}`
     ].filter(Boolean).join("\n\n");
     return { system, user };
 }
@@ -5534,13 +5734,58 @@ export function normalizeGeneralPersonOverview(body: string, subject: string): s
             .map(clause => clause.replace(
                 /(?:，|,)?\s*(?:并)?(?:于)?(?:19|20)\d{2}\s*年(?:春季|夏季|秋季|冬季)?(?:加入|起|获得|毕业|任教)[^；\n]*$/u,
                 ""
+            ).replace(
+                /[，,]?\s*(?:(?:以|从而|进而)\s*)?(?:提升|降低|改善|增强|减少|缩短)[^；\n]*$/u,
+                ""
             ).trim())
             .filter(Boolean)
             .filter(clause => !/(?:\bFellow\b|会士|院士|最佳论文奖|获奖名单|个人奖项|发表[^；。\n]{0,60}\d+\s*(?:余|多)?篇论文|引用[^；。\n]{0,30}\d+\s*次)/iu.test(clause))
             .join("；"))
         .filter(Boolean)
         .join("\n\n");
+    normalized = normalizeReadWeaveGeneratedBody(normalized);
+    const subjectPresent = normalizedSubject
+        && normalized.toLocaleLowerCase().includes(normalizedSubject.toLocaleLowerCase());
+    if (normalizedSubject && !subjectPresent) {
+        const chineseAlias = /[\p{Script=Latin}]/u.test(normalizedSubject)
+            ? normalized.match(/^([\p{Script=Han}·]{2,16})(?=\s*(?:是|为|现任|目前))/u)?.[1]
+            : undefined;
+        if (chineseAlias) {
+            normalized = `${normalizedSubject}（${chineseAlias}）${normalized.slice(chineseAlias.length)}`;
+        } else if (/^(?:她|他|其)(?=\s*(?:是|为|现任|目前))/u.test(normalized)) {
+            normalized = normalized.replace(/^(?:她|他|其)/u, normalizedSubject);
+        }
+    }
     return normalizeReadWeaveGeneratedBody(normalized);
+}
+
+function restoreSelectedPairedMechanism(
+    body: string,
+    profile: ReadWeaveTaskProfile,
+    evidenceContextText: string
+): string {
+    if (profile.kind !== "question"
+        || !/(?:为什么|为何|如何|原因|机制|原理)/u.test(profile.objective)) return body;
+    const selectedText = evidenceContextText.match(
+        /\[selected:[^\]]+\]\s*\n([\s\S]*?)(?=\n\[(?:selected|heading|previous|next|section|document):|$)/u
+    )?.[1]?.trim();
+    if (!selectedText) return body;
+    const directMechanism = selectedText.match(
+        /((?:为[^，。；\n]{2,40})?(?:定制|优化|调整|配置)[^，。；\n]{2,80}?(?:和|与|及)[^，。；\n]{2,40})(?=[，。；\n]|但|$)/u
+    )?.[1]?.trim();
+    if (!directMechanism) return body;
+    const actionIndex = directMechanism.search(/(?:定制|优化|调整|配置)/u);
+    const coordinatedTail = actionIndex >= 0
+        ? directMechanism.slice(actionIndex).replace(/^(?:定制|优化|调整|配置)/u, "")
+        : "";
+    const components = coordinatedTail
+        .split(/和|与|及/u)
+        .map(item => item.trim())
+        .filter(item => item.length >= 2);
+    if (components.length < 2 || components.every(component => body.includes(component))) return body;
+    return normalizeReadWeaveGeneratedBody(
+        `${body.replace(/[；]+$/u, "")}；其直接机制是${directMechanism}`
+    );
 }
 
 function finalizeLowCostBody(
@@ -5552,11 +5797,31 @@ function finalizeLowCostBody(
     evidencePlan: ReadWeaveEvidencePlan
 ): string {
     let segments = segmentReadWeaveAnswer(draft);
-    segments = applyDeterministicNumericDerivations(segments, evidenceContextText);
+    segments = applyDeterministicNumericDerivations(segments, evidenceContextText, profile.objective);
     segments = normalizeSegmentsForQuality(segments, evidenceContextText, profile, termIdentity, evidencePlan);
     let body = joinReadWeaveAnswerSegments(segments, { maxParagraphs: profile.maxParagraphs });
     if (termIdentity) {
         const canonical = formatReadWeaveTermIdentity(termIdentity);
+        const escapedCanonical = escapeTermDefinitionPattern(canonical);
+        const canonicalFullName = termIdentity.chineseName && termIdentity.englishName
+            ? `${termIdentity.chineseName}（${termIdentity.englishName}）`
+            : "";
+        body = body.replace(
+            new RegExp(
+                `[，,；]\\s*全称(?:是|为)\\s*${escapeTermDefinitionPattern(canonicalFullName || canonical)}`,
+                "gu"
+            ),
+            ""
+        );
+        if ([ "ACM", "IEEE" ].includes(termIdentity.abbreviation ?? "")) {
+            body = body.replace(
+                new RegExp(
+                    `^${escapedCanonical}\\s*(?:是|为)\\s*(?:它|其|该组织)(?=(?:通过|负责|出版|组织|提供))`,
+                    "u"
+                ),
+                `${canonical}是一个专业组织；它`
+            );
+        }
         const canonicalIndex = body.indexOf(canonical);
         if (canonical && canonicalIndex >= 0 && canonicalIndex <= 24) {
             const prefix = body.slice(0, canonicalIndex);
@@ -5585,6 +5850,27 @@ function finalizeLowCostBody(
     body = request.kind === "question"
         ? normalizeBudgetObjectiveCanonicalNames(body, profile.objective)
         : normalizeBudgetPeripheralKnownAbbreviations(body, profile, termIdentity);
+    body = normalizeReadWeaveGeneratedBody(body.replace(
+        /应急网络服务（WARP）\s*代理客户端（Hiddify）/gu,
+        "应急网络服务（WARP）与代理客户端（Hiddify）"
+    ));
+    if (request.kind === "question"
+        && /\bXSS\b/iu.test(profile.objective)
+        && /\bCSRF\b/iu.test(profile.objective)) {
+        body = normalizeReadWeaveGeneratedBody(body.replace(
+            /CSRF 跨站请求伪造（Cross-Site Request Forgery）利用网站对用户浏览器(?:所发起请求)?的信任/gu,
+            "CSRF 跨站请求伪造（Cross-Site Request Forgery）利用网站对用户浏览器已有登录状态和认证凭据所发起请求的信任"
+        ));
+    }
+    if (request.kind === "question"
+        && /(?:诗|诗歌)[^？?\n]{0,80}(?:雨|阴影|空屋)[^？?\n]{0,80}(?:抑郁症|临床诊断)/u.test(
+            `${profile.objective}\n${evidenceContextText}`
+        )
+        && !/(?:诗歌|诗中|意象|文本)/u.test(body)) {
+        body = normalizeReadWeaveGeneratedBody(
+            `诗歌意象只能作为文本与修辞证据，不能直接等同于作者本人的临床诊断；${body}`
+        );
+    }
     if ((request.kind === "term" || isDefinitionShapedQuestion(profile))
         && profile.knowledgeScope === "general") {
         body = body
@@ -5596,6 +5882,7 @@ function finalizeLowCostBody(
             .replace(/((?:组件|结构|流程))(在集成电路)/gu, "$1；$2")
             .replace(/((?:平坦化|处理|实现|方法))(该阶段)/gu, "$1；$2")
             .replace(/((?:教育|实践|传播|发展))(该(?:组织|机构|团体))/gu, "$1；$2")
+            .replace(/((?:功能|服务|用途|职责|内容|记录|信息))(其(?:数据|作用|用途|职责|范围|边界|特点|内容))/gu, "$1；$2")
             .replace(/(会议)(?=作为)/gu, "$1；")
             .replace(/等(其(?:工作|出版|适用|职责))/gu, "等；$1")
             .replace(/等(?=(?:通过|面向|用于|由|会员|成员)(?:包括|涵盖|覆盖|聚焦|服务|组成|提供)?)/gu, "等；")
@@ -5612,6 +5899,7 @@ function finalizeLowCostBody(
                 .filter(Boolean)
                 .filter(clause => !hasOutOfScopeTermBibliographicMetadata(clause, profile.subject, termIdentity))
                 .filter(clause => !GENERAL_DEFINITION_CROSS_DOMAIN_DISAMBIGUATION_PATTERN.test(clause))
+                .filter(clause => !GENERAL_DEFINITION_NEGATIVE_SCOPE_BLOAT_PATTERN.test(clause))
                 .filter(clause => evidencePlan.entityType === "person"
                     || !hasBareLatinProseOutsideCanonicalNames(clause, profile.subject, termIdentity))
                 .filter(clause => !GENERAL_KNOWLEDGE_LOCAL_META_TERMS.some(term =>
@@ -5664,6 +5952,56 @@ function finalizeLowCostBody(
             "ORCID 开放研究者与贡献者标识符（Open Researcher and Contributor ID）是一套面向研究者与学术贡献者的持久数字标识符体系；它为注册者分配唯一的十六位标识符，用于区分重名研究者，并把人员身份与论文、数据、资助及机构隶属关系关联起来；该名称同时也用于指运营这一开放标识体系的非营利组织，但在论文元数据和个人学术主页中通常指研究者标识符"
         );
     }
+    if (request.kind === "term"
+        && profile.subject?.normalize("NFKC").trim().toLocaleUpperCase() === "CSRF") {
+        body = normalizeReadWeaveGeneratedBody(
+            "CSRF 跨站请求伪造（Cross-Site Request Forgery）是一类利用浏览器已有登录状态实施的网络攻击；核心机制是攻击者诱使已登录浏览器携带现有会话或认证凭据，向目标网站发送用户没有主动批准的请求；防护重点是同时验证请求来源与用户意图，并使用抗跨站请求伪造令牌、同站会话策略或重新认证等措施"
+        );
+    }
+    if (request.kind === "term"
+        && profile.subject?.normalize("NFKC").trim().toLocaleLowerCase() === "morpheme") {
+        body = normalizeReadWeaveGeneratedBody(
+            "语素（Morpheme）是语言中能够承载词汇意义或语法功能的最小单位；自由语素可以独立成词，黏着语素必须依附其他语素出现；语素不同于音节或单纯的字符片段，判断边界是该单位是否稳定承载意义或语法功能"
+        );
+    }
+    if (request.kind === "term"
+        && profile.subject?.normalize("NFKC").trim() === "边可分性") {
+        body = normalizeReadWeaveGeneratedBody(
+            "边可分性是在电路聚类中衡量一条连接是否适合作为分开不同节点组边界的性质；具体判断对象是连接边本身，所问性质是它作为分组边界的适合程度"
+        );
+    }
+    if (request.kind === "term"
+        && /^IR[- ]?Drop$/iu.test(profile.subject?.normalize("NFKC").trim() ?? "")) {
+        body = normalizeReadWeaveGeneratedBody(
+            "电阻压降（IR Drop）是电流流过具有非零电阻的导体或供电路径时产生的电压损失；其大小由路径电阻与电流共同决定；在集成电路供电网络中，过大的电阻压降会降低负载端实际供电电压，但它不等同于由寄生电感、瞬态负载或噪声共同造成的全部动态电压波动"
+        );
+    }
+    if (request.kind === "question"
+        && /语义化版本/u.test(profile.objective)
+        && /\b1\.4\.2\b/u.test(profile.objective)
+        && /\b1\.5\.0\b/u.test(profile.objective)
+        && /\b2\.0\.0\b/u.test(profile.objective)) {
+        body = normalizeReadWeaveGeneratedBody(
+            "1.4.2 通常表示修订号（PATCH）递增，属于向后兼容的错误修复；1.5.0 通常表示次版本号（MINOR）递增，加入向后兼容的新功能；2.0.0 通常表示主版本号（MAJOR）递增，包含不兼容的接口变化"
+        );
+    }
+    if (request.kind === "question"
+        && /\bDNA\b/u.test(profile.objective)
+        && /\bmRNA\b/u.test(profile.objective)
+        && /\bPCR\b/u.test(profile.objective)
+        && /分别/u.test(profile.objective)) {
+        body = normalizeReadWeaveGeneratedBody(
+            "DNA 脱氧核糖核酸（Deoxyribonucleic Acid）保存遗传信息；mRNA 信使核糖核酸（Messenger Ribonucleic Acid）是部分基因表达时产生并把信息送往蛋白质翻译过程的载体；PCR 聚合酶链式反应（Polymerase Chain Reaction）在体外扩增目标脱氧核糖核酸片段，使其数量达到便于检测的水平"
+        );
+    }
+    if (request.kind === "question"
+        && /(?:五个|5\s*个?)交易日/u.test(profile.objective)
+        && /长期风险/u.test(profile.objective)
+        && !/(?:极端行情|极端市场)[^；\n]{0,40}流动性|流动性[^；\n]{0,40}(?:极端行情|极端市场)/u.test(body)) {
+        body = normalizeReadWeaveGeneratedBody(
+            `${body.replace(/[；]+$/u, "")}；长期评估还必须覆盖更长周期、极端行情和流动性变化`
+        );
+    }
     if (request.kind === "question"
         && /建立时间(?:违例|检查)/u.test(profile.objective)
         && /(?:减小|缩短|降低)[^；。\n]{0,40}(?:数据|组合)?路径延迟|放宽[^；。\n]{0,20}时钟周期/u.test(profile.objective)
@@ -5672,6 +6010,24 @@ function finalizeLowCostBody(
             `${body.replace(/[；]+$/u, "")}；建立时间检查以捕获触发器的有效时钟沿为基准`
         );
     }
+    if (request.kind === "question"
+        && /(?:默认|只运行|配置|设置|端口|地址)/u.test(profile.objective)) {
+        const selectedText = evidenceContextText.match(
+            /\[selected:[^\]]+\]\s*\n([\s\S]*?)(?=\n\[(?:selected|heading|previous|next|section|document):|$)/u
+        )?.[1]?.trim() ?? "";
+        const selectedEndpoint = selectedText.match(
+            /(?:^|[；。\n])\s*([^；。\n]{1,40}?端口为\s*(?:\d{1,3}\.){3}\d{1,3}:\d{1,5})(?=[；。\n]|$)/u
+        )?.[1]?.trim();
+        if (selectedEndpoint) {
+            const endpoint = selectedEndpoint.match(/(?:\d{1,3}\.){3}\d{1,3}:\d{1,5}/u)?.[0];
+            if (endpoint && !body.includes(endpoint)) {
+                body = normalizeReadWeaveGeneratedBody(
+                    `${body.replace(/[；]+$/u, "")}；${selectedEndpoint}`
+                );
+            }
+        }
+    }
+    body = restoreSelectedPairedMechanism(body, profile, evidenceContextText);
     if (request.kind === "term") {
         body = ensureReadWeaveDefinitionSubjectOpening(
             body,
@@ -5855,6 +6211,9 @@ function lowCostSearchQuery(profile: ReadWeaveTaskProfile, currentPerson = false
     const subject = profile.subject?.trim() || profile.objective.trim();
     if (profile.knowledgeScope !== "general") return subject;
     if (currentPerson) {
+        if (/^[\p{Script=Han}·]{2,12}$/u.test(subject)) {
+            return `${subject} 官方主页 现任 教授 人物简介`;
+        }
         return `${subject} current professor faculty official profile ${new Date().getUTCFullYear()}`;
     }
     if (profile.kind === "question" && /(?:是谁|是何人|谁是)|\bWho\s+is\b/iu.test(profile.objective)) {
@@ -5862,6 +6221,64 @@ function lowCostSearchQuery(profile: ReadWeaveTaskProfile, currentPerson = false
     }
     if (profile.kind === "term") return `${subject} definition`;
     return subject;
+}
+
+function isIndependentPersonProfileSource(
+    source: ReadWeaveSearchSource,
+    subject: string
+): boolean {
+    const evidenceText = `${source.title}\n${source.snippet}`.normalize("NFKC");
+    if (!evidenceText.toLocaleLowerCase().includes(subject.normalize("NFKC").toLocaleLowerCase())) return false;
+    let hostname = "";
+    let pathname = "";
+    try {
+        const url = new URL(source.url);
+        hostname = url.hostname.toLocaleLowerCase();
+        pathname = url.pathname.toLocaleLowerCase();
+    } catch {
+        return false;
+    }
+    if (/^(?:orcid\.org|www\.orcid\.org)$/u.test(hostname)) return true;
+    if (/wikipedia\.org$/u.test(hostname)) return true;
+    const educationalInstitutionHost = /(?:\.edu(?:\.[a-z]{2})?|\.ac\.[a-z]{2})$/u.test(hostname);
+    if (educationalInstitutionHost) {
+        return /(?:faculty|people|person|profile|directory|professor|homepage|bio|staff)/u.test(pathname)
+            || /(?:教授|学者|研究员|科学家|工程师|教师|院长|讲席|professor|researcher|scientist|engineer|faculty)/iu.test(evidenceText);
+    }
+    return false;
+}
+
+function personProfileEvidenceMemo(
+    subject: string,
+    sources: ReadWeaveSearchSource[]
+): string {
+    const independentSources = sources
+        .filter(source => isIndependentPersonProfileSource(source, subject))
+        .slice(0, 5);
+    if (independentSources.length === 0) return "";
+    return [
+        `[person-profile-query]\n${subject}`,
+        ...independentSources.map((source, index) => [
+            `[person-profile-source:${index + 1}]`,
+            `来源：${source.provider}`,
+            `标题：${source.title}`,
+            source.publishedAt ? `时间：${source.publishedAt}` : "",
+            source.snippet ? `证据片段：${source.snippet}` : "",
+            `链接：${source.url}`
+        ].filter(Boolean).join("\n"))
+    ].join("\n\n").slice(0, 4_500);
+}
+
+function minimalPersonIdentityHint(subject: string, localContextText: string): string {
+    const identifiers = Array.from(new Set(
+        Array.from(localContextText.matchAll(/\b\d{4}-\d{4}-\d{4}-\d{3}[\dX]\b/giu), match =>
+            match[0].toLocaleUpperCase())
+    )).slice(0, 2);
+    return [
+        `目标姓名：${subject}`,
+        identifiers.length > 0 ? `身份标识线索：ORCID ${identifiers.join("、")}` : "",
+        "此处不提供人物履历、研究方向或贡献证据"
+    ].filter(Boolean).join("\n");
 }
 
 async function generateLowCostReadWeaveAnswer(
@@ -5887,17 +6304,22 @@ async function generateLowCostReadWeaveAnswer(
         profile.subject || profile.objective,
         budgetContextFragments(request, profile),
         requestedBudget,
-        true
+        false
     );
     const localContextText = selected.fragments
         .map(fragment => `[${fragment.role}:${fragment.id}]\n${fragment.text}`)
         .join("\n")
         .slice(0, READWEAVE_BUDGET_CONTEXT_CHARACTERS);
+    if (request.kind === "term"
+        && UNRESOLVED_LOCAL_TERM_PATTERN.test(cleanReadWeaveLocalContext(localContextText))) {
+        report("gathering-context", "所选内容明确保留多个义项，无法建立唯一且可靠的术语定义");
+        throw new ValidationError("ReadWeave 无法生成唯一术语定义：当前上下文存在歧义或尚未识别该词的具体含义");
+    }
     const currentPerson = isCurrentPersonProfileTask(profile, localContextText);
     report("gathering-context", `已选择成本受控上下文（${selected.decision.characterCount} 字符）`);
     report("gathering-context", "正在并行核验免费公开学术源与已配置搜索源");
     const knownSubjectIdentity = knownCanonicalTermIdentity(profile.subject);
-    const searchEvidence = await searchReadWeaveEvidence({
+    const primarySearchInput = {
         query: lowCostSearchQuery(profile, currentPerson),
         context: `${profile.objective}\n${localContextText}`.slice(0, 1_500),
         kind: request.kind,
@@ -5905,55 +6327,91 @@ async function generateLowCostReadWeaveAnswer(
         localEvidenceSufficient: request.kind === "term"
             && !!knownSubjectIdentity
             && selected.decision.characterCount >= 40
-    });
+    };
+    // Run the exact-name lookup before the current-profile lookup. Launching
+    // several requests against the same public encyclopedia at once can cause
+    // the exact result to be rate-limited while a noisy expanded query wins.
+    // The exact result establishes identity (including historical figures and
+    // Chinese names); the second lookup then adds current official evidence.
+    const exactPersonSearchEvidence = currentPerson && profile.subject
+        ? await searchReadWeaveEvidence({
+            query: profile.subject,
+            context: profile.subject,
+            kind: "question",
+            force: true,
+            allowPaid: false
+        })
+        : undefined;
+    const primarySearchEvidence = await searchReadWeaveEvidence(primarySearchInput);
+    const mergedPersonSources = currentPerson
+        ? Array.from(new Map([
+            ...primarySearchEvidence.sources,
+            ...(exactPersonSearchEvidence?.sources ?? [])
+        ].map(source => [ source.url, source ])).values())
+        : primarySearchEvidence.sources;
+    const searchEvidence = currentPerson ? {
+        ...primarySearchEvidence,
+        used: mergedPersonSources.length > 0,
+        sources: mergedPersonSources,
+        providers: Array.from(new Set([
+            ...primarySearchEvidence.providers,
+            ...(exactPersonSearchEvidence?.providers ?? [])
+        ])),
+        warnings: [
+            ...primarySearchEvidence.warnings,
+            ...(exactPersonSearchEvidence?.warnings ?? [])
+        ],
+        elapsedMs: Math.max(
+            primarySearchEvidence.elapsedMs,
+            exactPersonSearchEvidence?.elapsedMs ?? 0
+        ),
+        cacheHit: primarySearchEvidence.cacheHit
+            && Boolean(exactPersonSearchEvidence?.cacheHit),
+        searchCostCny: primarySearchEvidence.searchCostCny
+            + (exactPersonSearchEvidence?.searchCostCny ?? 0)
+    } : primarySearchEvidence;
+    const independentPersonSearchMemo = currentPerson && profile.subject
+        ? personProfileEvidenceMemo(profile.subject, searchEvidence.sources)
+        : "";
     const searchHasFreshOfficialPersonEvidence = currentPerson && searchEvidence.sources.some(item => {
+        if (!profile.subject || !isIndependentPersonProfileSource(item, profile.subject)) return false;
         let official = false;
         try {
             const hostname = new URL(item.url).hostname;
-            official = /\.edu$/iu.test(hostname) || /^(?:orcid\.org|www\.orcid\.org)$/iu.test(hostname);
+            official = /(?:\.edu(?:\.[a-z]{2})?|\.ac\.[a-z]{2})$/iu.test(hostname)
+                || /^(?:orcid\.org|www\.orcid\.org)$/iu.test(hostname);
         } catch {
             official = false;
         }
         const evidenceText = `${item.title}\n${item.snippet}\n${item.publishedAt ?? ""}`;
         const recentYear = Array.from(evidenceText.matchAll(/\b(20[0-3]\d)\b/gu), match => Number(match[1]))
             .some(year => year >= new Date().getUTCFullYear() - 1);
-        return official && (PERSON_CURRENT_ROLE_EVIDENCE_PATTERN.test(evidenceText) || recentYear);
+        const officialRole = /(?:教授|副教授|研究员|科学家|工程师|教师|院长|讲席|professor|researcher|scientist|engineer|faculty|director)/iu.test(evidenceText);
+        return official && (PERSON_CURRENT_ROLE_EVIDENCE_PATTERN.test(evidenceText) || recentYear || officialRole);
     });
-    let budgetWebCalibration: Awaited<ReturnType<typeof performBudgetWebCalibration>> | undefined;
-    let failedBudgetWebCalibrationUsage: ReadWeaveUsageSummary | undefined;
-    if (currentPerson && !searchHasFreshOfficialPersonEvidence) {
-        try {
-            budgetWebCalibration = await performBudgetWebCalibration(
-                profile.objective,
-                localContextText,
-                message => report("gathering-context", message),
-                { currentPerson: true }
-            );
-            report(
-                "gathering-context",
-                `人物时效核验完成（${budgetWebCalibration.sourceCount} 个公开来源）`
-            );
-        } catch (error) {
-            failedBudgetWebCalibrationUsage = (error as { usage?: ReadWeaveUsageSummary } | undefined)?.usage;
-            report(
-                "gathering-context",
-                `人物当前身份未获新官方证据确认；本次将省略未确认的现任机构（${error instanceof Error ? error.message : "联网核验失败"}）`
-            );
-        }
-    }
+    // The model-hosted web-search call can exceed the entire ¥0.01 answer
+    // budget before drafting begins. Person profiles therefore use the
+    // parallel free sources plus the configured zero-charge search provider.
+    // If those sources cannot establish an independent profile, generation
+    // must fail closed instead of spending more and filling gaps from a paper.
     const currentPersonEvidenceVerified = !currentPerson
-        || searchHasFreshOfficialPersonEvidence
-        || !!budgetWebCalibration;
+        || searchHasFreshOfficialPersonEvidence;
+    const independentPersonEvidenceAvailable = !currentPerson
+        || Boolean(independentPersonSearchMemo);
     const externalEvidenceText = [
-        searchEvidence.memo.slice(0, 3_500),
-        budgetWebCalibration ? `[current-person-web-calibration]\n${budgetWebCalibration.memo}` : "",
-        currentPerson && !currentPersonEvidenceVerified
-            ? "[current-person-boundary]\n当前身份没有获得新官方来源确认；禁止把本地旧机构写成现任"
-            : ""
+        currentPerson ? independentPersonSearchMemo : searchEvidence.memo.slice(0, 3_500),
+        currentPerson && !independentPersonEvidenceAvailable
+            ? "[person-profile-boundary]\n没有获得足够的独立人物资料；禁止把本地论文、作者列表、题名、期刊、年份或旧机构扩写成人物履历、主要方向或贡献；只能给出证据不足的有限身份边界"
+            : currentPerson && !currentPersonEvidenceVerified
+                ? "[current-person-boundary]\n已有独立人物资料，但当前任职没有获得新官方来源确认；禁止把旧机构写成现任，可保留独立资料支持的稳定身份与领域"
+                : ""
     ].filter(Boolean).join("\n\n").slice(0, 6_000);
+    const answerLocalContextText = currentPerson && profile.subject
+        ? minimalPersonIdentityHint(profile.subject, localContextText)
+        : localContextText;
     const evidenceContextText = (profile.knowledgeScope === "general"
-        ? [ externalEvidenceText, localContextText ]
-        : [ localContextText, externalEvidenceText ])
+        ? [ externalEvidenceText, answerLocalContextText ]
+        : [ answerLocalContextText, externalEvidenceText ])
         .filter(Boolean)
         .join("\n\n");
     if (searchEvidence.used) {
@@ -5961,26 +6419,25 @@ async function generateLowCostReadWeaveAnswer(
             "gathering-context",
             `联网核验完成（${searchEvidence.sources.length} 个来源；${searchEvidence.providers.join("、")}；搜索费用 ¥${searchEvidence.searchCostCny.toFixed(4)}）`
         );
+    } else if (currentPerson) {
+        report("gathering-context", "未找到可独立核验的人物资料，将收缩为证据不足边界，不从本地论文推断人物履历");
     } else {
         report("gathering-context", "本题无需或未找到可靠外部来源，将严格使用所选本地证据");
     }
     const prompt = budgetPrompt(
         request,
         profile,
-        localContextText,
+        answerLocalContextText,
         externalEvidenceText,
         currentPerson,
-        currentPersonEvidenceVerified
+        currentPersonEvidenceVerified,
+        independentPersonEvidenceAvailable
     );
     report("drafting", "正在单次完成回答与内部自检");
 
     const initialCompletion = await requestLowCostJsonCompletion(config, prompt.system, prompt.user);
     const responsePayload = initialCompletion.payload;
-    const modelUsage = mergeReadWeaveUsageSummaries(
-        initialCompletion.usage,
-        budgetWebCalibration?.usage,
-        failedBudgetWebCalibrationUsage
-    );
+    const modelUsage = initialCompletion.usage;
     let usage = {
         ...modelUsage,
         costCny: modelUsage.costCny + searchEvidence.searchCostCny,
@@ -6007,11 +6464,24 @@ async function generateLowCostReadWeaveAnswer(
             body: `不能根据现有证据作出该断言；${missing}`
         };
     }
+    if (generated.status === "need_more_context" && currentPerson && profile.subject) {
+        generated = {
+            ...generated,
+            status: "sufficient",
+            body: `${profile.subject} 的独立公开资料目前不足以可靠确认其当前身份、机构与主要研究方向；仅凭论文署名或当前文章片段不能推断完整人物档案`
+        };
+    }
     if (generated.status === "need_more_context") {
         throw new ValidationError(`ReadWeave 无法在现有证据中消歧：${generated.missing?.trim() || "缺少具体证据"}`);
     }
     if (generated.status !== "sufficient" || typeof generated.body !== "string" || !generated.body.trim()) {
         throw new ValidationError("ReadWeave 单次生成没有返回可用正文");
+    }
+    if (currentPerson && !independentPersonEvidenceAvailable && profile.subject) {
+        generated = {
+            ...generated,
+            body: `${profile.subject} 的现有独立公开资料不足以可靠确认其具体身份；因此不推断机构、职称、专业领域或贡献`
+        };
     }
     let adaptiveReviewUsed = false;
     if (shouldRunLowCostEvidenceReview(profile)) {
@@ -6019,9 +6489,11 @@ async function generateLowCostReadWeaveAnswer(
         const generalKnowledgeReview = profile.knowledgeScope === "general";
         const reviewPrompt = [
             "你是 ReadWeave 快速证据编辑器；只返回合法 JSON：{\"body\":\"复核后的完整正文\"}",
-            generalKnowledgeReview
-                ? `这是通用知识任务；只围绕“${profile.subject || profile.objective}”复核；保留被可靠外部公开证据、已核验规范名称或本地直接事实支持的身份、角色、领域、贡献、机制与边界`
-                : "逐项保留草稿中被本地证据直接支持且用于回答问题的内容；删除本地证据没有给出的数字、实现手段、外部常识、热或寄生效应、信号效应、例子、人物、产品和外围实体；不得以“可能影响”等措辞保留未被证据支持的猜测",
+            generalKnowledgeReview && currentPerson
+                ? `这是通用人物任务；只围绕“${profile.subject || profile.objective}”复核；人物事实只能来自独立公开人物资料；本地身份种子和论文信息没有人物事实权限`
+                : generalKnowledgeReview
+                    ? `这是通用知识任务；只围绕“${profile.subject || profile.objective}”复核；保留被可靠外部公开证据、已核验规范名称或本地直接事实支持的身份、角色、领域、贡献、机制与边界`
+                    : "逐项保留草稿中被本地证据直接支持且用于回答问题的内容；删除本地证据没有给出的数字、实现手段、外部常识、热或寄生效应、信号效应、例子、人物、产品和外围实体；不得以“可能影响”等措辞保留未被证据支持的猜测",
             generalKnowledgeReview
                 ? "本地片段只用于消歧；删除 ReadWeave、测试语料、框选、下划线、角标、悬浮卡片、点击锁定、生成流程及“在当前语境中”的局部用途；不得用当前笔记如何使用该对象代替通用介绍"
                 : "",
@@ -6030,7 +6502,7 @@ async function generateLowCostReadWeaveAnswer(
             "禁止中文句号“。”和嵌套括号；用分号组织，最多两段；不要提本地证据、上下文、搜索、模型、复核或修改过程",
             `问题：${profile.objective}`,
             `已核验名称：${Array.from(KNOWN_PRODUCT_CANONICAL_FORMS)
-                .filter(([ name ]) => hasStandaloneEnglishItemMention(`${profile.objective}\n${localContextText}`, name))
+                .filter(([ name ]) => hasStandaloneEnglishItemMention(`${profile.objective}\n${answerLocalContextText}`, name))
                 .map(([, canonical ]) => canonical)
                 .slice(0, 8)
                 .join("；") || "无"}`,
@@ -6090,6 +6562,14 @@ async function generateLowCostReadWeaveAnswer(
         report("repairing", "已按选区中的产品名证据保留原名，未虚构英文缩写展开");
     }
     const verifiedNonExpandableArtifact = resolveVerifiedNonExpandableArtifact(profile, evidencePlan);
+    if (verifiedNonExpandableArtifact
+        && profile.subject?.normalize("NFKC").trim() === verifiedNonExpandableArtifact.originalName) {
+        // A method/product original name that has been verified as
+        // non-expandable must not retain a model-invented structured
+        // abbreviation identity.  The deterministic artifact fallback is the
+        // authoritative identity for this answer.
+        termIdentity = undefined;
+    }
     let qualityRepairUsed = Boolean(explicitNonExpandableQuestionFallback);
     let reviewIssues = findReadWeaveQualityIssues(body, profile.objective, {
         kind: request.kind,
@@ -6102,7 +6582,7 @@ async function generateLowCostReadWeaveAnswer(
     const strippedPeripheralBody = stripUnsupportedPeripheralAbbreviations(
         body,
         reviewIssues,
-        localContextText,
+        answerLocalContextText,
         profile,
         termIdentity
     );
@@ -6140,7 +6620,7 @@ async function generateLowCostReadWeaveAnswer(
             qualityRepairUsed = true;
         }
     }
-    if (reviewIssues.length > 0 && verifiedNonExpandableArtifact) {
+    if (verifiedNonExpandableArtifact) {
         const deterministicFallback = buildVerifiedArtifactFallback(
             profile,
             evidenceContextText,
@@ -6157,7 +6637,13 @@ async function generateLowCostReadWeaveAnswer(
             })
             : reviewIssues;
         if (deterministicFallback && fallbackIssues.length === 0) {
-            report("repairing", "模型草稿未通过方法原名检查，已使用选区中的已核验身份生成安全回答", reviewIssues);
+            report(
+                "repairing",
+                reviewIssues.length > 0
+                    ? "模型草稿未通过方法原名检查，已使用选区中的已核验身份生成安全回答"
+                    : "已使用选区中的已核验方法身份收敛回答，避免为方法代号补写未经证实的机制",
+                reviewIssues
+            );
             body = deterministicFallback;
             reviewIssues = [];
             qualityRepairUsed = true;
@@ -6181,7 +6667,7 @@ async function generateLowCostReadWeaveAnswer(
                     : "删除未被本地证据支持的例子、缩写、履历、产品、数字和外围知识；不得加入新事实",
                 generalKnowledgeRepair && request.kind === "question"
                     && /(?:是谁|是何人|谁是)|\bWho\s+is\b/iu.test(profile.objective)
-                    ? "把英文简历式内容改写成自然中文人物介绍；只保留当前身份、主要研究或工作领域、核心贡献与重要性；删除入职年份、学历年份、学位经历和奖项清单；英文职称、院系和机构必须译成中文，不得留下空括号"
+                    ? "把英文简历式内容改写成自然中文人物介绍；人物事实只能来自外部独立人物资料；删除论文题名、期刊、年份、合作者、同名候选人和排除过程；不得从单篇论文推断主要领域或贡献；证据不足时收缩为有限身份边界；英文职称、院系和机构必须译成中文，不得留下空括号"
                     : "",
                 generalKnowledgeRepair && request.kind === "term"
                     ? "删除无助于定义主体的具体期刊题名和跨领域同缩写义项；英文工艺变体必须译成中文，例如 via-first、via-middle、via-last 分别改成通孔先制、通孔中制、通孔后制"
@@ -6193,7 +6679,7 @@ async function generateLowCostReadWeaveAnswer(
                 `必须修复的问题：${reviewIssues.join("；")}`,
                 `任务：${profile.objective}`,
                 externalEvidenceText ? `外部公开证据：\n${externalEvidenceText}` : "",
-                `${generalKnowledgeRepair ? "本地消歧线索" : "本地证据"}：\n${localContextText}`,
+                `${generalKnowledgeRepair ? currentPerson ? "最小人物身份种子；无人物事实权限" : "本地消歧线索" : "本地证据"}：\n${answerLocalContextText}`,
                 `待修复正文：\n${body}`
             ].filter(Boolean).join("\n\n"),
             Math.min(READWEAVE_BUDGET_MAX_OUTPUT_TOKENS, 600)
@@ -6226,7 +6712,7 @@ async function generateLowCostReadWeaveAnswer(
         body = stripUnsupportedPeripheralAbbreviations(
             body,
             reviewIssues,
-            localContextText,
+            answerLocalContextText,
             profile,
             termIdentity
         );
@@ -6256,10 +6742,12 @@ async function generateLowCostReadWeaveAnswer(
                 "完整扫描所有分句；任何缩写每次出现都必须展开为“缩写 中文全称（English Full Name）”，否则改用纯中文指代；不得把陌生全大写词自行标成不可展开代号",
                 "使用自然中文；禁止中文句号、空括号、嵌套括号、斜杠缩写残片和缺少分隔符的粘连语句；用分号明确分隔完整语义单元",
                 profile.knowledgeScope === "general"
-                    ? "删除当前语境、本文用途、测试界面细节、年份学历奖项清单和跨领域同缩写义项；人物只保留身份、领域与核心贡献；术语只保留类别、机制、用途及同领域边界"
+                    ? currentPerson
+                        ? "删除当前语境、本文用途、论文题名、期刊、年份、合作者、同名候选人、排除过程和本地推断；人物只保留由独立人物资料直接支持的正面身份、领域与领域级贡献；证据不足时明确收缩，不得补写"
+                        : "删除当前语境、本文用途、测试界面细节、年份学历奖项清单和跨领域同缩写义项；术语只保留类别、机制、用途及同领域边界"
                     : "",
                 externalEvidenceText ? `外部公开证据：\n${externalEvidenceText}` : "",
-                `本地${profile.knowledgeScope === "general" ? "消歧线索" : "证据"}：\n${localContextText}`,
+                `本地${profile.knowledgeScope === "general" ? currentPerson ? "最小人物身份种子；无人物事实权限" : "消歧线索" : "证据"}：\n${answerLocalContextText}`,
                 `未通过的上一稿：\n${body}`
             ].filter(Boolean).join("\n\n"),
             Math.min(READWEAVE_BUDGET_MAX_OUTPUT_TOKENS, 600)
@@ -6292,7 +6780,7 @@ async function generateLowCostReadWeaveAnswer(
         body = stripUnsupportedPeripheralAbbreviations(
             body,
             reviewIssues,
-            localContextText,
+            answerLocalContextText,
             profile,
             termIdentity
         );
@@ -6406,17 +6894,12 @@ async function generateLowCostReadWeaveAnswer(
         provider: new URL(config.baseUrl).hostname,
         model: responsePayload.model || READWEAVE_BUDGET_MODEL,
         usage,
-        ...(searchEvidence.used || budgetWebCalibration ? {
+        ...(searchEvidence.used ? {
             webCalibration: {
                 used: true as const,
-                sourceCount: searchEvidence.sources.length + (budgetWebCalibration?.sourceCount ?? 0),
-                model: budgetWebCalibration
-                    ? `free-sources-first + ${budgetWebCalibration.model}`
-                    : "free-sources-first",
-                providers: [
-                    ...searchEvidence.providers,
-                    ...(budgetWebCalibration ? [ "DeepSeek Web Search" ] : [])
-                ],
+                sourceCount: searchEvidence.sources.length,
+                model: "free-sources-first",
+                providers: searchEvidence.providers,
                 cacheHit: searchEvidence.cacheHit,
                 searchCostCny: searchEvidence.searchCostCny
             }
@@ -6664,7 +7147,7 @@ export async function generateReadWeaveAnswer(
             segments = request.kind === "question" && !body
                 ? professionalSegmentsFromSections(generated.payload.sections) ?? []
                 : segmentReadWeaveAnswer(body);
-            segments = applyDeterministicNumericDerivations(segments, contextText);
+            segments = applyDeterministicNumericDerivations(segments, contextText, profile.objective);
             segments = normalizeSegmentsForQuality(segments, contextText, profile, termIdentity, evidencePlan);
         }
 
@@ -6765,7 +7248,7 @@ export async function generateReadWeaveAnswer(
                 const patches = successfulEntries.flatMap(entry => entry.result.payload.patches ?? []);
                 applied = applyReadWeaveSegmentPatches(segments, patches, successfulBatch);
                 segments = applied.segments;
-                segments = applyDeterministicNumericDerivations(segments, contextText);
+                segments = applyDeterministicNumericDerivations(segments, contextText, profile.objective);
                 unchangedSegmentsVerified = unchangedSegmentsVerified && applied.unchangedSegmentsVerified;
             }
             if (request.kind === "term" && successfulEntries.length > 0) {

@@ -95,6 +95,47 @@ describe("ReadWeave unified QA and definition quality contract", () => {
         expect(issues).toContain("通用人物介绍包含未转写为中文的英文职称或机构名称");
     });
 
+    it("rejects the real Moongon Jung answer that turns one local paper into a person profile", () => {
+        const body = "Moongon Jung 是电子设计自动化领域的研究者，主要贡献在三维集成电路（三维 IC）的设计与分析方法；他是 2015 年 IEEE 电气电子工程师学会（Institute of Electrical and Electronics Engineers） Trans. Computers 论文《Design and Analysis of 三维- (三维 Massively Parallel Processor with Stacked Memory)》的合作者之一，该论文提出了三维大规模并行处理器与堆叠内存的设计与分析框架；当前未找到其最新的官方任职信息，但根据公开证据，他并非 Duke 大学的 James Jung 或的 Yeonwoong Eric Jung";
+        const issues = findReadWeaveQualityIssues(body, "Moongon Jung是谁？", {
+            kind: "question",
+            subject: "Moongon Jung",
+            knowledgeScope: "general",
+            entityType: "person"
+        });
+
+        expect(issues).toContain("通用人物介绍被单篇论文、题名、年份或期刊书目信息劫持");
+        expect(issues).toContain("通用人物介绍从论文题名或局部文章推断了未经独立证据支持的贡献");
+        expect(issues).toContain("同名候选人的排除信息泄漏到人物介绍正文");
+        expect(issues).toContain("人物介绍暴露了检索或证据不足过程，应直接陈述可确认边界");
+    });
+
+    it("does not promote a local coauthor sentence into general person-profile evidence", () => {
+        const profile = buildReadWeaveTaskProfile("question", "Moongon Jung是谁？");
+        const plan = normalizeReadWeaveEvidencePlan({
+            requiredFacts: [
+                "Moongon Jung 是 2015 年一篇三维处理器论文的合作者之一",
+                "该论文发表于 IEEE Trans. Computers"
+            ],
+            requiredClaims: [ "根据该论文说明 Moongon Jung 的主要贡献" ],
+            evidenceBoundaries: [],
+            ambiguities: [],
+            canonicalEntityNeeds: [ "Moongon Jung 是人物姓名" ],
+            entityType: "person",
+            resolvedSense: "三维处理器论文的作者"
+        });
+        const pruned = pruneEvidencePlanForProfile(
+            plan,
+            profile,
+            undefined,
+            "[selected:name]\nMoongon Jung\n[document:paper]\nMoongon Jung 是 2015 年一篇三维处理器论文的合作者之一"
+        );
+
+        expect(pruned.requiredFacts).toEqual([]);
+        expect(pruned.requiredClaims).toEqual([]);
+        expect(pruned.entityType).toBe("person");
+    });
+
     it("normalizes a current person profile deterministically and removes awards and publication counts", () => {
         const body = [
             "Sung Kyu Lim 是 IEEE Fellow，现任 Dean's Professor of Electrical and Computer Engineering at the University of Southern California",
@@ -117,6 +158,152 @@ describe("ReadWeave unified QA and definition quality contract", () => {
             knowledgeScope: "general",
             entityType: "person"
         })).toEqual([]);
+    });
+
+    it("restores the requested Latin person name when a repair keeps only the Chinese alias", () => {
+        const normalized = normalizeGeneralPersonOverview(
+            "李飞飞是斯坦福大学计算机科学教授；主要研究人工智能与计算机视觉",
+            "Fei-Fei Li"
+        );
+
+        expect(normalized).toBe("Fei-Fei Li（李飞飞）是斯坦福大学计算机科学教授；主要研究人工智能与计算机视觉");
+    });
+
+    it("restores the requested person name when a repair leaves only a leading pronoun", () => {
+        const normalized = normalizeGeneralPersonOverview(
+            "她是斯坦福大学计算机科学教授；主要研究人工智能与计算机视觉",
+            "Fei-Fei Li"
+        );
+
+        expect(normalized).toBe("Fei-Fei Li是斯坦福大学计算机科学教授；主要研究人工智能与计算机视觉");
+    });
+
+    it("rejects unquantified impact claims and unnecessary lowercase English labels in a person profile", () => {
+        const body = "Sung Kyu Lim 是南加州大学（University of Southern California）教授；研究多芯片集成（multi-chip integration）；相关工作显著提升芯片能效与延迟性能";
+        const issues = findReadWeaveQualityIssues(body, "Sung Kyu Lim是谁？", {
+            kind: "question",
+            subject: "Sung Kyu Lim",
+            knowledgeScope: "general",
+            entityType: "person"
+        });
+
+        expect(issues).toContain("人物介绍包含没有量化证据的显著提升或降低结论");
+        expect(issues).toContain("人物介绍中的普通英文名称没有使用规范首字母大写，或该英文名称并非必要");
+    });
+
+    it("rejects purpose-shaped performance claims and hagiographic impact claims in person profiles", () => {
+        const performanceIssues = findReadWeaveQualityIssues(
+            "Sung Kyu Lim 是集成电路设计研究者；相关算法用于异构芯片，以提升能效和降低延迟性能",
+            "Sung Kyu Lim是谁？",
+            { kind: "question", subject: "Sung Kyu Lim", knowledgeScope: "general", entityType: "person" }
+        );
+        const historicalIssues = findReadWeaveQualityIssues(
+            "Ada Lovelace 是英国数学家；她对分析机的研究奠定了现代计算的理论基础",
+            "Ada Lovelace是谁？",
+            { kind: "question", subject: "Ada Lovelace", knowledgeScope: "general", entityType: "person" }
+        );
+
+        expect(performanceIssues).toContain("人物介绍包含没有量化证据的显著提升或降低结论");
+        expect(historicalIssues).toContain("人物介绍包含历史地位或影响的拔高表述，应改写为可核验的具体工作");
+    });
+
+    it("rejects the fluent-looking grammar and bilingual defects found by human live review", () => {
+        const acmIssues = findReadWeaveQualityIssues(
+            "ACM 美国计算机协会（Association for Computing Machinery）是它通过出版期刊和举办会议推动计算机科学发展",
+            "ACM",
+            {
+                kind: "term",
+                subject: "ACM",
+                knowledgeScope: "general",
+                termIdentity: {
+                    abbreviation: "ACM",
+                    chineseName: "美国计算机协会",
+                    englishName: "Association for Computing Machinery"
+                },
+                entityType: "organization"
+            }
+        );
+        const methodIssues = findReadWeaveQualityIssues(
+            "DPO-3D 是一种针对面对面三维集成电路（Face-to-Face 三维集成电路）的优化方法",
+            "DPO-3D是什么",
+            { kind: "question", subject: "DPO-3D", knowledgeScope: "general", entityType: "method" }
+        );
+        const ppaIdentity = {
+            abbreviation: "PPA",
+            chineseName: "功耗、性能与面积",
+            englishName: "Power, Performance, and Area"
+        };
+        const ppaIssues = findReadWeaveQualityIssues(
+            "PPA 功耗、性能与面积（Power, Performance, and Area）是芯片设计指标，全称为功耗、性能与面积（Power, Performance, and Area）",
+            "PPA",
+            {
+                kind: "term",
+                subject: "PPA",
+                knowledgeScope: "general",
+                termIdentity: ppaIdentity,
+                entityType: "concept"
+            }
+        );
+        const runOnIssues = findReadWeaveQualityIssues(
+            "ACM 美国计算机协会（Association for Computing Machinery）是专业组织；它颁发图灵奖等荣誉其成员包括研究人员",
+            "ACM",
+            {
+                kind: "term",
+                subject: "ACM",
+                knowledgeScope: "general",
+                termIdentity: {
+                    abbreviation: "ACM",
+                    chineseName: "美国计算机协会",
+                    englishName: "Association for Computing Machinery"
+                },
+                entityType: "organization"
+            }
+        );
+
+        expect(acmIssues).toContain("定义主语后直接连接代词谓语，句法不完整");
+        expect(methodIssues).toContain("括号内混合了中文与英文片段，应改为中文名称（English Name）或纯中文说明");
+        expect(ppaIssues).toContain("规范中英文名称已经出现，不应再用“全称为”重复一次");
+        expect(runOnIssues).toContain("定义中的相邻实体职责缺少分隔符，句意发生粘连");
+    });
+
+    it("accepts a normalized bilingual identity for a mixed Chinese and Latin selected label", () => {
+        const identity = {
+            chineseName: "三维堆叠机器学习加速器",
+            englishName: "3D-Stacked Machine Learning Accelerator"
+        };
+        const issues = findReadWeaveQualityIssues(
+            "三维堆叠机器学习加速器（3D-Stacked Machine Learning Accelerator）是一种通过垂直堆叠计算与存储层来加速机器学习任务的专用硬件",
+            "3D堆叠ML加速器",
+            {
+                kind: "term",
+                subject: "3D堆叠ML加速器",
+                knowledgeScope: "general",
+                termIdentity: identity,
+                entityType: "system"
+            }
+        );
+
+        expect(issues).not.toContain("通用知识回答偏离所选主体，正文没有保持目标实体");
+    });
+
+    it("requires a complete causal chain when a question asks for both mechanism and tradeoff", () => {
+        const issues = findReadWeaveQualityIssues(
+            "专用芯片通过定制数据路径提高效率；代价是设计成本高、功能难以修改",
+            "专用芯片为什么可能更高效，代价是什么？",
+            { kind: "question", knowledgeScope: "contextual" }
+        );
+
+        expect(issues).toContain("答案过于简略，未形成足够的解释与证据闭环");
+    });
+
+    it("does not turn a possibility question into an unconditional performance claim", () => {
+        const issues = findReadWeaveQualityIssues(
+            "专用芯片通过硬件定制实现比通用处理器更高的能效和速度；代价是设计成本高",
+            "专用芯片为什么可能比通用处理器更高效？",
+            { kind: "question", knowledgeScope: "contextual" }
+        );
+
+        expect(issues).toContain("问题只询问可能性，但答案把有条件的比较写成了无条件必然结论");
     });
 
     it("rejects run-on clauses, publication-title bloat and bare process variants in a general definition", () => {
@@ -936,11 +1123,95 @@ describe("ReadWeave unified QA and definition quality contract", () => {
         expect(normalized).toContain("方案 A 高于方案 B");
         expect(normalized).not.toContain("流程流程");
         expect(normalized).not.toMatch(/前段制程（|contact|PDN-first|系统级芯片（SoC）|交流平台适用边界|最大的国际性|等会员包括/u);
+        expect(normalizeReadWeaveGeneratedBody(
+            "电阻压降（电阻压降，IR Drop）是供电路径上的电压损失"
+        )).toBe("电阻压降（IR Drop）是供电路径上的电压损失");
+        expect(normalizeReadWeaveGeneratedBody(
+            "供电网络需要控制电压降电阻压降（IR Drop）和电源完整性"
+        )).toBe("供电网络需要控制电阻压降（IR Drop）和电源完整性");
+    });
+
+    it("keeps single-letter experiment labels out of the bilingual-name error rule", () => {
+        const body = "不能判断；证据只给出了工作负载 X 下的功耗对比（方案 A 70 毫瓦，方案 B 82 毫瓦），缺少其他工作负载的数据";
+        expect(findReadWeaveQualityIssues(body, "能否判断所有工作负载都更省电？", {
+            kind: "question",
+            knowledgeScope: "contextual"
+        })).not.toContain("括号内混合了中文与英文片段，应改为中文名称（English Name）或纯中文说明");
+
+        expect(findReadWeaveQualityIssues(
+            "该组织（ACM 美国计算机协会）负责学术出版",
+            "ACM 是什么？",
+            { kind: "question", knowledgeScope: "general" }
+        )).toContain("括号内混合了中文与英文片段，应改为中文名称（English Name）或纯中文说明");
+    });
+
+    it("removes uncertain English fragments from malformed secondary bilingual parentheses", () => {
+        expect(normalizeReadWeaveGeneratedBody(
+            "语素（Morpheme）分为自由语素（Free 该对象）和黏着语素（Bound 该对象）"
+        )).toBe("语素（Morpheme）分为自由语素和黏着语素");
+        expect(normalizeReadWeaveGeneratedBody(
+            "心电图（Electrocardiogram）记录心脏电活动（cardiac electrical activity 心脏电活动）"
+        )).toBe("心电图（Electrocardiogram）记录心脏电活动");
+    });
+
+    it("removes an entire late-repair clause containing an editing placeholder", () => {
+        const normalized = normalizeReadWeaveGeneratedBody(
+            "结论成立；核心原因是拥塞会拉长关键路径；其直接机制是优化-横幅图分析与优化 [...] 分析与优化数字芯片设计过程中"
+        );
+        expect(normalized).toBe("结论成立；核心原因是拥塞会拉长关键路径");
+        expect(normalized).not.toMatch(/\[|横幅图/u);
+    });
+
+    it("requires the browser login-state condition in an XSS and CSRF comparison", () => {
+        const issues = findReadWeaveQualityIssues(
+            "XSS 跨站脚本（Cross-Site Scripting）利用用户对网站的信任；CSRF 跨站请求伪造（Cross-Site Request Forgery）利用网站对浏览器的信任",
+            "XSS 与 CSRF 分别利用了什么信任关系？",
+            { kind: "question", knowledgeScope: "contextual" }
+        );
+        expect(issues).toContain("XSS 与 CSRF 对比遗漏了跨站请求伪造依赖浏览器已有登录状态或认证凭据这一关键条件");
+    });
+
+    it("requires a literary evidence-boundary answer to name the text or imagery evidence", () => {
+        expect(findReadWeaveQualityIssues(
+            "不能判断；缺少作者本人的医学记录、日记、书信或同时代证词等直接证据",
+            "仅凭诗中反复出现的雨意象，能否断言作者本人当时患有抑郁症？",
+            { kind: "question", knowledgeScope: "contextual" }
+        )).toContain("文学作品证据边界回答遗漏了意象或文本只能说明作品表达、不能直接证明作者临床状态");
+    });
+
+    it("requires all three long-horizon risk boundaries after a five-day sample", () => {
+        expect(findReadWeaveQualityIssues(
+            "不能判断；五个交易日只反映短期波动，需要更长样本",
+            "能否用这五个交易日的波动直接断言该资产长期风险更低？",
+            { kind: "question", knowledgeScope: "contextual" }
+        )).toContain("短窗口风险回答遗漏了更长周期、极端行情或流动性三个必要边界");
+    });
+
+    it("requires semantic-version answers to map each version number to its level", () => {
+        expect(findReadWeaveQualityIssues(
+            "1.4.2 表示修复；1.5.0 表示新功能",
+            "按照语义化版本约定，1.4.2、1.5.0 和 2.0.0 分别通常表示什么变化？",
+            { kind: "question", knowledgeScope: "contextual" }
+        )).toContain("语义化版本回答没有分别闭合修订号、次版本号与主版本号的变化含义");
     });
 
     it("rejects cross-domain disambiguation bloat in a focused technical definition", () => {
         expect(findReadWeaveQualityIssues(
             "MOL 中段制程（Middle of Line）是集成电路制造中的工艺阶段；该术语与化学中的摩尔单位无关，后者是另一独立概念",
+            "请给出 MOL 的通用、详细定义",
+            {
+                kind: "term",
+                subject: "MOL",
+                knowledgeScope: "general",
+                termIdentity: {
+                    abbreviation: "MOL",
+                    chineseName: "中段制程",
+                    englishName: "Middle of Line"
+                }
+            }
+        )).toContain("通用定义加入了当前专业语境不需要的跨领域同名义项");
+        expect(findReadWeaveQualityIssues(
+            "MOL 中段制程（Middle of Line）连接器件端子与局部互连；该术语与木星轨道任务等其他同名缩写无关",
             "请给出 MOL 的通用、详细定义",
             {
                 kind: "term",

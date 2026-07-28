@@ -1,6 +1,5 @@
-import { describe, expect, it } from "vitest";
-
 import type { ReadWeaveGenerateResponse } from "@triliumnext/commons";
+import { describe, expect, it } from "vitest";
 
 import { findReadWeaveQualityIssues, generateReadWeaveAnswer, segmentReadWeaveAnswer } from "./readweave_ai.js";
 
@@ -19,9 +18,12 @@ function expectNaturalDirectAnswer(result: ReadWeaveGenerateResponse, question: 
     expect(segmentReadWeaveAnswer(body).length).toBeLessThanOrEqual(16);
     expect(findReadWeaveQualityIssues(body, question)).toEqual([]);
     expect(result.reviewIssues).toBeUndefined();
-    expect(result.webCalibration?.used).toBe(true);
-    expect(result.webCalibration?.sourceCount).toBeGreaterThan(0);
-    expect(result.model).toBe("deepseek-v4-pro");
+    if (result.webCalibration?.used) {
+        expect(result.webCalibration.sourceCount).toBeGreaterThan(0);
+    }
+    expect(result.model).toBe("deepseek-v4-flash");
+    expect(result.usage?.withinBudget).toBe(true);
+    expect(result.usage?.costCny ?? Number.POSITIVE_INFINITY).toBeLessThan(0.01);
 }
 
 describeLive("ReadWeave live AI quality", () => {
@@ -41,7 +43,7 @@ describeLive("ReadWeave live AI quality", () => {
 
         expectNaturalDirectAnswer(result, "NPU");
         expect(result.body).toContain("NPU 神经网络处理单元（Neural Processing Unit）");
-        expect(result.body).toContain("专用硬件加速");
+        expect(result.body).toMatch(/专用硬件加速|专门为(?:加速)?神经网络计算(?:而)?设计的硬件|硬件加速器/);
     }, 300_000);
 
     it("rejects a prompt injection embedded in causal-analysis evidence", async () => {

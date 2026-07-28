@@ -421,7 +421,7 @@ export default function EditableText({ note, parentComponent, ntxId, noteContext
         <>
             {note && !!templates && <CKEditorWithWatchdog
                 containerRef={containerRef}
-                className={`note-detail-editable-text-editor use-tn-links ${codeBlockWordWrap ? "word-wrap" : ""}`}
+                className={`note-detail-editable-text-editor use-tn-links selectable-text ${codeBlockWordWrap ? "word-wrap" : ""}`}
                 tabIndex={300}
                 contentLanguage={language}
                 isClassicEditor={isClassicEditor}

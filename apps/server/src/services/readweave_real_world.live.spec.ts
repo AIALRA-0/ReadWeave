@@ -99,7 +99,7 @@ const REAL_WORLD_CASES: RealWorldCase[] = [
             "DPO-3D：针对面对面3D IC中可布线性与IR压降权衡的柔性建模可微电源分配网络优化。原文题名为：DPO-3D: Differentiable Power Delivery Network Optimization for Face-to-Face 3D ICs。"
         ),
         expected: [ /DPO-3D 是一种针对面对面三维集成电路中可布线性与电压降权衡的柔性建模可微电源分配网络优化方法/u, /方法|优化/u ],
-        forbidden: [ /（DPO-3D）|DPO-3D[^；\n]{0,80}(?:是|为)[^；\n]{0,80}缩写|原文题名|Differentiable Power Delivery|3D IC|IR压降/u ]
+        forbidden: [ /（DPO-3D）|DPO-3D[^；\n]{0,80}(?:是|为)[^；\n]{0,80}缩写|原文题名|Differentiable Power Delivery|Face-to-Face 三维|梯度下降|不适用于其他封装|3D IC|IR压降/u ]
     },
     {
         name: "orcid-general-question-resists-local-test-use",
@@ -143,7 +143,7 @@ const REAL_WORLD_CASES: RealWorldCase[] = [
             "一种用于高效物理设计参数调优的混合强化学习框架；该论文发表于 ACM Trans. Design Autom. Electr. Syst."
         ),
         expected: [ /ACM 美国计算机协会（Association for Computing Machinery）/u, /组织|学会|协会/u, /计算机|计算领域/u ],
-        forbidden: [ /ACM 计算机学会设计自动化电子系统汇刊|在当前语境中|致心律|心肌|医学|另一独立概念|交流平台适用边界|等通过|制定行业标准|顶级会议|会议作为/u ]
+        forbidden: [ /ACM 计算机学会设计自动化电子系统汇刊|在当前语境中|致心律|心肌|医学|另一独立概念|交流平台适用边界|等通过|制定行业标准|顶级会议|会议作为|是它通过/u ]
     },
     {
         name: "nested-pdn-definition",
@@ -155,7 +155,10 @@ const REAL_WORLD_CASES: RealWorldCase[] = [
             "BS-PDN-Last 是论文方法原名，不是 PDN 的英文全称。PDN 的正式英文全称是 Power Delivery Network。"
         ),
         expected: [ /PDN 电源分配网络（Power Delivery Network）/u, /供电|电源/u, /压降|电源完整性/u ],
-        forbidden: [ /BS-PDN-Last [\p{Script=Han}]+（Power Delivery Network）/u, /PDN-Last 是|IR Drop|IR-drop/u ]
+        forbidden: [
+            /BS-PDN-Last [\p{Script=Han}]+（Power Delivery Network）/u,
+            /PDN-Last 是|电压降电阻压降/u
+        ]
     },
     {
         name: "tsv-definition",
@@ -178,7 +181,7 @@ const REAL_WORLD_CASES: RealWorldCase[] = [
             "PPA 的标准英文展开为 Power, Performance, and Area。"
         ),
         expected: [ /PPA 功耗、性能与面积（Power, Performance, and Area）/u, /权衡|制约|指标/u ],
-        forbidden: [ /价格|隐私|衡量面积|该对象三者|集成度在芯片|在该对象之间|系统级芯片（SoC）/u ]
+        forbidden: [ /价格|隐私|衡量面积|该对象三者|集成度在芯片|在该对象之间|系统级芯片（SoC）|全称为功耗、性能与面积|效率面积指|最优平衡/u ]
     },
     {
         name: "middle-of-line-definition",

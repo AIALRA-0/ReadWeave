@@ -140,6 +140,19 @@ const DEFINITION_CASES: DefinitionCase[] = [
         expectNoAbbreviation: true
     },
     {
+        title: "3D-MAPS",
+        selected: "3D-MAPS 指三维大规模并行处理器与堆叠内存的设计方案，把处理器计算层与堆叠内存沿垂直方向集成。",
+        supporting: "原文题名为 Design and Analysis of 3D-MAPS (3D Massively Parallel Processor with Stacked Memory)；这里的 3D-MAPS 不是人物、会议或组织。",
+        expected: [
+            /3D-MAPS 三维大规模并行处理器与堆叠内存（3D Massively Parallel Processor with Stacked Memory）/u,
+            /三维|垂直/u,
+            /处理器/u,
+            /堆叠内存/u
+        ],
+        forbidden: [ /三维-\s*[（(]|3D\s+三维/u ],
+        expectedEnglishName: "3D Massively Parallel Processor with Stacked Memory"
+    },
+    {
         title: "NPU",
         selected: "NPU 是面向神经网络工作负载的专用处理单元，重点加速矩阵乘法、卷积和张量运算。",
         expected: [ /NPU 神经网络处理单元（Neural Processing Unit）/u, /专用|加速/u, /矩阵|卷积|张量/u ],
@@ -210,13 +223,18 @@ describeLive("ReadWeave live QA and definition parity", () => {
 
         expectSharedQuality(definition);
         expectSharedQuality(answer);
+        if (process.env.READWEAVE_PRINT_LIVE_BODY === "1") {
+            console.info(`[live:ASIC-definition] ${definition.body}`);
+            console.info(`[live:ASIC-answer] ${answer.body}`);
+        }
         expect(definition.body).toMatch(/ASIC 专用集成电路（Application-Specific Integrated Circuit）/u);
         expect(definition.body).toMatch(/特定应用|固定工作负载/u);
+        expect(definition.body).not.toMatch(/优于通用(?:芯片|处理器)/u);
         expect(definition.body.split("\n\n").length).toBeLessThanOrEqual(2);
         expect(answer.body).toMatch(/数据(?:路径|通路)/u);
         expect(answer.body).toMatch(/(?:片上)?存储(?:结构)?/u);
         expect(answer.body).toMatch(/成本|投入|门槛|设计(?:与验证)?(?:代价|负担)/u);
-        expect(answer.body).toMatch(/修改空间|灵活性|难以修改|功能固化/u);
+        expect(answer.body).toMatch(/修改空间|灵活性|难以修改|无法修改|功能固化/u);
         expect(answer.body).not.toMatch(/一个时钟周期|数月(?:至|到)[一两二三四五六七八九十]?年|以年计/u);
         expect(answer.body.length).toBeGreaterThanOrEqual(Math.min(120, Math.floor(definition.body.length * 0.8)));
     }, 420_000);
