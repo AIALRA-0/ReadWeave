@@ -1560,7 +1560,11 @@ export default function ReadWeavePanel() {
                                         <div class={`readweave-candidate ${candidate.reuseRecommended ? "recommended" : ""}`} key={candidate.objectId} tabindex={0} onMouseEnter={() => loadCandidate(candidate)} onFocus={() => loadCandidate(candidate)}>
                                             <div>
                                                 <span class="readweave-candidate-title">{candidate.title}</span>
-                                                <span class="readweave-candidate-similarity">{t("readweave.title_similarity", { percent: Math.round(candidate.confidence * 100) })}</span>
+                                                <span class="readweave-candidate-similarity">
+                                                    {kind === "question"
+                                                        ? `${t(candidate.sameTopic ? "readweave.same_question_subject" : "readweave.related_question_subject")} · ${t(candidate.intentMatch ? "readweave.same_question_intent" : "readweave.different_question_intent")}`
+                                                        : t("readweave.term_similarity", { percent: Math.round(candidate.confidence * 100) })}
+                                                </span>
                                             </div>
                                             {candidate.reuseRecommended && <span class="readweave-candidate-recommendation">{t("readweave.reuse_recommended")}</span>}
                                             <div class="readweave-candidate-detail">

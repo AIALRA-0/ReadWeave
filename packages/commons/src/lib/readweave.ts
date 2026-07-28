@@ -173,6 +173,9 @@ export interface ReadWeaveCandidate {
     title: string;
     confidence: number;
     reuseRecommended: boolean;
+    topicConfidence?: number;
+    sameTopic?: boolean;
+    intentMatch?: boolean;
 }
 
 export interface ReadWeaveImpact {

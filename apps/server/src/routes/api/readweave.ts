@@ -52,7 +52,7 @@ function queryCandidates(req: Request) {
         throw new ValidationError("A title of at most 1000 characters is required.");
     }
     if (kind !== "question" && kind !== "term") throw new ValidationError("kind must be question or term.");
-    return { candidates: findReadWeaveCandidates(title, kind as ReadWeaveObjectKind, listReadWeaveObjects(), 8, termIdentity) };
+    return { candidates: findReadWeaveCandidates(title, kind as ReadWeaveObjectKind, listReadWeaveObjects(), 3, termIdentity) };
 }
 
 function getObject(req: Request<{ objectId: string }>) {
