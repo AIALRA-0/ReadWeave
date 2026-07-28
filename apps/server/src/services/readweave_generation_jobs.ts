@@ -174,12 +174,14 @@ function publicJob(row: JobRow, includeProgress = true): ReadWeaveGenerationJob 
             // model result is too malformed to normalize safely.
         }
     }
+    const storedRequest = parseJson<ReadWeaveGenerateRequest>(decodeStoredValue(row.requestJson, row.isProtected));
     return {
         jobId: row.jobId,
         articleId: row.articleId,
         anchorId: row.anchorId,
         anchorType: row.anchorType,
         kind: row.kind,
+        parentLinkId: storedRequest?.parentLinkId,
         title: decodeStoredValue(row.title, row.isProtected) ?? "",
         sourceExcerpt: decodeStoredValue(row.sourceExcerpt, row.isProtected) ?? "",
         status: row.status,
@@ -360,7 +362,8 @@ function runJob(jobId: string) {
 }
 
 function sourceExcerpt(request: ReadWeaveGenerateRequest): string {
-    return request.fragments.find(fragment => fragment.role === "selected")?.text.trim().slice(0, 10_000)
+    return request.rootSourceExcerpt?.trim().slice(0, 10_000)
+        || request.fragments.find(fragment => fragment.role === "selected")?.text.trim().slice(0, 10_000)
         || request.title.trim().slice(0, 10_000);
 }
 

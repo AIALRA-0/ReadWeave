@@ -490,7 +490,7 @@ describe("ReadWeave deterministic scripted full pipeline", () => {
         const verificationRequests = completionRequests(model.requests, "只执行回答质量检查");
         expect(evidenceRequests).toHaveLength(1);
         expect(evidenceRequests[0].text).toContain("问题回答和术语定义采用完全相同的抽取标准");
-        expect(evidenceRequests[0].text).toMatch(/宽度与输出约束.*自适应.*机器上限为 4 段、5000 字/u);
+        expect(evidenceRequests[0].text).toMatch(/宽度与输出约束.*自适应.*机器上限为 5 段、5000 字/u);
         expect(verificationRequests).toHaveLength(2);
         const retryRequest = JSON.parse(verificationRequests[1].text) as { messages: Array<{ content: string }> };
         expect(retryRequest.messages.at(-1)?.content).toContain("A valid verification payload cannot contain issues");

@@ -14,10 +14,10 @@ import {
     isCurrentPersonProfileTask,
     isPublicReadWeaveSourceUrl,
     mergeReadWeaveTermIdentity,
-    normalizeReadWeaveGeneratedBody,
     normalizeReadWeaveEvidencePlan,
-    parseJsonObject,
+    normalizeReadWeaveGeneratedBody,
     parseFormattedReadWeaveTermIdentity,
+    parseJsonObject,
     pruneEvidencePlanForProfile,
     resolveVerifiedNonExpandableArtifact,
     validateReadWeaveTermIdentity
@@ -1468,14 +1468,15 @@ describe("ReadWeave final audit regressions", () => {
         )).toContain("缩写 CPU 未使用“缩写 中文全称（英文全称）”格式");
     });
 
-    it("treats dblp as a verified proper name instead of inventing a non-expandable acronym claim", () => {
+    it("treats dblp as an official lowercase identity while still expanding the selected name", () => {
         const identity = parseFormattedReadWeaveTermIdentity(
-            "计算机科学书目数据库（dblp computer science bibliography）"
+            "dblp 计算机科学书目数据库（dblp Computer Science Bibliography）"
         );
-        const body = "计算机科学书目数据库（dblp computer science bibliography）是一个开放的计算机科学书目信息服务；它帮助读者查找作者、论文、会议和期刊的书目记录";
+        const body = "dblp 计算机科学书目数据库（dblp Computer Science Bibliography）是一个开放的计算机科学书目信息服务；它帮助读者查找作者、论文、会议和期刊的书目记录";
         expect(identity).toEqual({
+            abbreviation: "dblp",
             chineseName: "计算机科学书目数据库",
-            englishName: "dblp computer science bibliography"
+            englishName: "dblp Computer Science Bibliography"
         });
         expect(findReadWeaveQualityIssues(body, "DBLP", {
             kind: "term",

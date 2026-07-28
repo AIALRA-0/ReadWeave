@@ -11,9 +11,9 @@ import {
     formatReadWeaveTermIdentity,
     joinReadWeaveAnswerSegments,
     mergeReadWeaveTermIdentity,
+    normalizeGeneralPersonOverview,
     normalizeReadWeaveEvidencePlan,
     normalizeReadWeaveGeneratedBody,
-    normalizeGeneralPersonOverview,
     normalizeSegmentsForQuality,
     pruneEvidencePlanForProfile,
     resolveVerifiedNonExpandableArtifact,
@@ -496,9 +496,9 @@ describe("ReadWeave unified QA and definition quality contract", () => {
             objective: "请给出 BS-PDN-Last 的通用、详细定义；当前文档只用于消歧，不限定定义范围",
             breadth: "focused",
             knowledgeScope: "general",
-            outputContract: expect.stringMatching(/通用定义.*上位类型.*机制.*用途.*边界/),
+            outputContract: expect.stringMatching(/通用定义.*通俗类别.*机制.*用途.*边界/),
             requiresTermIdentity: true,
-            maxParagraphs: 2,
+            maxParagraphs: 3,
             maxCharacters: 1_200
         });
         expect(buildReadWeaveTaskProfile("question", "  为什么需要背面供电？  ")).toEqual({
@@ -509,7 +509,7 @@ describe("ReadWeave unified QA and definition quality contract", () => {
             knowledgeScope: "contextual",
             outputContract: expect.stringMatching(/全部疑问.*宽度.*自适应/),
             requiresTermIdentity: false,
-            maxParagraphs: 4,
+            maxParagraphs: 5,
             maxCharacters: 5_000
         });
     });
@@ -587,8 +587,8 @@ describe("ReadWeave unified QA and definition quality contract", () => {
             expect(questionPrompt, `question prompt missing: ${rule}`).toContain(rule);
             expect(termPrompt, `term prompt missing: ${rule}`).toContain(rule);
         }
-        expect(questionPrompt).toMatch(/2—4 段|1—4 个自然段/);
-        expect(termPrompt).toContain("复杂时最多 2 段");
+        expect(questionPrompt).toMatch(/2—5 段|1—5 个自然段/);
+        expect(termPrompt).toContain("复杂时最多 3 段");
         expect(termPrompt).toContain("termIdentity");
     });
 

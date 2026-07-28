@@ -130,6 +130,9 @@ function parseLink(note: BNote): ReadWeaveLink | null {
         ...value,
         schemaVersion: READWEAVE_SCHEMA_VERSION,
         anchorType: value.anchorType === "range" ? "range" : "paragraph",
+        depth: Number.isInteger(value.depth) && Number(value.depth) >= 0 && Number(value.depth) <= 5
+            ? Number(value.depth)
+            : 0,
         sourceExcerpt: typeof value.sourceExcerpt === "string" ? value.sourceExcerpt : ""
     } as ReadWeaveLink;
 }
@@ -181,12 +184,25 @@ function resolveLink(link: ReadWeaveLink): ReadWeaveResolvedEntry | null {
     } catch {
         return null;
     }
+    let parentStale = false;
+    if (link.parentLinkId && link.parentRevision !== undefined) {
+        try {
+            const parentLink = getReadWeaveLink(link.parentLinkId).link;
+            parentStale = getReadWeaveObject(parentLink.objectId).revision !== link.parentRevision;
+        } catch {
+            parentStale = true;
+        }
+    }
     return {
         linkId: link.linkId,
         articleId: link.articleId,
         anchorId: link.anchorId,
         anchorType: link.anchorType,
         objectId: object.objectId,
+        parentLinkId: link.parentLinkId,
+        rootLinkId: link.rootLinkId ?? link.linkId,
+        depth: link.depth ?? 0,
+        parentStale: parentStale || undefined,
         kind: object.kind,
         title: link.displayTitle || object.title,
         body: link.displayBody || object.body,
@@ -215,7 +231,11 @@ export function getEntriesForAnchor(articleIdValue: unknown, anchorIdValue: unkn
         .filter(link => link.articleId === articleId && link.anchorId === anchorId)
         .map(resolveLink)
         .filter((entry): entry is ReadWeaveResolvedEntry => !!entry)
-        .toSorted((left, right) => left.kind.localeCompare(right.kind) || left.title.localeCompare(right.title));
+        .toSorted((left, right) =>
+            left.kind.localeCompare(right.kind)
+            || left.depth - right.depth
+            || left.linkId.localeCompare(right.linkId)
+            || left.title.localeCompare(right.title));
 }
 
 export function getAnchorSummaries(articleIdValue: unknown): ReadWeaveAnchorSummary[] {
@@ -340,6 +360,30 @@ function createObject(request: ReadWeaveSaveRequest, variantOf?: ReadWeaveObject
     return object;
 }
 
+function parentTreeFor(request: Pick<ReadWeaveSaveRequest, "articleId" | "anchorId" | "kind" | "parentLinkId">): {
+    parentLinkId?: string;
+    rootLinkId?: string;
+    depth: number;
+    parentRevision?: number;
+} {
+    if (!request.parentLinkId) return { depth: 0 };
+    if (request.kind !== "question") throw new ValidationError("Only questions can be nested.");
+    const { link: parentLink } = getReadWeaveLink(requireId(request.parentLinkId, "parentLinkId"));
+    if (parentLink.articleId !== request.articleId || parentLink.anchorId !== request.anchorId) {
+        throw new ValidationError("A follow-up question must remain under the same article anchor.");
+    }
+    const parentObject = getReadWeaveObject(parentLink.objectId);
+    if (parentObject.kind !== "question") throw new ValidationError("A follow-up question must be attached to another question.");
+    const depth = (parentLink.depth ?? 0) + 1;
+    if (depth > 5) throw new ValidationError("ReadWeave follow-up questions are limited to five nested levels.");
+    return {
+        parentLinkId: parentLink.linkId,
+        rootLinkId: parentLink.rootLinkId ?? parentLink.linkId,
+        depth,
+        parentRevision: parentObject.revision
+    };
+}
+
 function createLink(request: ReadWeaveSaveRequest, object: ReadWeaveObject): ReadWeaveLink {
     const articleId = requireReadableArticle(request.articleId);
     const anchorId = requireId(request.anchorId, "anchorId");
@@ -347,9 +391,14 @@ function createLink(request: ReadWeaveSaveRequest, object: ReadWeaveObject): Rea
     const article = becca.getNoteOrThrow(articleId);
     const objectNote = becca.getNoteOrThrow(object.objectId);
     const sourceExcerpt = requireText(request.sourceExcerpt, "sourceExcerpt", 10_000);
+    const tree = parentTreeFor(request);
     if (!objectNote.isContentAvailable()) throw new ValidationError("The reusable object is unavailable in the current protected session.");
 
-    const existing = listReadWeaveLinks().find(link => link.articleId === articleId && link.anchorId === anchorId && link.objectId === object.objectId);
+    const existing = listReadWeaveLinks().find(link =>
+        link.articleId === articleId
+        && link.anchorId === anchorId
+        && link.objectId === object.objectId
+        && link.parentLinkId === tree.parentLinkId);
     if (existing) return existing;
     const linkId = newEntityId();
     const timestamp = now();
@@ -360,6 +409,10 @@ function createLink(request: ReadWeaveSaveRequest, object: ReadWeaveObject): Rea
         anchorId,
         anchorType,
         objectId: object.objectId,
+        parentLinkId: tree.parentLinkId,
+        rootLinkId: tree.rootLinkId ?? linkId,
+        depth: tree.depth,
+        parentRevision: tree.parentRevision,
         sourceExcerpt,
         createdAt: timestamp,
         updatedAt: timestamp
@@ -384,6 +437,7 @@ export function saveReadWeaveEntry(request: ReadWeaveSaveRequest): ReadWeaveReso
     const anchorType = requireAnchorType(request.anchorType);
     const sourceExcerpt = requireText(request.sourceExcerpt, "sourceExcerpt", 10_000);
     validateAnchorConsistency(articleId, anchorId, anchorType, sourceExcerpt);
+    parentTreeFor(request);
     if (request.kind === "term") {
         const existingDefinition = listReadWeaveLinks()
             .filter(link => link.articleId === articleId && link.anchorId === anchorId)
@@ -413,7 +467,23 @@ export function getReadWeaveImpact(objectIdValue: unknown): ReadWeaveImpact {
         const article = becca.getNote(articleId);
         return article?.isContentAvailable() ? [ { articleId, title: article.title } ] : [];
     });
-    return { objectId, linkCount: links.length, articleCount: articleIds.length, articles };
+    const allLinks = listReadWeaveLinks();
+    const rootLinkIds = new Set(links.map(link => link.linkId));
+    const descendantIds = new Set<string>();
+    let frontier = new Set(rootLinkIds);
+    while (frontier.size > 0) {
+        const next = allLinks.filter(link => link.parentLinkId && frontier.has(link.parentLinkId));
+        frontier = new Set(next.map(link => link.linkId).filter(linkId => !descendantIds.has(linkId)));
+        for (const linkId of frontier) descendantIds.add(linkId);
+    }
+    return {
+        objectId,
+        linkCount: links.length,
+        articleCount: articleIds.length,
+        childCount: allLinks.filter(link => link.parentLinkId && rootLinkIds.has(link.parentLinkId)).length,
+        descendantCount: descendantIds.size,
+        articles
+    };
 }
 
 function updateCanonicalObject(note: BNote, object: ReadWeaveObject, request: ReadWeaveEditRequest): ReadWeaveObject {
@@ -481,26 +551,105 @@ export function editReadWeaveLink(linkIdValue: unknown, request: ReadWeaveEditRe
     return resolveLink(link)!;
 }
 
-export function deleteReadWeaveLink(linkIdValue: unknown): ReadWeaveDeleteResult {
+function writeReadWeaveLink(link: ReadWeaveLink): void {
+    const note = becca.getNoteOrThrow(link.linkId);
+    note.setContent(JSON.stringify(link, null, 2));
+}
+
+function revisionForLink(linkId: string | undefined): number | undefined {
+    if (!linkId) return undefined;
+    try {
+        return getReadWeaveObject(getReadWeaveLink(linkId).link.objectId).revision;
+    } catch {
+        return undefined;
+    }
+}
+
+function updatePromotedSubtree(
+    link: ReadWeaveLink,
+    parentLinkId: string | undefined,
+    depth: number,
+    rootLinkId: string,
+    allLinks: ReadWeaveLink[],
+    promotedLinkIds: string[]
+): void {
+    link.parentLinkId = parentLinkId;
+    link.parentRevision = revisionForLink(parentLinkId);
+    link.depth = depth;
+    link.rootLinkId = rootLinkId;
+    link.updatedAt = now();
+    writeReadWeaveLink(link);
+    promotedLinkIds.push(link.linkId);
+    for (const child of allLinks.filter(candidate => candidate.parentLinkId === link.linkId)) {
+        updatePromotedSubtree(child, link.linkId, depth + 1, rootLinkId, allLinks, promotedLinkIds);
+    }
+}
+
+export function deleteReadWeaveLink(
+    linkIdValue: unknown,
+    childStrategy: "cascade" | "promote" = "cascade"
+): ReadWeaveDeleteResult {
     const linkId = requireId(linkIdValue, "linkId");
     const { note: linkNote, link } = getReadWeaveLink(linkId);
     requireReadableArticle(link.articleId);
-    const remainingLinks = listReadWeaveLinks()
-        .filter(candidate => candidate.linkId !== linkId && candidate.objectId === link.objectId);
-    const objectDeleted = remainingLinks.length === 0;
-
-    linkNote.deleteNote();
-    if (objectDeleted) {
-        const objectNote = becca.getNote(link.objectId);
-        if (objectNote) objectNote.deleteNote();
+    if (childStrategy !== "cascade" && childStrategy !== "promote") {
+        throw new ValidationError("Unknown follow-up deletion strategy.");
     }
+    const allLinks = listReadWeaveLinks();
+    const directChildren = allLinks.filter(candidate => candidate.parentLinkId === linkId);
+    const deletedLinkIds = [ linkId ];
+    const promotedLinkIds: string[] = [];
+
+    if (childStrategy === "cascade") {
+        const frontier = [ ...directChildren ];
+        while (frontier.length > 0) {
+            const child = frontier.shift()!;
+            if (deletedLinkIds.includes(child.linkId)) continue;
+            deletedLinkIds.push(child.linkId);
+            frontier.push(...allLinks.filter(candidate => candidate.parentLinkId === child.linkId));
+        }
+    } else {
+        for (const child of directChildren) {
+            const rootLinkId = link.parentLinkId
+                ? link.rootLinkId ?? link.parentLinkId
+                : child.linkId;
+            updatePromotedSubtree(
+                child,
+                link.parentLinkId,
+                Math.max(0, link.depth ?? 0),
+                rootLinkId,
+                allLinks,
+                promotedLinkIds
+            );
+        }
+    }
+
+    const objectIds = new Set(
+        deletedLinkIds.flatMap(deletedId => {
+            const deletedLink = allLinks.find(candidate => candidate.linkId === deletedId);
+            return deletedLink ? [ deletedLink.objectId ] : [];
+        })
+    );
+    for (const deletedId of deletedLinkIds.toReversed()) {
+        const note = deletedId === linkId ? linkNote : becca.getNote(deletedId);
+        if (note) note.deleteNote();
+    }
+    const survivingLinks = listReadWeaveLinks();
+    for (const objectId of objectIds) {
+        if (survivingLinks.some(candidate => candidate.objectId === objectId)) continue;
+        becca.getNote(objectId)?.deleteNote();
+    }
+    const remainingLinks = survivingLinks.filter(candidate => candidate.objectId === link.objectId);
+    const objectDeleted = remainingLinks.length === 0;
 
     return {
         deleted: true,
         linkId,
         objectId: link.objectId,
         objectDeleted,
-        remainingLinkCount: remainingLinks.length
+        remainingLinkCount: remainingLinks.length,
+        deletedLinkIds,
+        promotedLinkIds
     };
 }
 

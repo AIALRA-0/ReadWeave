@@ -18,6 +18,7 @@ import type {
     ReadWeaveResolvedEntry,
     ReadWeaveTermIdentity
 } from "@triliumnext/commons";
+import type { JSX } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 
 import { t } from "../../services/i18n.js";
@@ -61,6 +62,15 @@ import {
     upsertReadWeaveGenerationJob,
     visibleReadWeaveCandidates
 } from "./readweave_panel_state.js";
+import {
+    decodeReadWeaveText,
+    DEFAULT_READWEAVE_QUESTION_TEMPLATES,
+    normalizeReadWeaveQuestionTemplates,
+    rankedReadWeaveQuestionTemplates,
+    READWEAVE_QUESTION_TEMPLATE_STORAGE_KEY,
+    type ReadWeaveQuestionTemplate,
+    recordReadWeaveTemplateUse,
+    renderReadWeaveQuestionTemplate} from "./readweave_question_templates.js";
 import RightPanelWidget from "./RightPanelWidget.js";
 
 const BLOCK_SELECTOR = "p,h1,h2,h3,h4,h5,h6,li,blockquote,pre";
@@ -102,6 +112,7 @@ interface Draft {
     generationJobId?: string;
     reviewIssues?: string[];
     reviewIssueBaseline?: ReadWeaveReviewIssueBaseline;
+    parentLinkId?: string;
 }
 
 interface EditState {
@@ -117,6 +128,7 @@ interface EditState {
 interface DeleteState {
     entry: ReadWeaveResolvedEntry;
     impact: ReadWeaveImpact;
+    childStrategy: "cascade" | "promote";
 }
 
 interface HoverPreview {
@@ -134,6 +146,7 @@ interface SelectionActionTarget {
     noteId: string;
     anchorId: string;
     kind: ReadWeaveObjectKind;
+    parentLinkId?: string;
 }
 
 export default function ReadWeavePanel() {
@@ -144,6 +157,7 @@ export default function ReadWeavePanel() {
     const [entriesLoadedAnchorId, setEntriesLoadedAnchorId] = useState<string>();
     const [anchorSummaries, setAnchorSummaries] = useState<ReadWeaveAnchorSummary[]>([]);
     const [kind, setKind] = useState<ReadWeaveObjectKind>("question");
+    const [parentLinkId, setParentLinkId] = useState<string>();
     const [questionTitle, setQuestionTitle] = useState("");
     const [optimizeQuestion, setOptimizeQuestion] = useState(false);
     const [termIdentity, setTermIdentity] = useState<Partial<ReadWeaveTermIdentity>>({});
@@ -174,9 +188,23 @@ export default function ReadWeavePanel() {
     const [editState, setEditState] = useState<EditState>();
     const [deleteState, setDeleteState] = useState<DeleteState>();
     const [hoverPreview, setHoverPreview] = useState<HoverPreview>();
+    const [questionTemplates, setQuestionTemplates] = useState<ReadWeaveQuestionTemplate[]>(() => {
+        try {
+            return normalizeReadWeaveQuestionTemplates(JSON.parse(localStorage.getItem(READWEAVE_QUESTION_TEMPLATE_STORAGE_KEY) ?? "null"));
+        } catch {
+            return DEFAULT_READWEAVE_QUESTION_TEMPLATES.map(template => ({ ...template }));
+        }
+    });
+    const [templateManagerOpen, setTemplateManagerOpen] = useState(false);
+    const [activeTemplateId, setActiveTemplateId] = useState<string>();
+    const [customTemplateLabel, setCustomTemplateLabel] = useState("");
+    const [customTemplatePattern, setCustomTemplatePattern] = useState("关于“{selection}”，");
     const hoverOpenTimer = useRef<number>();
     const hoverCloseTimer = useRef<number>();
     const bodyTextareaRef = useRef<HTMLTextAreaElement>(null);
+    const questionTextareaRef = useRef<HTMLTextAreaElement>(null);
+    const editBodyTextareaRef = useRef<HTMLTextAreaElement>(null);
+    const editTitleInputRef = useRef<HTMLInputElement>(null);
     const entriesRequestRevision = useRef(0);
     const entriesTarget = useRef<{ noteId: string; anchorId: string }>();
     const activeArticleNoteId = useRef(articleNoteId);
@@ -191,12 +219,17 @@ export default function ReadWeavePanel() {
     const selectionActionRevision = useRef(0);
     const selectionIdentityRevision = useRef(0);
     const activeKind = useRef(kind);
+    const activeParentLinkId = useRef(parentLinkId);
     const activeGenerationJobId = useRef(generationJobId);
     activeArticleNoteId.current = articleNoteId;
     activeKind.current = kind;
+    activeParentLinkId.current = parentLinkId;
     activeGenerationJobId.current = generationJobId;
     const decorationGenerationJobs = transientGenerationJob
-        ? [ transientGenerationJob, ...generationJobs.filter(job => job.anchorId !== transientGenerationJob.anchorId || job.kind !== transientGenerationJob.kind) ]
+        ? [ transientGenerationJob, ...generationJobs.filter(job =>
+            job.anchorId !== transientGenerationJob.anchorId
+            || job.kind !== transientGenerationJob.kind
+            || job.parentLinkId !== transientGenerationJob.parentLinkId) ]
         : generationJobs;
 
     const definitionExists = kind === "term" && entries.some(entry => entry.kind === "term");
@@ -205,12 +238,15 @@ export default function ReadWeavePanel() {
         && transientGenerationJob.articleId === noteId
         && transientGenerationJob.anchorId === selection?.anchorId
         && transientGenerationJob.kind === kind
+        && transientGenerationJob.parentLinkId === parentLinkId
         ? transientGenerationJob
         : undefined;
     const displayedJob = currentJob ?? currentTransientJob;
     const currentTitle = kind === "question"
-        ? questionTitle.trim()
+        ? decodeReadWeaveText(questionTitle)
         : formatPartialTermIdentity(termIdentity) || selection?.excerpt.trim() || "";
+    const nestedParent = parentLinkId ? entries.find(entry => entry.linkId === parentLinkId) : undefined;
+    const suggestedTemplates = rankedReadWeaveQuestionTemplates(questionTemplates, questionTitle, 5);
     const currentSourceExcerpt = selection
         ? resolveSourceExcerpt(selection, currentJob)
         : "";
@@ -245,7 +281,8 @@ export default function ReadWeavePanel() {
             identityRevision: selectionIdentityRevision.current,
             noteId,
             anchorId: selection.anchorId,
-            kind
+            kind,
+            parentLinkId
         };
     }
 
@@ -260,6 +297,7 @@ export default function ReadWeavePanel() {
             && entriesTarget.current?.noteId === target.noteId
             && entriesTarget.current.anchorId === target.anchorId
             && activeKind.current === target.kind
+            && activeParentLinkId.current === target.parentLinkId
             && (!jobId || activeGenerationJobId.current === jobId);
     }
 
@@ -269,6 +307,7 @@ export default function ReadWeavePanel() {
     }
 
     function hydrateGenerationJob(job: ReadWeaveGenerationJob) {
+        setParentLinkId(job.parentLinkId);
         setGenerationJobId(job.jobId);
         setGenerationProgress(job.progress);
         setBusy(job.status === "queued" || job.status === "running");
@@ -296,7 +335,10 @@ export default function ReadWeavePanel() {
         const response = await server.get<{ jobs: ReadWeaveGenerationJob[] }>(`readweave/articles/${encodeURIComponent(targetNoteId)}/generation-jobs`);
         if (revision !== generationJobsRequestRevision.current || activeArticleNoteId.current !== targetNoteId) return response.jobs;
         const jobsForDecoration = transientGenerationJobRef.current
-            ? [ transientGenerationJobRef.current, ...response.jobs.filter(job => job.anchorId !== transientGenerationJobRef.current!.anchorId || job.kind !== transientGenerationJobRef.current!.kind) ]
+            ? [ transientGenerationJobRef.current, ...response.jobs.filter(job =>
+                job.anchorId !== transientGenerationJobRef.current!.anchorId
+                || job.kind !== transientGenerationJobRef.current!.kind
+                || job.parentLinkId !== transientGenerationJobRef.current!.parentLinkId) ]
             : response.jobs;
         applyGenerationJobStatusDecorations(document.body, jobsForDecoration);
         setGenerationJobs(current => mergeReadWeaveGenerationJobSnapshot(current, response.jobs));
@@ -347,23 +389,27 @@ export default function ReadWeavePanel() {
         setStatusTone("normal");
         setEditState(undefined);
         setDeleteState(undefined);
+        setParentLinkId(undefined);
         const draft = readDraft(noteId!, nextSelection.anchorId);
         const nextKind = preferredKind ?? draft?.kind ?? "question";
         const matchingDraft = draft?.kind === nextKind ? draft : undefined;
-        const matchingJob = generationJobs.find(job => job.anchorId === nextSelection.anchorId && job.kind === nextKind);
+        const matchingJob = generationJobs.find(job =>
+            job.anchorId === nextSelection.anchorId
+            && job.kind === nextKind
+            && !job.parentLinkId);
         const confirmingPendingSelection = selection?.pending
             && normalizedAnchorText(selection.excerpt) === normalizedAnchorText(nextSelection.excerpt);
         setKind(nextKind);
         setQuestionTitle(matchingDraft?.questionTitle
             ?? (nextKind === "question"
-                ? confirmingPendingSelection && questionTitle.trim() ? questionTitle : matchingJob?.title || defaultQuestionForExcerpt(nextSelection.excerpt)
+                ? confirmingPendingSelection && questionTitle.trim() ? questionTitle : matchingJob?.title || defaultQuestionForExcerpt(decodeReadWeaveText(nextSelection.excerpt))
                 : ""));
         setOptimizeQuestion(matchingDraft?.optimizeQuestion ?? (confirmingPendingSelection ? optimizeQuestion : false));
         const restoredFields = recoverReadWeaveGenerationFields({
             draft: matchingDraft,
             fallbackBody: confirmingPendingSelection ? body : "",
             fallbackQuestionTitle: nextKind === "question"
-                ? confirmingPendingSelection && questionTitle.trim() ? questionTitle : matchingJob?.title || defaultQuestionForExcerpt(nextSelection.excerpt)
+                ? confirmingPendingSelection && questionTitle.trim() ? questionTitle : matchingJob?.title || defaultQuestionForExcerpt(decodeReadWeaveText(nextSelection.excerpt))
                 : "",
             fallbackTermIdentity: confirmingPendingSelection ? cleanPartialTermIdentity(termIdentity) : initialTermIdentity(nextSelection.excerpt, nextKind),
             job: matchingJob
@@ -432,6 +478,7 @@ export default function ReadWeavePanel() {
         setEditState(undefined);
         setDeleteState(undefined);
         setKind("question");
+        setParentLinkId(undefined);
         setQuestionTitle("");
         setOptimizeQuestion(false);
         setTermIdentity({});
@@ -531,6 +578,7 @@ export default function ReadWeavePanel() {
         selectionIdentityRevision.current += 1;
         setLoadedArticleNoteId(undefined);
         setSelection(undefined);
+        setParentLinkId(undefined);
         setEntries([]);
         setEntriesLoadedAnchorId(undefined);
         setEditState(undefined);
@@ -566,11 +614,14 @@ export default function ReadWeavePanel() {
 
     useEffect(() => {
         if (!selection || selection.pending || generationJobId) return;
-        const restored = generationJobs.find(job => job.anchorId === selection.anchorId && job.kind === kind);
+        const restored = generationJobs.find(job =>
+            job.anchorId === selection.anchorId
+            && job.kind === kind
+            && job.parentLinkId === parentLinkId);
         if (!restored) return;
         hydrateGenerationJob(restored);
         if (restored.status === "complete" && restored.unread) void markJobViewed(restored);
-    }, [generationJobs, selection?.anchorId, selection?.pending, kind, generationJobId]);
+    }, [generationJobs, selection?.anchorId, selection?.pending, kind, parentLinkId, generationJobId]);
 
     useEffect(() => {
         const requested = generateAfterSelectionConfirmation.current;
@@ -598,9 +649,13 @@ export default function ReadWeavePanel() {
 
     useEffect(() => {
         if (!noteId || !selection) return;
-        const draft: Draft = { kind, questionTitle, optimizeQuestion, termIdentity, termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision, generationJobId, reviewIssues, reviewIssueBaseline };
-        sessionStorage.setItem(draftKey(noteId, selection.anchorId), JSON.stringify(draft));
-    }, [noteId, selection, kind, questionTitle, optimizeQuestion, termIdentity, termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision, generationJobId, reviewIssues, reviewIssueBaseline]);
+        const draft: Draft = { kind, questionTitle, optimizeQuestion, termIdentity, termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision, generationJobId, reviewIssues, reviewIssueBaseline, parentLinkId };
+        sessionStorage.setItem(draftKey(noteId, selection.anchorId, parentLinkId), JSON.stringify(draft));
+    }, [noteId, selection, kind, parentLinkId, questionTitle, optimizeQuestion, termIdentity, termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision, generationJobId, reviewIssues, reviewIssueBaseline]);
+
+    useEffect(() => {
+        localStorage.setItem(READWEAVE_QUESTION_TEMPLATE_STORAGE_KEY, JSON.stringify(questionTemplates));
+    }, [questionTemplates]);
 
     useEffect(() => {
         if (!generationJobId) return;
@@ -699,6 +754,7 @@ export default function ReadWeavePanel() {
             anchorId: selection.anchorId,
             anchorType: selection.anchorType,
             kind,
+            parentLinkId,
             title: currentTitle,
             sourceExcerpt: selection.excerpt
         });
@@ -723,10 +779,14 @@ export default function ReadWeavePanel() {
                 anchorId: selection.anchorId,
                 anchorType: selection.anchorType,
                 kind,
+                parentLinkId,
+                rootSourceExcerpt: selection.excerpt,
                 title: currentTitle,
                 optimizeQuestion: kind === "question" ? optimizeQuestion : undefined,
                 termIdentity: kind === "term" ? cleanPartialTermIdentity(termIdentity) : undefined,
-                fragments: selection.fragments
+                fragments: nestedParent
+                    ? nestedQuestionFragments(entries, nestedParent, selection.fragments)
+                    : selection.fragments
             });
             if (transientGenerationJobRef.current?.jobId === transientJob.jobId) {
                 transientGenerationJobRef.current = undefined;
@@ -798,14 +858,19 @@ export default function ReadWeavePanel() {
         setStatus(t("readweave.saving"));
         setStatusTone("normal");
         try {
+            const reviewedBody = bodyTextareaRef.current?.value ?? body;
+            const reviewedTitle = kind === "question"
+                ? decodeReadWeaveText(questionTextareaRef.current?.value ?? questionTitle)
+                : currentTitle;
             await persistReadWeaveAnchor(noteContext);
             await server.post("readweave/entries", {
                 articleId: noteId,
                 anchorId: selection.anchorId,
                 anchorType: selection.anchorType,
                 kind,
-                title: currentTitle,
-                body,
+                parentLinkId,
+                title: reviewedTitle,
+                body: reviewedBody,
                 sourceExcerpt: currentSourceExcerpt,
                 calloutType,
                 termIdentity: kind === "term" ? cleanPartialTermIdentity(termIdentity) : undefined,
@@ -821,10 +886,13 @@ export default function ReadWeavePanel() {
                     setGenerationJobs(current => current.filter(job => job.jobId !== completedJobId));
                 }
             }
-            sessionStorage.removeItem(draftKey(target.noteId, target.anchorId));
+            sessionStorage.removeItem(draftKey(target.noteId, target.anchorId, target.parentLinkId));
             if (isSelectionActionCurrent(target)) resetEditor(target.kind);
             if (activeArticleNoteId.current === target.noteId) await refreshCurrent(target.noteId, target.anchorId);
-            if (isSelectionActionCurrent(target)) setStatus(t("readweave.saved"));
+            if (isSelectionActionCurrent(target)) {
+                setStatus(t("readweave.saved"));
+                setParentLinkId(undefined);
+            }
         } catch (error) {
             if (isSelectionActionCurrent(target)) {
                 setStatus(readableError(error, t("readweave.save_failed")));
@@ -848,7 +916,7 @@ export default function ReadWeavePanel() {
             const hasOtherDraft = generationJobs.some(job => job.jobId !== discardedJobId && job.anchorId === selection.anchorId);
             const removeAnchor = entries.length === 0 && !hasOtherDraft;
             if (removeAnchor) await removeProvisionalAnchor(noteContext, selection.anchorId);
-            sessionStorage.removeItem(draftKey(target.noteId, target.anchorId));
+            sessionStorage.removeItem(draftKey(target.noteId, target.anchorId, target.parentLinkId));
             generationJobsRequestRevision.current += 1;
             if (activeArticleNoteId.current === target.noteId) {
                 setGenerationJobs(current => current.filter(job => job.jobId !== discardedJobId));
@@ -879,6 +947,7 @@ export default function ReadWeavePanel() {
 
     async function regenerateDraft() {
         if (!generationJobId) return;
+        if (bodyEdited && !window.confirm(t("readweave.regenerate_overwrite_confirm"))) return;
         const regeneratedJobId = generationJobId;
         const target = captureSelectionAction(true, true);
         if (!target) return;
@@ -889,6 +958,7 @@ export default function ReadWeavePanel() {
             anchorId: target.anchorId,
             anchorType: selection!.anchorType,
             kind: target.kind,
+            parentLinkId: target.parentLinkId,
             title: currentTitle,
             sourceExcerpt: currentSourceExcerpt || selection!.excerpt,
             feedback: regenerationFeedback.trim() || undefined
@@ -906,7 +976,9 @@ export default function ReadWeavePanel() {
                 title: currentTitle,
                 optimizeQuestion: kind === "question" ? optimizeQuestion : undefined,
                 termIdentity: kind === "term" ? cleanPartialTermIdentity(termIdentity) : undefined,
-                fragments: selection!.fragments
+                fragments: nestedParent
+                    ? nestedQuestionFragments(entries, nestedParent, selection!.fragments)
+                    : selection!.fragments
             });
             if (activeArticleNoteId.current === target.noteId) upsertGenerationJob(response.job);
             applyReadWeaveGenerationVisual(document.body, response.job);
@@ -1003,12 +1075,17 @@ export default function ReadWeavePanel() {
         selectionActionRevision.current += 1;
         selectionIdentityRevision.current += 1;
         const nextCallout = calloutAfterKindChange(calloutType, nextKind);
+        const nextParentLinkId = nextKind === "question" ? parentLinkId : undefined;
         setKind(nextKind);
+        setParentLinkId(nextParentLinkId);
         resetEditor(nextKind);
         setCalloutType(nextCallout);
         setStatus(undefined);
         setStatusTone("normal");
-        const matchingJob = selection && generationJobs.find(job => job.anchorId === selection.anchorId && job.kind === nextKind);
+        const matchingJob = selection && generationJobs.find(job =>
+            job.anchorId === selection.anchorId
+            && job.kind === nextKind
+            && job.parentLinkId === nextParentLinkId);
         if (matchingJob) hydrateGenerationJob(matchingJob);
     }
 
@@ -1047,6 +1124,118 @@ export default function ReadWeavePanel() {
         setBodyEdited(true);
     }
 
+    function applyQuestionTemplate(template: ReadWeaveQuestionTemplate) {
+        if (!selection) return;
+        setQuestionTitle(renderReadWeaveQuestionTemplate(template, selection.excerpt));
+        setQuestionTemplates(current => recordReadWeaveTemplateUse(current, template.id));
+        setActiveTemplateId(template.id);
+        changeDraft();
+        window.requestAnimationFrame(() => questionTextareaRef.current?.focus());
+    }
+
+    function cycleQuestionTemplate(direction: -1 | 1) {
+        if (!suggestedTemplates.length) return;
+        const currentIndex = suggestedTemplates.findIndex(template => template.id === activeTemplateId);
+        const nextIndex = (currentIndex + direction + suggestedTemplates.length) % suggestedTemplates.length;
+        applyQuestionTemplate(suggestedTemplates[nextIndex]);
+    }
+
+    function handleQuestionKeyDown(event: KeyboardEvent) {
+        const shouldCycle = event.altKey && (event.key === "ArrowUp" || event.key === "ArrowDown")
+            || !questionTitle.trim() && (event.key === "ArrowUp" || event.key === "ArrowDown");
+        if (!shouldCycle) return;
+        event.preventDefault();
+        cycleQuestionTemplate(event.key === "ArrowUp" ? -1 : 1);
+    }
+
+    function addCustomQuestionTemplate() {
+        const label = decodeReadWeaveText(customTemplateLabel).slice(0, 30);
+        const pattern = decodeReadWeaveText(customTemplatePattern).slice(0, 500);
+        if (!label || !pattern.includes("{selection}")) {
+            setStatus(t("readweave.template_placeholder_required"));
+            setStatusTone("warning");
+            return;
+        }
+        setQuestionTemplates(current => [
+            ...current,
+            {
+                id: `custom-${Date.now().toString(36)}`,
+                label,
+                pattern,
+                uses: 0
+            }
+        ]);
+        setCustomTemplateLabel("");
+        setCustomTemplatePattern("关于“{selection}”，");
+        setStatus(undefined);
+    }
+
+    function updateQuestionTemplate(templateId: string, patch: Partial<ReadWeaveQuestionTemplate>) {
+        setQuestionTemplates(current => current.map(template => template.id === templateId
+            ? { ...template, ...patch }
+            : template));
+    }
+
+    function removeQuestionTemplate(templateId: string) {
+        setQuestionTemplates(current => {
+            const remaining = current.filter(template => template.id !== templateId);
+            return remaining.length > 0
+                ? remaining
+                : DEFAULT_READWEAVE_QUESTION_TEMPLATES.map(template => ({ ...template }));
+        });
+    }
+
+    function beginFollowUp(entry: ReadWeaveResolvedEntry) {
+        if (entry.kind !== "question") return;
+        if (entry.depth >= 5) {
+            setStatus(t("readweave.follow_up_depth_limit"));
+            setStatusTone("warning");
+            return;
+        }
+        const restoredDraft = noteId && selection
+            ? readDraft(noteId, selection.anchorId, entry.linkId)
+            : undefined;
+        const restoredJob = generationJobs.find(job =>
+            job.anchorId === selection?.anchorId
+            && job.kind === "question"
+            && job.parentLinkId === entry.linkId);
+        const restoredFields = recoverReadWeaveGenerationFields({
+            draft: restoredDraft,
+            fallbackQuestionTitle: renderReadWeaveQuestionTemplate(DEFAULT_READWEAVE_QUESTION_TEMPLATES[11], selection?.excerpt ?? entry.title),
+            job: restoredJob
+        });
+        selectionActionRevision.current += 1;
+        selectionIdentityRevision.current += 1;
+        setParentLinkId(entry.linkId);
+        setKind("question");
+        setQuestionTitle(restoredFields.questionTitle);
+        setOptimizeQuestion(restoredDraft?.optimizeQuestion ?? false);
+        setTermIdentity({});
+        setTermIdentityEdited(false);
+        setBody(restoredFields.body);
+        setBodyEdited(!!restoredDraft?.bodyEdited && !!restoredDraft.body.trim());
+        setBodyEditing(!(restoredJob?.result?.body || restoredDraft?.generationJobId));
+        setCalloutType(restoredDraft?.calloutType ?? defaultReadWeaveCallout("question"));
+        setReuseObjectId(restoredDraft?.reuseObjectId);
+        setContextDecision(restoredDraft?.contextDecision ?? restoredJob?.result?.context);
+        setWorkflow(restoredJob?.result?.workflow);
+        setGenerationJobId(restoredDraft?.generationJobId ?? restoredJob?.jobId);
+        setGenerationProgress(restoredJob?.progress ?? []);
+        const restoredIssues = restoredDraft?.reviewIssues ?? restoredJob?.result?.reviewIssues ?? [];
+        setReviewIssues(restoredIssues);
+        setReviewIssueBaseline(restoredDraft?.reviewIssueBaseline
+            ?? (restoredIssues.length > 0 && restoredJob?.result
+                ? createReadWeaveReviewIssueBaseline(restoredJob.result.body)
+                : undefined));
+        setRegenerationFeedback(restoredJob?.feedback ?? "");
+        setRegenerationOpen(false);
+        setStatus(undefined);
+        setStatusTone("normal");
+        setBusy(restoredJob?.status === "queued" || restoredJob?.status === "running");
+        if (restoredJob?.status === "complete" && restoredJob.unread) void markJobViewed(restoredJob);
+        window.requestAnimationFrame(() => questionTextareaRef.current?.focus());
+    }
+
     function toggleBodyEditing() {
         if (bodyEditing) {
             setBodyEditing(false);
@@ -1078,6 +1267,7 @@ export default function ReadWeavePanel() {
                 termIdentity: entry.termIdentity ?? { chineseName: entry.title },
                 mode: response.impact.linkCount > 1 ? "display-only" : "global"
             });
+            window.requestAnimationFrame(() => editBodyTextareaRef.current?.focus());
         } finally {
             if (isSelectionActionCurrent(target)) setBusy(false);
         }
@@ -1091,7 +1281,7 @@ export default function ReadWeavePanel() {
             const response = await server.get<{ impact: ReadWeaveImpact }>(`readweave/objects/${encodeURIComponent(entry.objectId)}/impact`);
             if (!isSelectionActionCurrent(target)) return;
             setEditState(undefined);
-            setDeleteState({ entry, impact: response.impact });
+            setDeleteState({ entry, impact: response.impact, childStrategy: "cascade" });
         } finally {
             if (isSelectionActionCurrent(target)) setBusy(false);
         }
@@ -1101,12 +1291,14 @@ export default function ReadWeavePanel() {
         if (!deleteState || !noteId || !selection) return;
         const target = captureSelectionAction(true, true);
         if (!target) return;
-        const deletedLinkId = deleteState.entry.linkId;
-        const removeAnchor = entries.every(entry => entry.linkId === deletedLinkId)
-            && !generationJobs.some(job => job.anchorId === target.anchorId);
         setBusy(true);
         try {
-            await server.remove<ReadWeaveDeleteResult>(`readweave/links/${encodeURIComponent(deletedLinkId)}`);
+            const result = await server.remove<ReadWeaveDeleteResult>(
+                `readweave/links/${encodeURIComponent(deleteState.entry.linkId)}?children=${deleteState.childStrategy}`
+            );
+            const deletedIds = new Set(result.deletedLinkIds ?? [ result.linkId ]);
+            const removeAnchor = entries.every(entry => deletedIds.has(entry.linkId))
+                && !generationJobs.some(job => job.anchorId === target.anchorId);
             if (removeAnchor) {
                 await removeProvisionalAnchor(noteContext, target.anchorId);
                 await persistReadWeaveAnchor(noteContext);
@@ -1142,13 +1334,15 @@ export default function ReadWeavePanel() {
         if (!target) return;
         setBusy(true);
         try {
+            const currentEditBody = editBodyTextareaRef.current?.value ?? editState.body;
+            const currentEditQuestionTitle = decodeReadWeaveText(editTitleInputRef.current?.value ?? editState.title);
             const editTitle = editState.entry.kind === "term"
                 ? formatPartialTermIdentity(editState.termIdentity) || editState.entry.canonicalTitle
-                : editState.title;
+                : currentEditQuestionTitle;
             await server.patch(`readweave/links/${encodeURIComponent(editState.entry.linkId)}`, {
                 mode: editState.mode,
                 title: editTitle,
-                body: editState.body,
+                body: currentEditBody,
                 calloutType: editState.calloutType,
                 termIdentity: editState.entry.kind === "term" ? cleanPartialTermIdentity(editState.termIdentity) : undefined,
                 verifiedNonExpandableArtifact: editState.entry.verifiedNonExpandableArtifact
@@ -1191,15 +1385,13 @@ export default function ReadWeavePanel() {
                         <section class="readweave-existing">
                             <div class="readweave-section-title">{t("readweave.saved_items")}</div>
                             {entries.length === 0 && <p class="readweave-hint">{t("readweave.no_saved_items")}</p>}
-                            {entries.map(entry => (
-                                <SavedEntry
-                                    entry={entry}
-                                    busy={editorLocked}
-                                    onEdit={() => beginEdit(entry)}
-                                    onDelete={() => beginDelete(entry)}
-                                    key={entry.linkId}
-                                />
-                            ))}
+                            <SavedEntryTree
+                                entries={entries}
+                                busy={editorLocked}
+                                onEdit={beginEdit}
+                                onDelete={beginDelete}
+                                onFollowUp={beginFollowUp}
+                            />
                         </section>
 
                         {deleteState && (
@@ -1214,6 +1406,29 @@ export default function ReadWeavePanel() {
                                             articles: Math.max(0, deleteState.impact.articleCount - 1)
                                         })}
                                     </p>
+                                )}
+                                {(deleteState.impact.descendantCount ?? 0) > 0 && (
+                                    <div class="readweave-delete-tree-options">
+                                        <strong>{t("readweave.delete_follow_ups_title")}</strong>
+                                        <label>
+                                            <input
+                                                type="radio"
+                                                name="readweave-delete-tree"
+                                                checked={deleteState.childStrategy === "cascade"}
+                                                onChange={() => setDeleteState({ ...deleteState, childStrategy: "cascade" })}
+                                            />
+                                            <span>{t("readweave.delete_follow_ups_cascade", { count: deleteState.impact.descendantCount })}</span>
+                                        </label>
+                                        <label>
+                                            <input
+                                                type="radio"
+                                                name="readweave-delete-tree"
+                                                checked={deleteState.childStrategy === "promote"}
+                                                onChange={() => setDeleteState({ ...deleteState, childStrategy: "promote" })}
+                                            />
+                                            <span>{t("readweave.delete_follow_ups_promote")}</span>
+                                        </label>
+                                    </div>
                                 )}
                                 <div class="readweave-actions">
                                     <button type="button" class="btn btn-danger" disabled={editorLocked} onClick={applyDelete}>{t("readweave.confirm_delete")}</button>
@@ -1230,9 +1445,9 @@ export default function ReadWeavePanel() {
                                 {editState.entry.kind === "term" ? (
                                     <TermFields value={editState.termIdentity} disabled={editorLocked} onChange={value => setEditState({ ...editState, termIdentity: value })} />
                                 ) : (
-                                    <label>{t("readweave.title_label")}<input value={editState.title} disabled={editorLocked} onInput={event => setEditState({ ...editState, title: event.currentTarget.value })} /></label>
+                                    <label>{t("readweave.title_label")}<input ref={editTitleInputRef} value={editState.title} disabled={editorLocked} onInput={event => setEditState({ ...editState, title: event.currentTarget.value })} /></label>
                                 )}
-                                <label>{t(editState.entry.kind === "question" ? "readweave.answer_label" : "readweave.definition_label")}<textarea rows={7} value={editState.body} disabled={editorLocked} onInput={event => setEditState({ ...editState, body: event.currentTarget.value })} /></label>
+                                <label>{t(editState.entry.kind === "question" ? "readweave.answer_label" : "readweave.definition_label")}<textarea ref={editBodyTextareaRef} rows={7} value={editState.body} disabled={editorLocked} onInput={event => setEditState({ ...editState, body: event.currentTarget.value })} /></label>
                                 <CalloutSelector value={editState.calloutType} disabled={editorLocked} onChange={value => setEditState({ ...editState, calloutType: value })} />
                                 <div class="readweave-edit-modes">
                                     {(["global", "article-variant", "display-only"] as ReadWeaveEditMode[]).map(mode => (
@@ -1250,6 +1465,13 @@ export default function ReadWeavePanel() {
                         )}
 
                         <section class="readweave-editor">
+                            {nestedParent && (
+                                <div class="readweave-follow-up-context">
+                                    <span>{t("readweave.follow_up_level", { level: nestedParent.depth + 1 })}</span>
+                                    <strong>{nestedParent.title}</strong>
+                                    <button type="button" class="btn btn-sm btn-link" onClick={() => setParentLinkId(undefined)}>{t("readweave.exit_follow_up")}</button>
+                                </div>
+                            )}
                             <div class="readweave-kind" role="group" aria-label={t("readweave.kind_label")}>
                                 <button type="button" class={kind === "question" ? "active" : ""} disabled={editorLocked} onClick={() => chooseKind("question")}>{t("readweave.question")}</button>
                                 <button type="button" class={kind === "term" ? "active" : ""} disabled={editorLocked} onClick={() => chooseKind("term")}>{t("readweave.term")}</button>
@@ -1257,13 +1479,65 @@ export default function ReadWeavePanel() {
                             {selection.pending && <p class="readweave-hint">{t("readweave.selection_pending_hint")}</p>}
                             {kind === "question" ? (
                                 <>
+                                    <div class="readweave-question-template-bar" aria-label={t("readweave.question_templates")}>
+                                        {suggestedTemplates.map(template => (
+                                            <button
+                                                type="button"
+                                                class={activeTemplateId === template.id ? "active" : ""}
+                                                onClick={() => applyQuestionTemplate(template)}
+                                                disabled={editorLocked}
+                                                title={template.pattern}
+                                                key={template.id}
+                                            >{template.label}</button>
+                                        ))}
+                                        <button
+                                            type="button"
+                                            class="readweave-template-manage"
+                                            aria-expanded={templateManagerOpen}
+                                            onClick={() => setTemplateManagerOpen(current => !current)}
+                                            disabled={editorLocked}
+                                        >
+                                            <i class="bx bx-slider-alt" aria-hidden="true" />
+                                            {t("readweave.manage_templates")}
+                                        </button>
+                                    </div>
+                                    <div class={`readweave-template-manager ${templateManagerOpen ? "open" : ""}`} aria-hidden={!templateManagerOpen}>
+                                        <p class="readweave-hint">{t("readweave.template_keyboard_hint")}</p>
+                                        <div class="readweave-template-list">
+                                            {questionTemplates.map(template => (
+                                                <div class="readweave-template-row" key={template.id}>
+                                                    <input
+                                                        aria-label={t("readweave.template_name")}
+                                                        value={template.label}
+                                                        onInput={event => updateQuestionTemplate(template.id, { label: event.currentTarget.value.slice(0, 30) })}
+                                                    />
+                                                    <textarea
+                                                        rows={2}
+                                                        aria-label={t("readweave.template_pattern")}
+                                                        value={template.pattern}
+                                                        onInput={event => updateQuestionTemplate(template.id, { pattern: event.currentTarget.value.slice(0, 500) })}
+                                                    />
+                                                    <button type="button" class="btn btn-sm btn-link" aria-label={t("readweave.delete")} onClick={() => removeQuestionTemplate(template.id)}>
+                                                        <i class="bx bx-trash" aria-hidden="true" />
+                                                    </button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <div class="readweave-template-add">
+                                            <input value={customTemplateLabel} placeholder={t("readweave.template_name")} onInput={event => setCustomTemplateLabel(event.currentTarget.value)} />
+                                            <textarea rows={2} value={customTemplatePattern} placeholder={t("readweave.template_pattern")} onInput={event => setCustomTemplatePattern(event.currentTarget.value)} />
+                                            <button type="button" class="btn btn-secondary" onClick={addCustomQuestionTemplate}>{t("readweave.add_template")}</button>
+                                        </div>
+                                    </div>
                                     <label>{t("readweave.question_label")}
                                         <textarea
+                                            ref={questionTextareaRef}
                                             rows={3}
                                             value={questionTitle}
                                             disabled={editorLocked}
                                             onFocus={() => { if (selection.pending) confirmPendingSelection("question"); }}
                                             onInput={event => { setQuestionTitle(event.currentTarget.value); changeDraft(); }}
+                                            onKeyDown={handleQuestionKeyDown}
                                             data-testid="readweave-question"
                                         />
                                     </label>
@@ -1498,16 +1772,55 @@ function HoverEntry({ entry }: { entry: ReadWeaveResolvedEntry }) {
     );
 }
 
+function SavedEntryTree({
+    entries,
+    busy,
+    onEdit,
+    onDelete,
+    onFollowUp
+}: {
+    entries: ReadWeaveResolvedEntry[];
+    busy: boolean;
+    onEdit: (entry: ReadWeaveResolvedEntry) => void;
+    onDelete: (entry: ReadWeaveResolvedEntry) => void;
+    onFollowUp: (entry: ReadWeaveResolvedEntry) => void;
+}) {
+    const ids = new Set(entries.map(entry => entry.linkId));
+    const roots = entries.filter(entry => !entry.parentLinkId || !ids.has(entry.parentLinkId));
+    const renderEntry = (entry: ReadWeaveResolvedEntry): JSX.Element => {
+        const children = entries.filter(candidate => candidate.parentLinkId === entry.linkId);
+        return (
+            <div class="readweave-entry-tree-node" data-depth={entry.depth} key={entry.linkId}>
+                <SavedEntry
+                    entry={entry}
+                    busy={busy}
+                    onEdit={() => onEdit(entry)}
+                    onDelete={() => onDelete(entry)}
+                    onFollowUp={() => onFollowUp(entry)}
+                />
+                {children.length > 0 && (
+                    <div class="readweave-entry-tree-children">
+                        {children.map(renderEntry)}
+                    </div>
+                )}
+            </div>
+        );
+    };
+    return <div class="readweave-entry-tree">{roots.map(renderEntry)}</div>;
+}
+
 function SavedEntry({
     entry,
     busy,
     onEdit,
-    onDelete
+    onDelete,
+    onFollowUp
 }: {
     entry: ReadWeaveResolvedEntry;
     busy: boolean;
     onEdit: () => void;
     onDelete: () => void;
+    onFollowUp: () => void;
 }) {
     return (
         <article class={`readweave-entry readweave-callout-${entry.calloutType}`} tabindex={0}>
@@ -1515,6 +1828,12 @@ function SavedEntry({
                 <span><i class={CALLOUT_ICONS[entry.calloutType]} />{entry.title}</span>
                 <span class="readweave-entry-heading-actions">
                     {entry.isDisplayOverride && <span class="readweave-badge">{t("readweave.local_display")}</span>}
+                    {entry.parentStale && <span class="readweave-badge readweave-stale-badge">{t("readweave.parent_changed")}</span>}
+                    {entry.kind === "question" && entry.depth < 5 && (
+                        <button type="button" class="btn btn-sm btn-link" aria-label={t("readweave.follow_up_item", { title: entry.title })} title={t("readweave.follow_up")} onClick={onFollowUp} disabled={busy}>
+                            <i class="bx bx-subdirectory-right" aria-hidden="true" />
+                        </button>
+                    )}
                     <button type="button" class="btn btn-sm btn-link" aria-label={t("readweave.edit_item", { title: entry.title })} title={t("readweave.edit")} onClick={onEdit} disabled={busy}>
                         <i class="bx bx-edit-alt" aria-hidden="true" />
                     </button>
@@ -2092,7 +2411,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
 }
 
 function normalizedAnchorText(value: string): string {
-    return value.replace(/\s+/g, " ").trim();
+    return decodeReadWeaveText(value);
 }
 
 function persistReconciledReadWeaveAnchor(root: HTMLElement) {
@@ -2111,7 +2430,7 @@ function persistReconciledReadWeaveAnchor(root: HTMLElement) {
 }
 
 function defaultQuestionForExcerpt(excerpt: string): string {
-    const normalized = normalizedAnchorText(excerpt)
+    const normalized = decodeReadWeaveText(excerpt)
         .replace(/[：:，,；;。.!！?？]+$/u, "")
         .trim();
     if (!normalized) return "";
@@ -2178,6 +2497,9 @@ function previewEntriesForElement(
             anchorId: job.anchorId,
             anchorType: job.anchorType,
             objectId: `readweave-generation:${job.jobId}`,
+            parentLinkId: job.parentLinkId,
+            rootLinkId: job.parentLinkId,
+            depth: job.parentLinkId ? 1 : 0,
             kind: job.kind,
             title,
             body: result.body,
@@ -2584,17 +2906,17 @@ function rangeStrictlyIntersectsElement(range: Range, element: Element): boolean
 }
 
 function textOf(element: Element | null | undefined, maxLength = 10_000): string {
-    return (element?.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, maxLength);
+    return decodeReadWeaveText(element?.textContent ?? "").slice(0, maxLength);
 }
 
 function textOfAnchorElements(elements: HTMLElement[], maxLength = 10_000): string {
-    return elements.map(element => element.textContent ?? "").join("").replace(/\s+/g, " ").trim().slice(0, maxLength);
+    return decodeReadWeaveText(elements.map(element => element.textContent ?? "").join("")).slice(0, maxLength);
 }
 
 function resolveSourceExcerpt(selection: AnchorSelection, job: ReadWeaveGenerationJob | undefined): string {
-    return selection.excerpt.trim()
-        || job?.sourceExcerpt.trim()
-        || selection.fragments.find(fragment => fragment.role === "selected")?.text.trim()
+    return decodeReadWeaveText(selection.excerpt)
+        || decodeReadWeaveText(job?.sourceExcerpt ?? "")
+        || decodeReadWeaveText(selection.fragments.find(fragment => fragment.role === "selected")?.text ?? "")
         || "";
 }
 
@@ -2616,6 +2938,43 @@ function collectFragments(root: HTMLElement, block: HTMLElement, selectedText: s
     return fragments.filter(fragment => fragment.text);
 }
 
+function nestedQuestionFragments(
+    entries: ReadWeaveResolvedEntry[],
+    parent: ReadWeaveResolvedEntry,
+    articleFragments: ReadWeaveContextFragment[]
+): ReadWeaveContextFragment[] {
+    const chain: ReadWeaveResolvedEntry[] = [];
+    let current: ReadWeaveResolvedEntry | undefined = parent;
+    const seen = new Set<string>();
+    while (current && !seen.has(current.linkId) && chain.length < 5) {
+        seen.add(current.linkId);
+        chain.unshift(current);
+        current = current.parentLinkId
+            ? entries.find(entry => entry.linkId === current!.parentLinkId)
+            : undefined;
+    }
+    const immediate = chain.at(-1)!;
+    return [
+        {
+            id: `follow-up-answer-${immediate.linkId}`,
+            role: "selected",
+            text: `问题：${decodeReadWeaveText(immediate.title)}\n回答：${decodeReadWeaveText(immediate.body)}`
+        },
+        ...chain.slice(0, -1).map((entry, index) => ({
+            id: `follow-up-ancestor-${index + 1}-${entry.linkId}`,
+            role: "previous" as const,
+            distance: chain.length - index,
+            text: `上级问题：${decodeReadWeaveText(entry.title)}\n上级回答：${decodeReadWeaveText(entry.body)}`
+        })),
+        ...articleFragments.map(fragment => ({
+            ...fragment,
+            id: `article-${fragment.id}`,
+            role: fragment.role === "selected" ? "section" as const : fragment.role,
+            distance: (fragment.distance ?? 0) + 10
+        }))
+    ];
+}
+
 function initialTermIdentity(_excerpt: string, _kind: ReadWeaveObjectKind): Partial<ReadWeaveTermIdentity> {
     return {};
 }
@@ -2634,12 +2993,12 @@ function formatPartialTermIdentity(value: Partial<ReadWeaveTermIdentity>): strin
     return [clean.abbreviation, name].filter(Boolean).join(" ");
 }
 
-function draftKey(noteId: string, anchorId: string) {
-    return `readweave:draft:${noteId}:${anchorId}`;
+function draftKey(noteId: string, anchorId: string, parentLinkId?: string) {
+    return `readweave:draft:${noteId}:${anchorId}:${parentLinkId ?? "root"}`;
 }
 
-function readDraft(noteId: string, anchorId: string): Draft | undefined {
-    const value = sessionStorage.getItem(draftKey(noteId, anchorId));
+function readDraft(noteId: string, anchorId: string, parentLinkId?: string): Draft | undefined {
+    const value = sessionStorage.getItem(draftKey(noteId, anchorId, parentLinkId));
     if (!value) return undefined;
     try {
         return JSON.parse(value) as Draft;
@@ -2690,6 +3049,7 @@ function createTransientGenerationJob(input: {
     anchorId: string;
     anchorType: ReadWeaveAnchorType;
     kind: ReadWeaveObjectKind;
+    parentLinkId?: string;
     title: string;
     sourceExcerpt: string;
 }): ReadWeaveGenerationJob {
@@ -2720,6 +3080,7 @@ function createOptimisticRegenerationJob(input: {
     anchorId: string;
     anchorType: ReadWeaveAnchorType;
     kind: ReadWeaveObjectKind;
+    parentLinkId?: string;
     title: string;
     sourceExcerpt: string;
     feedback?: string;
@@ -2729,6 +3090,7 @@ function createOptimisticRegenerationJob(input: {
         anchorId: input.anchorId,
         anchorType: input.anchorType,
         kind: input.kind,
+        parentLinkId: input.parentLinkId,
         title: input.title,
         sourceExcerpt: input.sourceExcerpt
     });
@@ -2740,6 +3102,7 @@ function createOptimisticRegenerationJob(input: {
         anchorId: input.anchorId,
         anchorType: input.anchorType,
         kind: input.kind,
+        parentLinkId: input.parentLinkId,
         title: input.title,
         sourceExcerpt: input.sourceExcerpt,
         jobId: input.jobId,

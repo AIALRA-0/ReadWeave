@@ -260,13 +260,13 @@ export interface ReadWeaveQualityOptions {
     entityType?: ReadWeaveEvidencePlan["entityType"];
 }
 
-const ABBREVIATION_TOKEN_SOURCE = String.raw`(?:[\p{Lu}\p{Script=Greek}µ][\p{Lu}\p{Script=Greek}µ0-9.+/#_&\-‐–—‑−]{1,}|[\p{Script=Greek}µ]|[0-9]+[\p{Lu}\p{Script=Greek}µ][\p{Lu}\p{Script=Greek}µ0-9.+/#_&\-‐–—‑−]*|dB|SoC|NoC|[a-z][\p{Lu}][\p{Lu}0-9.+/#_&\-‐–—‑−]{1,}|[A-Z]{2,}[a-z](?:[0-9]+)?|[A-Z][a-z]{1,3}[A-Z]{2,}[A-Za-z0-9]*|[a-z]{2,3}[A-Z]{2,}[A-Za-z0-9]*|IPv[46]|x[0-9]{2,})`;
+const ABBREVIATION_TOKEN_SOURCE = String.raw`(?:[\p{Lu}\p{Script=Greek}µ][\p{Lu}\p{Script=Greek}µ0-9.+/#_&\-‐–—‑−]{1,}|[\p{Script=Greek}µ]|[0-9]+[\p{Lu}\p{Script=Greek}µ][\p{Lu}\p{Script=Greek}µ0-9.+/#_&\-‐–—‑−]*|dB|SoC|NoC|dblp|[a-z][\p{Lu}][\p{Lu}0-9.+/#_&\-‐–—‑−]{1,}|[A-Z]{2,}[a-z](?:[0-9]+)?|[A-Z][a-z]{1,3}[A-Z]{2,}[A-Za-z0-9]*|[a-z]{2,3}[A-Z]{2,}[A-Za-z0-9]*|IPv[46]|x[0-9]{2,})`;
 // Body scanning is intentionally narrower than identity validation. A standalone
 // Greek letter or a compact expression such as ΔV, λL1 or L2 is normally
 // mathematical notation in a paper, not an unexpanded prose abbreviation.
 // Canonical identities still use ABBREVIATION_TOKEN_SOURCE, so β‑VAE and even a
 // user-selected single Greek identity continue to validate and round-trip.
-const ABBREVIATION_SCAN_TOKEN_SOURCE = String.raw`(?:[A-Z][A-Z0-9.+/#_&\-‐–—‑−]{1,}|[\p{Script=Greek}µ][\-‐–—‑−][A-Z][A-Z0-9.+/#_&\-‐–—‑−]*|µP|[0-9]+[A-Z][A-Z0-9.+/#_&\-‐–—‑−]*|dB|SoC|NoC|[a-z][A-Z][A-Z0-9.+/#_&\-‐–—‑−]{1,}|[A-Z]{2,}[a-z](?:[0-9]+)?|IPv[46]|x[0-9]{2,})`;
+const ABBREVIATION_SCAN_TOKEN_SOURCE = String.raw`(?:[A-Z][A-Z0-9.+/#_&\-‐–—‑−]{1,}|[\p{Script=Greek}µ][\-‐–—‑−][A-Z][A-Z0-9.+/#_&\-‐–—‑−]*|µP|[0-9]+[A-Z][A-Z0-9.+/#_&\-‐–—‑−]*|dB|SoC|NoC|dblp|[a-z][A-Z][A-Z0-9.+/#_&\-‐–—‑−]{1,}|[A-Z]{2,}[a-z](?:[0-9]+)?|IPv[46]|x[0-9]{2,})`;
 const ENGLISH_TERM_NAME_SOURCE = String.raw`[\p{Script=Latin}\p{Script=Greek}\p{N}µ][\p{Script=Latin}\p{Script=Greek}\p{N}µ∞ .+*'’(),/#&_\-‐–—‑−]{0,299}`;
 const ABBREVIATION_PATTERN = new RegExp(
     String.raw`(?<![\p{Script=Latin}\p{N}_.])${ABBREVIATION_SCAN_TOKEN_SOURCE}(?![\p{Script=Latin}\p{N}.+/#_&\-‐–—‑−])`,
@@ -406,7 +406,7 @@ const CONTEXTUAL_EVIDENCE_SENSITIVE_EFFECTS = [
     "老化效应"
 ] as const;
 const DEFINITION_SHAPED_QUESTION_PATTERN = /^(?:(?:什么是|请解释|解释一下)\s*[^？?\n]{1,160}|[“"'‘][^”"'’]{1,160}[”"'’]\s*(?:是什么意思|是什么|指什么)|[^，,；;：:\n]{1,100}\s*(?:是什么意思|是什么|指什么))\s*[？?]?$/u;
-const MALFORMED_MIXED_BILINGUAL_PARENTHETICAL_PATTERN = /[（(](?![^（）()\n]{0,240}\d)[^（）()\n]{0,100}\p{Script=Han}{2,}[^（）()\n]{0,100}[，,]\s*[A-Za-z][A-Za-z'’\-]{1,}(?:\s+[A-Za-z][A-Za-z'’\-]{1,}){1,}[^（）()\n]{0,80}[）)]/u;
+const MALFORMED_MIXED_BILINGUAL_PARENTHETICAL_PATTERN = /[（(](?![^（）()\n]{0,240}\d)[^（）()\n]{0,100}\p{Script=Han}{2,}[^（）()\n]{0,100}[，,]\s*[A-Za-z][A-Za-z'’-]{1,}(?:\s+[A-Za-z][A-Za-z'’-]{1,}){1,}[^（）()\n]{0,80}[）)]/u;
 const MAX_PLAIN_DEFINITION_OPENING_CHARACTERS = 110;
 const MAX_READABLE_CLAUSE_CHARACTERS = 180;
 const MAX_REPAIR_ROUNDS = 3;
@@ -459,7 +459,7 @@ const KNOWN_PRODUCT_CANONICAL_FORMS = new Map([
     [ "CCF", "CCF 中国计算机学会（China Computer Federation）" ],
     [ "CPU", "CPU 中央处理器（Central Processing Unit）" ],
     [ "DAC", "DAC 设计自动化会议（Design Automation Conference）" ],
-    [ "DBLP", "计算机科学书目数据库（dblp computer science bibliography）" ],
+    [ "DBLP", "dblp 计算机科学书目数据库（dblp Computer Science Bibliography）" ],
     [ "DOI", "DOI 数字对象标识符（Digital Object Identifier）" ],
     [ "DRAM", "DRAM 动态随机存取存储器（Dynamic Random-Access Memory）" ],
     [ "DRC", "DRC 设计规则检查（Design Rule Check）" ],
@@ -1307,9 +1307,9 @@ export function buildReadWeaveTaskProfile(
         subject: normalizedTitle,
         breadth: "focused",
         knowledgeScope: "general",
-        outputContract: "以规范名称或当前称谓开头，给出可脱离本文独立阅读的通用定义；依次说明上位类型、核心含义或机制、主要用途与角色及必要边界；仅在同一专业领域确有必要时区分相邻概念；通常一段，复杂时最多两段",
+        outputContract: "以规范名称或当前称谓开头，给出可脱离本文独立阅读的通用定义；先用零基础读者已经认识的通俗类别建立认知锚点，再依次说明核心含义或机制、主要用途与角色、例子及必要边界；仅在同一专业领域确有必要时区分相邻概念；通常一至两段，复杂时最多三段",
         requiresTermIdentity: true,
-        maxParagraphs: 2,
+        maxParagraphs: 3,
         maxCharacters: 1_200
     } : {
         kind,
@@ -1318,10 +1318,10 @@ export function buildReadWeaveTaskProfile(
         breadth: "adaptive",
         knowledgeScope: overviewQuestionSubject && !explicitContextScope ? "general" : "contextual",
         outputContract: overviewQuestionSubject && !explicitContextScope
-            ? "把所问对象作为唯一主体，给出可脱离本文独立阅读的通用说明；先说明其身份或上位类型，再说明核心工作、作用、机制、重要性与必要边界；不得用当前笔记如何使用该对象来代替主体介绍"
+            ? "把所问对象作为唯一主体，给出可脱离本文独立阅读的通用说明；先说明其身份或通俗类别，再说明核心工作、作用、机制、重要性与必要边界；不得用当前笔记如何使用该对象来代替主体介绍"
             : "直接回答问题中的全部疑问；宽度随问题自适应，先给结论，再按需展开证据、机制、边界、因果、数据与可验证判据",
         requiresTermIdentity: false,
-        maxParagraphs: 4,
+        maxParagraphs: 5,
         maxCharacters: 5_000
     };
 }
@@ -1478,23 +1478,23 @@ export function buildReadWeaveSystemPrompt(kind: ReadWeaveGenerateRequest["kind"
         "回答必须直接从结论或定义开始。禁止出现“根据上下文”“从原文可以看出”“原文指出”“需要注意的是”“综上所述”等环境解释。",
         "不得复述问题，不得输出片段编号、检索过程、分析过程、寒暄、标题或“答：”。",
         kind === "question"
-            ? "使用自然、规范的中文标点。简单回答通常写 1 段，复杂任务按需写 2—4 段，通常控制在 1—4 个自然段、1200 个中文字符以内；只有问题本身确实复杂时才可更长。术语定义复杂时最多 2 段。"
-            : "使用自然、规范的中文标点。定义通常写 1 段，复杂时最多 2 段；只保留识别对象、解释含义并区分边界所需的信息。",
+            ? "使用自然、规范的中文标点。简单回答通常写 1 段，复杂任务按需写 2—5 段，通常控制在 1—5 个自然段、1200 个中文字符以内；只有问题本身确实复杂时才可更长。术语定义复杂时最多 3 段。"
+            : "使用自然、规范的中文标点。定义通常写 1—2 段，复杂时最多 3 段；只保留识别对象、解释含义并区分边界所需的信息。",
         "段落之间只保留一个空行。不要把每句话单独换行，也不要用大量短段或密集分号压成一整段；只有任务明确要求步骤或列表时才使用列表。",
         "回答结构必须由当前问题决定，不得套用固定八段、固定标题或无关模板；先给结论，再只展开与任务目标有关的证据、机制、边界、因果关系、数据和可验证判据。",
-        "所有解释采用同一条“理解阶梯”：第一层先用普通读者已经认识的词给出直接结论或一句话定义；第二层再说明它怎样工作、为什么成立或解决什么问题；第三层只在必要时补充适用条件、边界与容易混淆之处。不得在解释一个术语时先引入更多尚未解释的术语。",
+        "问题回答与术语定义必须采用同一条“理解阶梯”，只允许宽度和输出形态不同：第一层用零基础读者已经认识的事物建立认知锚点并给出直接结论；第二层补足读懂后文所需的前置知识；第三层解释它怎样工作、为什么成立或解决什么问题；第四层按需给出一个具体例子；第五层只在必要时说明适用条件、边界、反例或容易混淆之处。不得展示隐藏思维过程，不得在解释一个术语时先引入更多尚未解释的术语。",
         "第一层必须能脱离后文单独读懂：一个分句只承担一个核心意思，先说对象类别和实际作用，再说专业机制；避免连续堆叠“框架、模型、机制、优化、可微、协同、表征”等抽象名词，禁止用比原术语更晦涩的一串名词替代定义。",
         "复杂任务必须形成足够深入的证据闭环并逐项覆盖所有疑问或定义要件；简单任务应保持紧凑，禁止为了显得完整而填充无关的配置、数字推导或测试内容。",
         "联网校准资料与正文可能互补或冲突；公开名称、标准、论文、产品能力和时效性事实优先用联网资料校准，文章自身的观点、现场记录和私有事实仍以正文为准；冲突或不确定时明确边界。",
         "联网校准只用于提高准确性，不能扩大任务范围；除非任务目标需要，否则禁止加入厂商、芯片型号、产品列表、历史轶事和外围英文术语。",
         kind === "question" ? "非定量问题已有本地结论时，联网资料只用于校验这些结论，不得扩写本地未出现的实现子步骤、部件清单、工艺、基准倍数、增长规律、标准机构或外围实体；若草稿已经引入，删除相关事实或从句，而不是补全其名称。" : "",
         "除非任务明确要求来源、论文、作者或年份，否则联网结果只用于后台校准，正文禁止出现作者姓名、论文题名、出版年份或括号式文献引用。",
-        kind === "term" ? "定义必须明确回答所选对象在当前语境中是什么：先确定对象类别或上位类型，再给出区分特征，并按需说明角色、机制与适用边界；禁止循环定义、只改写名称、履历堆砌或百科式扩写。" : "",
+        kind === "term" ? "定义必须明确回答所选对象在当前语境中是什么：先用零基础读者熟悉的通俗类别定位对象，再给出区分特征，并按需说明角色、机制与适用边界；禁止循环定义、只改写名称、履历堆砌或百科式扩写；禁止把“上位类型”“所属类别”等提示词原样当成定义内容。" : "",
         kind === "term" ? "术语已经出现在上下文、但正文没有给出词典式定义时，可以使用联网校准区块中可靠且稳定的通用知识补足定义；不得补写未经证实的厂商、标准或实现细节。只有存在多个合理义项且当前语境无法消歧时，才返回 need_more_context。" : "",
         kind === "term" ? "定义只解释所选术语的含义、角色、机制、适用边界和必要上下文；正文不得带入无助于定义的作者履历、论文题名、期刊或会议、年份、学位、单位经历、DOI 或参考文献元数据。" : "",
         kind === "term" ? "根据真实实体类别选择定义要件，不套同一话术：人物写当前身份、专业角色、机构或领域及消歧特征；会议写实体类型、主题范围与学术角色；组织写组织性质与职责；标准写发布主体与规范范围；方法或系统写所解决问题、核心机制、输入输出及边界；标识符写标识对象、唯一性或持久性与用途。人物和会议不强行补算法机制。" : "",
         kind === "term" ? "除非区分当前义项不可缺少，正文不得主动引入第二个英文缩写、英文产品名或外围技术名称；需要对比时优先用准确中文类别表达，禁止罗列相邻产品、处理器或机构。" : "",
-        "名称格式规则只针对答案中确有必要出现的技术术语、标准、组织和产品；作者或其他人物姓名、论文题目、期刊会议名、学位与书目信息不是术语格式化目标，除非用户明确要求讨论它们。",
+        "名称格式规则覆盖答案中确有必要出现的技术术语、标准、组织、产品、英文职务、机构名、论文题目、期刊会议名及英文短语；人物姓名可以保留官方拼写，但其他英文内容必须先给准确中文，再把官方英文放入括号，例如“院长教授（Dean's Professor）”“佐治亚理工学院（Georgia Institute of Technology）”。没有可靠中文译名时才允许保留纯英文，并应尽量减少这种例外。",
         "外围概念必须优先用准确中文表达：问题标题、所选对象或证据闭环没有明确要求的拉丁缩写、英文同义词和英文产品名不得主动写入正文；需要表达其事实时改用准确中文，而不是删除事实。",
         kind === "question" ? "任务涉及比较时必须明确写出方向（谁高于、低于或等于谁），有可计算数据时同时给出差值、范围或比例；分别罗列两组数值但不说方向不算完整。" : "",
         "任务若限定“根据记录”“按本文”或“仅从这些数据”，联网资料只能校准通用知识，正文不得加入与目标无关的外部方法论、研究现状或额外缺失条件。",
@@ -1509,9 +1509,9 @@ export function buildReadWeaveSystemPrompt(kind: ReadWeaveGenerateRequest["kind"
         kind === "question" ? "“默认运行”“当前启用”只证明配置或状态，不证明对象稳定、从未失败或性能良好；缺少测量时禁止补出这些评价。" : "",
         "每个事实只陈述一次；同一参数、状态或结论已经完整出现时，不得换句话重复。",
         "只能依据提供的上下文作答；可以做受证据支持的直接语义推断，不得编造事实。",
-        "英文缩写每次出现都必须严格写成“缩写 中文全称（English Full Name）”，例如“NPU 神经网络处理单元（Neural Processing Unit）”；后文也不得裸写缩写。",
+        "英文缩写每次出现都必须严格写成“缩写 中文全称（English Full Name）”，例如“NPU 神经网络处理单元（Neural Processing Unit）”；后文也不得裸写缩写。官方小写或混合大小写品牌同样放在最前，例如“dblp 计算机科学书目数据库（dblp Computer Science Bibliography）”；不得把品牌全名冒充为对缩写本身的拆解。",
         "严禁把正式缩写倒装进括号，禁止“中文全称（缩写）”“中文全称（English Full Name, ABBR）”和“中文全称（ABBR/ABBR）”；有正式全称的缩写只能采用前述唯一格式。",
-        "没有缩写的普通英文名词或正式产品名每次出现都必须写成“中文名称（English Name）”；已核验为不可展开的方法或系统代号除外，此类代号必须作为独立主体直接起句；后文使用中文指代。",
+        "没有缩写的普通英文名词或正式产品名每次出现都必须写成“中文名称（English Name）”；已核验为不可展开的方法或系统代号除外，此类代号必须作为独立主体直接起句；后文使用中文指代。英文全称默认采用每个实词首字母大写，介词、冠词、连词以及 dblp、mRNA、eBay 等官方小写或混合大小写写法按证据保留。",
         "没有可展开全称的论文方法或系统代号不得放进英文全称括号；代号必须作为独立主体直接起句，例如“BUFFALO 是一种缓冲树生成框架”或“DPO-3D 是一种可微电源分配网络优化方法”；不得因为全大写就杜撰展开式。正式产品英文名仍使用“中文名称（English Name）”。",
         kind === "term" ? "名词结构必须把缩写、中文全称、英文全称分别放入 termIdentity 字段，不得把逗号或括号写入 chineseName；termIdentity 与定义正文必须指向同一对象、同一义项，并采用相同规范名称。" : "",
         kind === "term" ? "论文方法名或系统名如果没有可核验的正式展开（即没有正式英文全称，例如 DPO-3D、BS-PDN-Last），它就是不可展开的原名代号，不是缩写：abbreviation 与 englishName 都留空，chineseName 只写准确的中文功能描述；正文必须由原名代号独立起句，例如“DPO-3D 是一种……”，严禁写成“中文功能描述（DPO-3D）”。正式英文产品名不适用本条，仍按“中文功能描述（English Product Name）”书写。" : "",
@@ -1737,6 +1737,9 @@ function findReadWeaveBaseQualityIssues(
     }
     if (/[（(]\s*[）)]/u.test(normalizedBody)) {
         issues.add("答案包含空括号");
+    }
+    if (/[（(]\s*(?:如|例如)\s*[：:]?\s*[）)]/u.test(normalizedBody)) {
+        issues.add("答案包含没有实际内容的示例括号");
     }
     if (/[（(][^（）()\n]{0,300}[（(]/u.test(normalizedBody)) {
         issues.add("答案包含嵌套括号，必须改成单层名称或分隔表达");
@@ -2321,7 +2324,7 @@ function termDefinitionClaim(
         case "product":
             return `说明 ${subject} 的对象类别、核心功能、区别特征与适用边界`;
         default:
-            return `说明 ${subject} 的上位类型、区别特征、当前角色或机制与适用边界`;
+            return `说明 ${subject} 的通俗类别、区别特征、当前角色或机制与适用边界`;
     }
 }
 
@@ -3466,14 +3469,14 @@ function professionalStructureRepairInstructions(
             segmentId: target.id,
             issue: kind === "term" ? "定义过于简略，未形成可识别的定义命题" : "答案过于简略，未形成足够的解释与证据闭环",
             instruction: kind === "term"
-                ? "保留正确的定义结论，补充有证据支持的上位类型、区分特征、当前语境角色或必要边界；保持紧凑，不得扩写履历、书目或外围历史"
+                ? "保留正确的定义结论，补充有证据支持的通俗类别、区分特征、当前语境角色或必要边界；保持紧凑，不得扩写履历、书目或外围历史"
                 : "保留本片段正确结论，补充与当前问题直接相关且有证据支持的原因、机制、边界或可验证判据；不要套用固定章节"
         } : {
             operation: "append",
             segmentId: "answer-1",
             issue: "答案为空",
             instruction: kind === "term"
-                ? "以所选术语的规范名称开头，给出上位类型、区分特征和必要边界"
+                ? "以所选术语的规范名称开头，给出通俗类别、区分特征和必要边界"
                 : "直接给出结论，并补充与当前问题有关且有证据支持的解释"
         });
     }
@@ -3670,6 +3673,13 @@ export function normalizeReadWeaveGeneratedBody(body: string): string {
         .replace(/(方案\s*[A-Z])(?=[\p{Script=Han}])/gu, "$1 ")
         .replace(/([\p{Script=Han}]{2,40})（\1\s*[,，][^（）\n]{1,100}）/gu, "$1")
         .replace(/电源完整性（PI）/gu, "电源完整性")
+        .replace(/，?属于[^；，\n]{1,40}的上位类型(?=[；，])/gu, "")
+        .replace(/（\s*(?:例如|如)\s*）/gu, "")
+        .replace(/国际该标识符基金会/gu, "国际数字对象标识符基金会")
+        .replace(/(国际数字对象标识符基金会[^；\n]{0,24}管理)(?=其核心机制)/gu, "$1；")
+        .replace(/(出版物元数据|书目元数据|文献元数据)(?=该对象)/gu, "$1；")
+        .replace(/(位置变更)(?=该标识符)/gu, "$1；")
+        .replace(/((?:发生)?(?:变化|变更|改变))(?=主要用途)/gu, "$1；")
         .replace(/(?:该对象|该指标组)三者/gu, "三者")
         .replace(/(?:是|指的是|指|表示)该对象(?=(?:强调|描述|规定|要求|用于|负责|提供|连接))/gu, "")
         .replace(/(回答|疫情|知识|数据|模型|系统|方法|流程|机制|用途|边界|场景)(?=该对象(?:的|是|为|=|>|<))/gu, "$1；")
@@ -3778,7 +3788,7 @@ export function joinReadWeaveAnswerSegments(
 ): string {
     const usable = segments.filter(segment => segment.text.trim());
     if (!usable.length) return "";
-    const maxParagraphs = Math.min(4, Math.max(1, options.maxParagraphs ?? 4));
+    const maxParagraphs = Math.min(5, Math.max(1, options.maxParagraphs ?? 5));
     const explicitParagraphs: ReadWeaveAnswerSegment[][] = [];
     for (const segment of usable) {
         if (!explicitParagraphs.length || segment.paragraphBreakBefore) explicitParagraphs.push([]);
@@ -3786,7 +3796,7 @@ export function joinReadWeaveAnswerSegments(
     }
     let paragraphs = explicitParagraphs;
     if ((paragraphs.length === 1 && usable.length >= 5) || paragraphs.length > maxParagraphs) {
-        const preferredCount = usable.length >= 8 ? 3 : usable.length >= 5 ? 2 : 1;
+        const preferredCount = usable.length >= 11 ? 4 : usable.length >= 8 ? 3 : usable.length >= 5 ? 2 : 1;
         const targetCount = Math.min(maxParagraphs, preferredCount);
         const chunkSize = Math.ceil(usable.length / targetCount);
         paragraphs = [];
@@ -4270,7 +4280,7 @@ async function extractEvidencePlan(
         "你是 ReadWeave 统一证据计划检查点。问题回答和术语定义采用完全相同的抽取标准；只规划证据，不生成最终内容，只返回 JSON 对象。",
         '格式：{"requiredFacts":["上下文中必须使用的原子事实、因果约束或数字"],"requiredClaims":["最终内容必须建立并由证据闭合的结论或定义要件"],"evidenceBoundaries":["证据没有给出的条件或不可推断事项"],"ambiguities":["需要消歧的对象、义项或冲突"],"canonicalEntityNeeds":["需要核验的规范名称、实体类别、缩写展开或非缩写方法名"],"entityType":"concept|method|system|product|standard|conference|publication|organization|person|identifier|mathematical-object|other","resolvedSense":"当前上下文最终指向的唯一实体或义项"}。',
         "逐个覆盖任务目标中的每个疑问或定义要件。所有任务都要规划：直接结论、支持它的关键事实、证据边界、歧义和规范实体身份；只在任务需要时加入机制、参数、比较数字、状态变化或测试判据。",
-        focusedDefinitionEvidence ? "术语定义或释义型问题必须填写 entityType 和 resolvedSense。requiredClaims 至少包含：当前语境中的对象类别或上位类型、把它与相近对象区分开的特征，以及证据支持时的角色、机制或适用边界；不得把作者履历、论文题名、年份和书目元数据列为定义要件。若上下文无法唯一填写 resolvedSense，必须把冲突写入 ambiguities，后续不得猜测。" : "",
+        focusedDefinitionEvidence ? "术语定义或释义型问题必须填写 entityType 和 resolvedSense。requiredClaims 至少包含：当前语境中的通俗对象类别、把它与相近对象区分开的特征，以及证据支持时的角色、机制或适用边界；不得把作者履历、论文题名、年份和书目元数据列为定义要件。若上下文无法唯一填写 resolvedSense，必须把冲突写入 ambiguities，后续不得猜测。" : "",
         "只抽取完成当前任务必需的事实；联网资料中的产品例子、厂商、型号和历史若不是任务目标明确需要，不得进入 requiredFacts 或 requiredClaims。",
         qualitativeAdaptiveQuestion ? "这是非定量问题：若本地上下文已经给出直接结论，联网部分只能校验或消歧这些结论。不得把联网案例中额外的实现步骤、部件、工艺、性能倍数、指数或数量级、成本增长规律、标准机构和外围命名实体放入证据计划；即使它们本身真实也属于范围外信息。" : "",
         "保留原文名称、数字、单位和因果关系；每项必须可核验且只表达一个事实或要求；不得合并相反状态，不得补常识，不得提出建议。",
@@ -4954,7 +4964,7 @@ async function repairAnswerSegments(
         "修复名称格式时，删除任务未要求的厂商、芯片型号、产品例子和外围英文术语；不要用新的英文词替换旧的英文词。外围概念直接使用准确中文即可。",
         profile.kind === "question" ? "若上下文存在同单位且关系明确的可比较数值，只有任务目标需要时才修复错误的“无法计算”结论并给出差值、范围或比例；同时删除上下文未给出的观察细节和同义重复，不能用新猜测替换旧猜测。" : "",
         profile.kind === "question" ? "周期 T 与连续 N 次失败缺少故障相位、检查耗时或计时起点时，删除“至少/等于 N×T 总耗时”的伪精确结论；默认配置不能改写成稳定、从未失败或性能良好。" : "",
-        profile.kind === "term" ? "定义修复必须继续围绕隐式问题“在当前语境中，X 是什么？”，只补上位类型、区分特征、角色、机制或必要边界，不得扩写人物履历、论文书目、无关历史或产品列表。" : "",
+        profile.kind === "term" ? "定义修复必须继续围绕隐式问题“在当前语境中，X 是什么？”，只补通俗类别、区分特征、角色、机制或必要边界，不得扩写人物履历、论文书目、无关历史或产品列表；禁止把提示词原样写进正文。" : "",
         profile.kind === "term" ? "把 termIdentity 与正文联合修复：两者必须指向同一实体和同一义项。若需要补齐或纠正模型生成的名词结构，可同时返回 termIdentity；用户锁定的非空字段不得改写。" : "",
         profile.kind === "term" ? "只有修复清单明确点名结构化名词身份、正文主语或实体义项时才可返回 termIdentity；其他片段修复必须省略 termIdentity，避免并行任务相互覆盖身份。" : "",
         `任务类型：${profile.kind === "question" ? "问题回答" : "术语定义"}`,
@@ -5314,7 +5324,7 @@ function budgetPrompt(
             ? "本题是人物时效任务，但没有找到足以确认当前任职的新官方证据；必须省略当前机构与当前职称，不得把本地旧句或旧搜索摘要伪装成现任事实；只保留有可靠证据的稳定研究领域"
             : "",
         generalKnowledge && request.kind === "term"
-            ? "术语定义依次说明上位类别、核心含义或工作机制、主要用途或职责与适用边界；只有同一专业领域确有必要时才区分相邻概念，禁止列举跨领域的同缩写义项；上下文中的期刊、论文或测试用途只能用于消歧，不能把局部出现位置写成术语本身的定义"
+            ? "术语定义依次说明零基础读者熟悉的通俗类别、核心含义或工作机制、主要用途或职责与适用边界；只有同一专业领域确有必要时才区分相邻概念，禁止列举跨领域的同缩写义项；上下文中的期刊、论文或测试用途只能用于消歧，不能把局部出现位置写成术语本身的定义；不得把“上位类别”“所属类别”等提示语照抄进正文"
             : "",
         inferredArtifact
             ? `已从精确选区确认“${inferredArtifact.originalName}”是${inferredArtifact.entityType === "system" ? "系统" : inferredArtifact.entityType === "product" ? "产品" : "方法"}代号，不是可展开缩写；第一次必须写成“${inferredArtifact.originalName} 是一种/一个${inferredArtifact.chineseName}”，严禁把代号放进括号或杜撰英文展开式`
@@ -5322,7 +5332,7 @@ function budgetPrompt(
         "禁止加入题目未要求的论文书目、产品史、外围术语和无助于识别主体的履历",
         "本地证据没有给出的性能数字、时延范围、刷新周期、晶体管数量、实现手段、热效应、寄生效应或产品例子一律不得补充，即使它们可能属于常识",
         "只返回一个合法 JSON 对象；充分时为 {\"status\":\"sufficient\",\"body\":\"正文\",\"termIdentity\":{\"abbreviation\":\"可选\",\"chineseName\":\"可选\",\"englishName\":\"可选\"},\"entityType\":\"concept|method|system|product|standard|conference|publication|organization|person|identifier|mathematical-object|other\",\"nonExpandableOriginalName\":\"仅在证据确认原名不可展开时填写\"}；证据无法消歧时返回 {\"status\":\"need_more_context\",\"missing\":\"具体缺口\"}",
-        "正文直接回答，不复述问题，不提上下文、搜索、校准、模型、检查或修复；问题逐项回答，比较必须写清方向和可唯一计算的差值；定义必须写清上位类型、区分特征、当前角色或必要边界",
+        "正文直接回答，不复述问题，不提上下文、搜索、校准、模型、检查或修复；问题逐项回答，比较必须写清方向和可唯一计算的差值；定义必须先用通俗类别定位对象，再写清区分特征、当前角色或必要边界",
         "问题回答与术语定义使用同一条“理解阶梯”：先用普通读者已经认识的词给出一句可独立理解的结论；再解释因果或工作机制；最后只补完成任务必要的条件、边界和易混点。定义比回答更聚焦，但不得更晦涩；不得用一串新的专业名词替代原术语",
         "开头分句只承担一个核心意思，并优先回答“它属于什么、实际做什么”；机制性细节放到后续分句；避免连续堆叠“框架、模型、机制、优化、可微、协同、表征”等抽象名词",
         request.kind === "term" && !generalKnowledge
@@ -6164,7 +6174,7 @@ async function generateLowCostReadWeaveAnswer(
             "你是 ReadWeave 快速质量修复器；只修复列出的问题，不扩写；只返回合法 JSON：{\"body\":\"修复后的完整正文\"}",
             [
                 generalKnowledgeRepair
-                    ? `逐项修复全部问题；“${profile.subject || profile.objective}”是唯一主体；以可靠外部公开证据和已核验规范名称为主，保留其通用身份、上位类别、职责、工作领域、贡献、机制、用途与必要边界`
+                    ? `逐项修复全部问题；“${profile.subject || profile.objective}”是唯一主体；以可靠外部公开证据和已核验规范名称为主，保留其通用身份、通俗类别、职责、工作领域、贡献、机制、用途与必要边界`
                     : "逐项修复全部问题；保留原稿中被证据支持的正确事实，并覆盖本地选区明确写出的构成、机制、用途和边界",
                 generalKnowledgeRepair
                     ? "本地片段只用于消歧；删除 ReadWeave、测试语料、框选、下划线、角标、悬浮卡片、点击锁定、生成流程和局部用法；不得把文档怎样使用该对象写成对象定义"
@@ -6590,7 +6600,7 @@ export async function generateReadWeaveAnswer(
             `宽度与输出约束：${profile.outputContract}；机器上限为 ${profile.maxParagraphs} 段、${profile.maxCharacters} 字`,
             `必须逐项覆盖且不得歪曲的证据计划：${JSON.stringify(evidencePlan)}`,
             usesFocusedDefinitionEvidence(profile)
-                ? "定义或释义事实闭集：除规范名称外，正文只能重述 requiredFacts 中已有事实，并按 requiredClaims 组织成上位类型、区别特征、角色或边界；必须回答题目中每个子问，但禁止补充计划未列出的架构、实现、流程阶段、比较对象、人物、机构、产品、缩写、英文专名或示例。混合中英文复合词应使用证据给出的中文含义自然展开，不要原样复写中英粘连串。"
+                ? "定义或释义事实闭集：除规范名称外，正文只能重述 requiredFacts 中已有事实，并按 requiredClaims 组织成通俗类别、区别特征、角色或边界；必须回答题目中每个子问，但禁止补充计划未列出的架构、实现、流程阶段、比较对象、人物、机构、产品、缩写、英文专名或示例。混合中英文复合词应使用证据给出的中文含义自然展开，不要原样复写中英粘连串。"
                 : "",
             request.kind === "question" && !EXPLICIT_QUANTIFICATION_REQUEST_PATTERN.test(profile.objective)
                 ? "非定量回答事实闭集：联网只校验题目、本地上下文与上述精简证据计划中的结论。不得恢复被裁掉的实现子步骤、部件、工艺、倍数、指数或数量级、成本增长规律、机构、标准和外围实体；不需要这些外围项的规范名称。"

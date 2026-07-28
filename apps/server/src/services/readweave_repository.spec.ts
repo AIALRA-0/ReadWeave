@@ -166,7 +166,9 @@ describe("ReadWeave repository", () => {
                 linkId: first.linkId,
                 objectId: first.objectId,
                 objectDeleted: false,
-                remainingLinkCount: 1
+                remainingLinkCount: 1,
+                deletedLinkIds: [ first.linkId ],
+                promotedLinkIds: []
             });
             expect(getEntriesForAnchor(firstArticle.noteId, "rw_delete_a")).toEqual([]);
             expect(getEntriesForAnchor(secondArticle.noteId, "rw_delete_b")).toHaveLength(1);
@@ -177,7 +179,9 @@ describe("ReadWeave repository", () => {
                 linkId: second.linkId,
                 objectId: second.objectId,
                 objectDeleted: true,
-                remainingLinkCount: 0
+                remainingLinkCount: 0,
+                deletedLinkIds: [ second.linkId ],
+                promotedLinkIds: []
             });
             expect(getEntriesForAnchor(secondArticle.noteId, "rw_delete_b")).toEqual([]);
             expect(becca.getNote(first.objectId)).toBeFalsy();
@@ -451,6 +455,119 @@ describe("ReadWeave repository", () => {
                 title: "BS-PDN-Last是什么",
                 body: expect.stringContaining("BS-PDN-Last")
             });
+        });
+    });
+
+    it("persists a five-level follow-up tree, detects stale parents and cascades descendants", () => {
+        cls.init(() => {
+            const article = noteService.createNewNote({
+                parentNoteId: "root",
+                title: "ReadWeave follow-up tree",
+                type: "text",
+                mime: "text/html",
+                content: "<p>A transistor controls current.</p>"
+            }).note;
+            const base = {
+                articleId: article.noteId,
+                anchorId: "rw_follow_up_tree",
+                anchorType: "range" as const,
+                sourceExcerpt: "transistor",
+                kind: "question" as const,
+                calloutType: "note" as const
+            };
+            const root = saveReadWeaveEntry({
+                ...base,
+                title: "晶体管是什么？",
+                body: professionalAnswer("晶体管是一种用电信号控制电流通断或大小的半导体器件")
+            });
+            const levels = [ root ];
+            for (let depth = 1; depth <= 5; depth += 1) {
+                levels.push(saveReadWeaveEntry({
+                    ...base,
+                    parentLinkId: levels.at(-1)!.linkId,
+                    title: `第 ${depth} 层追问如何理解？`,
+                    body: professionalAnswer(`第 ${depth} 层答案从父问题的结论继续解释控制关系`)
+                }));
+            }
+
+            expect(levels.map(entry => entry.depth)).toEqual([ 0, 1, 2, 3, 4, 5 ]);
+            expect(levels.slice(1).every(entry => entry.rootLinkId === root.linkId)).toBe(true);
+            expect(() => saveReadWeaveEntry({
+                ...base,
+                parentLinkId: levels.at(-1)!.linkId,
+                title: "第六层追问为什么不允许？",
+                body: professionalAnswer("第六层超过允许的追问深度")
+            })).toThrow(/limited to five nested levels/);
+
+            editReadWeaveLink(root.linkId, {
+                mode: "global",
+                title: root.title,
+                body: professionalAnswer("晶体管是一种用电信号控制电流的半导体器件；父答案经过审核更新后，子问题应明确标记所依据的父版本已经变化"),
+                calloutType: "note"
+            });
+            expect(getEntriesForAnchor(article.noteId, base.anchorId)
+                .find(entry => entry.linkId === levels[1].linkId)).toMatchObject({
+                parentLinkId: root.linkId,
+                parentStale: true
+            });
+
+            const deletion = deleteReadWeaveLink(levels[2].linkId, "cascade");
+            expect(deletion.deletedLinkIds).toEqual(levels.slice(2).map(entry => entry.linkId));
+            expect(deletion.promotedLinkIds).toEqual([]);
+            expect(getEntriesForAnchor(article.noteId, base.anchorId).map(entry => entry.linkId))
+                .toEqual(expect.arrayContaining([ root.linkId, levels[1].linkId ]));
+            expect(getEntriesForAnchor(article.noteId, base.anchorId)).toHaveLength(2);
+        });
+    });
+
+    it("can promote follow-up children when deleting their parent question", () => {
+        cls.init(() => {
+            const article = noteService.createNewNote({
+                parentNoteId: "root",
+                title: "ReadWeave follow-up promotion",
+                type: "text",
+                mime: "text/html",
+                content: "<p>A cache stores reusable data.</p>"
+            }).note;
+            const base = {
+                articleId: article.noteId,
+                anchorId: "rw_follow_up_promote",
+                anchorType: "range" as const,
+                sourceExcerpt: "cache",
+                kind: "question" as const,
+                calloutType: "note" as const
+            };
+            const root = saveReadWeaveEntry({
+                ...base,
+                title: "缓存是什么？",
+                body: professionalAnswer("缓存把近期或常用数据放在更快的存储层以减少重复访问延迟")
+            });
+            const child = saveReadWeaveEntry({
+                ...base,
+                parentLinkId: root.linkId,
+                title: "为什么缓存能减少延迟？",
+                body: professionalAnswer("缓存命中时可以跳过更慢的下层数据访问")
+            });
+            const grandchild = saveReadWeaveEntry({
+                ...base,
+                parentLinkId: child.linkId,
+                title: "缓存未命中时会发生什么？",
+                body: professionalAnswer("缓存未命中时需要访问下层存储并按策略把结果写回缓存")
+            });
+
+            const deletion = deleteReadWeaveLink(child.linkId, "promote");
+            expect(deletion).toMatchObject({
+                deletedLinkIds: [ child.linkId ],
+                promotedLinkIds: [ grandchild.linkId ]
+            });
+            expect(getEntriesForAnchor(article.noteId, base.anchorId)
+                .find(entry => entry.linkId === grandchild.linkId)).toMatchObject({
+                parentLinkId: root.linkId,
+                rootLinkId: root.linkId,
+                depth: 1
+            });
+            expect(getEntriesForAnchor(article.noteId, base.anchorId)
+                .find(entry => entry.linkId === grandchild.linkId)?.parentStale).not.toBe(true);
         });
     });
 

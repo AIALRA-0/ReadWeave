@@ -31,12 +31,12 @@ import {
     listReadWeaveObjects,
     saveReadWeaveEntry
 } from "../../services/readweave_repository.js";
+import { testReadWeaveSearch } from "../../services/readweave_search.js";
 import {
     getReadWeaveAiSettings,
     listReadWeaveModels,
     updateReadWeaveAiSettings
 } from "../../services/readweave_settings.js";
-import { testReadWeaveSearch } from "../../services/readweave_search.js";
 
 function getEntries(req: Request<{ articleId: string; anchorId: string }>) {
     return { entries: getEntriesForAnchor(req.params.articleId, req.params.anchorId) };
@@ -72,7 +72,8 @@ function editLink(req: Request<{ linkId: string }>) {
 }
 
 function deleteLink(req: Request<{ linkId: string }>) {
-    return deleteReadWeaveLink(req.params.linkId);
+    const strategy = req.query.children === "promote" ? "promote" : "cascade";
+    return deleteReadWeaveLink(req.params.linkId, strategy);
 }
 
 async function generate(req: Request) {

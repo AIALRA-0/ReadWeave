@@ -84,6 +84,7 @@ export interface ReadWeaveGenerationJob {
     anchorId: string;
     anchorType: ReadWeaveAnchorType;
     kind: ReadWeaveObjectKind;
+    parentLinkId?: string;
     title: string;
     sourceExcerpt: string;
     status: "queued" | "running" | "complete" | "failed";
@@ -121,6 +122,10 @@ export interface ReadWeaveLink {
     anchorId: string;
     anchorType: ReadWeaveAnchorType;
     objectId: string;
+    parentLinkId?: string;
+    rootLinkId?: string;
+    depth?: number;
+    parentRevision?: number;
     sourceExcerpt: string;
     displayTitle?: string;
     displayBody?: string;
@@ -135,6 +140,10 @@ export interface ReadWeaveResolvedEntry {
     anchorId: string;
     anchorType: ReadWeaveAnchorType;
     objectId: string;
+    parentLinkId?: string;
+    rootLinkId?: string;
+    depth: number;
+    parentStale?: boolean;
     kind: ReadWeaveObjectKind;
     title: string;
     body: string;
@@ -170,6 +179,8 @@ export interface ReadWeaveImpact {
     objectId: string;
     linkCount: number;
     articleCount: number;
+    childCount?: number;
+    descendantCount?: number;
     articles: Array<{ articleId: string; title: string }>;
 }
 
@@ -178,6 +189,8 @@ export interface ReadWeaveGenerateRequest {
     anchorId: string;
     anchorType: ReadWeaveAnchorType;
     kind: ReadWeaveObjectKind;
+    parentLinkId?: string;
+    rootSourceExcerpt?: string;
     title: string;
     optimizeQuestion?: boolean;
     termIdentity?: Partial<ReadWeaveTermIdentity>;
@@ -212,6 +225,7 @@ export interface ReadWeaveSaveRequest {
     anchorId: string;
     anchorType: ReadWeaveAnchorType;
     kind: ReadWeaveObjectKind;
+    parentLinkId?: string;
     title: string;
     body: string;
     sourceExcerpt: string;
@@ -236,6 +250,8 @@ export interface ReadWeaveDeleteResult {
     objectId: string;
     objectDeleted: boolean;
     remainingLinkCount: number;
+    deletedLinkIds?: string[];
+    promotedLinkIds?: string[];
 }
 
 export interface ReadWeaveAiSettings {
