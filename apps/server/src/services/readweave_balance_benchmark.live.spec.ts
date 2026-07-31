@@ -191,7 +191,7 @@ const CASES: BenchmarkCase[] = [
     diverse(question("correlation-causation", "boundary", "冰淇淋销量与溺水人数同时上升，能否据此判断冰淇淋导致溺水？", "按月份统计时，两者在夏季都上升；资料还显示气温升高会同时增加冰淇淋消费和游泳活动。", [ /不能|无法/u, /气温|夏季/u, /混杂|混淆|共同原因|相关/u ], [ /(?:所以|因此|表明|证明)冰淇淋导致溺水/u ]), "statistics", "news"),
 
     diverse(term("decibel", "dB", "dB 用对数尺度表示两个功率量或幅度量的比值；换算系数取决于比较的是功率还是幅度。", [ /dB 分贝（Decibel）/u, /对数/u, /功率|幅度/u, /比值/u ]), "physics", "manual"),
-    diverse(question("entropy-disorder", "explanation", "为什么不能简单把热力学熵等同于肉眼看到的混乱程度？", "热力学熵与给定宏观约束下可实现的微观状态数有关；日常所说的整齐或混乱不一定对应微观状态数的变化。", [ /微观状态/u, /宏观/u, /不能|不等同|不一定|而不是|没有直接对应|完全不同/u, /混乱|整齐|排列/u ]), "physics", "textbook"),
+    diverse(question("entropy-disorder", "explanation", "为什么不能简单把热力学熵等同于肉眼看到的混乱程度？", "热力学熵与给定宏观约束下可实现的微观状态数有关；日常所说的整齐或混乱不一定对应微观状态数的变化。", [ /微观状态/u, /宏观/u, /不能|不等同|不一定|而不是|而非|没有直接对应|完全不同/u, /混乱|整齐|排列/u ]), "physics", "textbook"),
 
     diverse(question("weather-climate", "explanation", "天气与气候的时间尺度和讨论对象有什么区别？", "天气描述某地短时间内的大气状态；气候统计一个地区较长时期的平均状况、变率和极端事件分布。", [ /短时间|短期/u, /长期|较长时期/u, /平均|变率|分布/u ]), "climate", "textbook"),
     diverse(question("single-storm-boundary", "boundary", "一次强暴风雪能否单独证明全球变暖不存在？", "暴风雪是一次区域性天气事件；判断长期气候变化需要分析多年全球或区域温度、海洋热含量等多类观测。", [ /不能|无法/u, /天气事件/u, /长期|多年/u, /全球|海洋热含量|多类观测/u ]), "climate", "news"),
@@ -222,7 +222,7 @@ const CASES: BenchmarkCase[] = [
     diverse(question("revenue-profit-news", "quantitative", "新闻称营收从 8000 万元增至 1 亿元，能否据此计算利润增长率？", "报道只给出两年的营业收入，没有披露成本、费用、税项或两年的净利润。", [ /不能|无法/u, /营收|收入/u, /成本|费用|净利润/u ], [ /利润增长率为 25/u ]), "finance", "news"),
     diverse(question("rfc-keywords", "explanation", "规范中的 MUST、SHOULD 和 MAY 表示怎样不同的约束强度？", "The key words MUST, SHOULD, and MAY are to be interpreted as requirement levels；MUST is an absolute requirement, SHOULD allows justified exceptions, and MAY is optional。", [ /MUST/u, /必须|绝对要求/u, /SHOULD/u, /例外|理由/u, /MAY/u, /可选/u ]), "networking", "specification"),
 
-    diverse(term("dblp-proper-name", "DBLP", "DBLP 是计算机科学领域的开放书目数据库和信息服务；官方当前使用 dblp computer science bibliography 作为品牌名称。", [ /计算机科学书目数据库（dblp Computer Science Bibliography）/u, /书目|作者|论文/u ], [ /DataBase systems and Logic Programming|Digital Bibliography & Library Project/u ]), "software", "manual"),
+    diverse(term("dblp-proper-name", "DBLP", "DBLP 是计算机科学领域的开放书目数据库和信息服务；官方当前使用 dblp computer science bibliography 作为品牌名称。", [ /计算机科学书目服务（dblp computer science bibliography）/u, /书目|作者|论文/u ], [ /(?:当前|正式).{0,20}(?:DataBase systems and Logic Programming|Digital Bibliography & Library Project)/u ]), "software", "manual"),
     diverse(term("circuit-partition", "电路划分", "论文作者为 Sung Kyu Lim；正文讨论基于边可分性的电路聚类及其在电路划分中的应用。电路划分把规模较大的电路拆成若干较小部分，并尽量减少部分之间的连接。", [ /拆|分成|划分/u, /电路/u, /连接|跨分区|切割/u ], [ /现任|教授|佐治亚理工/u ]), "electronic-design", "paper"),
     diverse(term("edge-separability", "边可分性", "在电路聚类语境中，边可分性衡量一条连接是否适合作为分开不同节点组的边界；论文作者信息不属于该术语的定义。", [ /连接|边/u, /分开|分组|边界|分界|切割|分割/u ], [ /作者|教授|现任/u ]), "electronic-design", "paper"),
     diverse(question("plain-circuit-partition", "explanation", "为什么电路划分有用？请先用非专业读者能懂的话解释，再说明技术机制。", "一个大型电路包含很多互相连接的元件；如果直接整体处理，设计工具可能更慢、更难优化。电路划分把它拆成较小部分，同时控制跨部分连接数量。", [ /大|复杂|整体/u, /拆|分成|划分/u, /连接|连线/u ], [ /曾任|作者|论文发表/u ]), "electronic-design", "textbook"),

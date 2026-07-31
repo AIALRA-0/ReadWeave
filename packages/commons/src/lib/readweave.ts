@@ -80,6 +80,7 @@ export interface ReadWeaveGenerationProgress {
 
 export interface ReadWeaveGenerationJob {
     jobId: string;
+    savedLinkId?: string;
     articleId: string;
     anchorId: string;
     anchorType: ReadWeaveAnchorType;
@@ -192,6 +193,7 @@ export interface ReadWeaveGenerateRequest {
     anchorId: string;
     anchorType: ReadWeaveAnchorType;
     kind: ReadWeaveObjectKind;
+    calloutType?: ReadWeaveCalloutType;
     parentLinkId?: string;
     rootSourceExcerpt?: string;
     title: string;

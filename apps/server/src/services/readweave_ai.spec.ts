@@ -1,10 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import {
+    acceptReadWeaveAiQuestionOptimization,
     applyReadWeaveSegmentPatches,
     buildReadWeaveSystemPrompt,
+    buildDirectSelectedMechanismQuestionFallback,
+    buildKnownCxlIoShapeQuestionFallback,
+    buildKnownDirectAccessQuestionFallback,
+    buildMutuallyExclusiveProxyQuestionFallback,
     calculateReadWeaveUsageSummary,
     contradictsSuccessfulWebCalibration,
+    decodeReadWeaveEntities,
     findReadWeaveQualityIssues,
     flattenReadWeaveParentheses,
     formatReadWeaveTermIdentity,
@@ -13,6 +19,7 @@ import {
     mergeRepairInstructions,
     normalizeReadWeaveGeneratedBody,
     normalizeReadWeaveModelRequestError,
+    readWeaveQuestionFocusInstruction,
     segmentReadWeaveAnswer,
     validateReadWeaveTermIdentity
 } from "./readweave_ai.js";
@@ -31,6 +38,39 @@ function professionalAnswer(definition: string): string {
 }
 
 describe("ReadWeave AI quality harness", () => {
+    it("decodes single and repeated editor entities before generation", () => {
+        expect(decodeReadWeaveEntities("10.1109&#x2F;TEST.2015.7342405"))
+            .toBe("10.1109/TEST.2015.7342405");
+        expect(decodeReadWeaveEntities("conf&amp;#x2F;dac&amp;#47;CongLW00\u200B"))
+            .toBe("conf/dac/CongLW00");
+    });
+
+    it("accepts only lightweight AI question correction and rejects scope-heavy rewrites", () => {
+        expect(acceptReadWeaveAiQuestionOptimization(
+            "方案 A 为 138 mW，方案 B 为 104 mW，谁更高，相差多少？",
+            "在方案 A 为 138 mW、方案 B 为 104 mW 的条件下，哪一方案更高；两者相差多少？"
+        )).toBeUndefined();
+
+        expect(acceptReadWeaveAiQuestionOptimization(
+            "cxl.io  具体是什么形态?",
+            "CXL.io 具体是什么形态？"
+        )).toBe("CXL.io 具体是什么形态？");
+        expect(acceptReadWeaveAiQuestionOptimization(
+            "cxl.io  具体是什么形态?",
+            "cxl.io 具体是什么形态"
+        )).toBe("CXL.io 具体是什么形态？");
+
+        expect(acceptReadWeaveAiQuestionOptimization(
+            "DOI 10.1109/TEST.2015.7342405 是什么，对应哪篇论文？",
+            "该标识符对应哪篇论文？"
+        )).toBeUndefined();
+
+        expect(acceptReadWeaveAiQuestionOptimization(
+            "为什么会失败，如何验证？",
+            "为什么会失败？"
+        )).toBeUndefined();
+    });
+
     it.each([
         {
             error: new Error("terminated"),
@@ -90,17 +130,17 @@ describe("ReadWeave AI quality harness", () => {
         expect(formatReadWeaveTermIdentity(identity)).toBe("NPU 神经网络处理单元（Neural Processing Unit）");
     });
 
-    it("treats the official lowercase dblp brand as a fully expanded identity", () => {
+    it("treats the official lowercase dblp brand as a proper current name", () => {
         const identity = validateReadWeaveTermIdentity({
             abbreviation: "dblp",
-            chineseName: "计算机科学书目数据库",
-            englishName: "dblp Computer Science Bibliography"
+            chineseName: "计算机科学书目服务",
+            englishName: "dblp computer science bibliography"
         });
 
         expect(formatReadWeaveTermIdentity(identity))
-            .toBe("dblp 计算机科学书目数据库（dblp Computer Science Bibliography）");
+            .toBe("dblp 计算机科学书目服务（dblp computer science bibliography）");
         expect(findReadWeaveQualityIssues(
-            "dblp 计算机科学书目数据库（dblp Computer Science Bibliography）是面向计算机科学出版物的开放书目数据库；它收录论文、作者与出版场所等元数据，不收录论文全文；",
+            "dblp 计算机科学书目服务（dblp computer science bibliography）面向计算机科学出版物提供开放书目信息；它收录论文、作者与出版场所等元数据，不收录论文全文；",
             "什么是 dblp？",
             { kind: "question", subject: "dblp", knowledgeScope: "general" }
         )).toEqual([]);
@@ -317,6 +357,165 @@ describe("ReadWeave AI quality harness", () => {
         )).toEqual([]);
     });
 
+    it("rejects a purpose-only answer when the question asks for CXL.io's concrete form", () => {
+        const question = "CXL.io 具体是什么形态？";
+        const missingForm = "CXL.io 作为基础协议，确保设备能被正确初始化和配置；三者不是三个互相替代的产品，而是同一连接上的不同职责";
+        const explicitForm = "CXL.io 是 CXL 计算快速链路（Compute Express Link）中的逻辑协议层，不是独立芯片、插槽或线缆；它以配置事务和输入输出事务的报文规则存在，用来承载设备发现、配置空间访问与常规寄存器交互";
+
+        expect(findReadWeaveQualityIssues(missingForm, question)).toContain(
+            "问题询问对象的具体形态，但回答只讲作用或机制，没有说明对象以何种物理或逻辑形式存在"
+        );
+        expect(findReadWeaveQualityIssues(explicitForm, question)).not.toContain(
+            "问题询问对象的具体形态，但回答只讲作用或机制，没有说明对象以何种物理或逻辑形式存在"
+        );
+    });
+
+    it("rejects connector fragments and run-on clauses left by abbreviation cleanup", () => {
+        const malformedAnswers = [
+            "DAX 直接访问（Direct Access）让应用绕过页面缓存，直接读写持久内存；它可以减少复制开销使用该接口的前提是文件系统如或在挂载时启用相应选项",
+            "DAX 直接访问（Direct Access）能消除冗余拷贝这降低了访问时延；该对象需要硬件支持如或类型内存",
+            "这种处理单元支持低精度计算如，以降低数据搬运成本"
+        ];
+        for (const malformed of malformedAnswers) {
+            expect(findReadWeaveQualityIssues(malformed, "DAX 是什么？", {
+                kind: "question",
+                subject: "DAX",
+                knowledgeScope: "general"
+            })).toContain("回答包含被删词后留下的连接词残片，或相邻语义单元缺少分隔符");
+        }
+        expect(findReadWeaveQualityIssues(
+            "应急网络服务（WARP）与代理客户端（Hiddify）；",
+            "还有什么备选项？"
+        )).toContain("回答包含只有并列对象而没有说明关系的残句");
+        expect(findReadWeaveQualityIssues(
+            "代理客户端（Hiddify）只在临时需要时单独启用；代理客户端（Hiddify）；",
+            "还有什么备选项？"
+        )).toContain("回答末尾残留了前文已经说明过的名词片段");
+        expect(findReadWeaveQualityIssues(
+            "样品甲比样品乙高 3.8，差异显著且稳定；",
+            "根据记录，两组读数有什么差异？"
+        )).toContain("回答在没有统计检验或稳定性证据时声称结果显著或稳定");
+    });
+
+    it("requires a standalone DAX definition to close its four core identity features", () => {
+        const incomplete = "DAX 直接访问（Direct Access）是一种持久内存访问模式；它能降低读写时延";
+        const complete = "DAX 直接访问（Direct Access）是操作系统内核提供的直接访问机制；它绕过页面缓存，把文件或设备地址范围直接映射到应用程序地址空间；处理器随后通过加载与存储指令访问数据；它不是某一种内存硬件";
+        const daxIssue = "DAX 定义没有闭合其操作系统内核身份、绕过页面缓存、直接内存映射，以及它不是一种内存硬件这四个核心特征";
+
+        expect(findReadWeaveQualityIssues(incomplete, "DAX 是什么？", {
+            kind: "question",
+            subject: "DAX",
+            knowledgeScope: "general"
+        })).toContain(daxIssue);
+        expect(findReadWeaveQualityIssues(complete, "DAX 是什么？", {
+            kind: "question",
+            subject: "DAX",
+            knowledgeScope: "general"
+        })).not.toContain(daxIssue);
+        expect(readWeaveQuestionFocusInstruction("DAX 是什么？"))
+            .toContain("操作系统内核中的直接访问机制");
+    });
+
+    it("builds a complete fallback for a mutually exclusive proxy configuration", () => {
+        const fallback = buildMutuallyExclusiveProxyQuestionFallback(
+            {
+                kind: "question",
+                objective: "为什么只运行龙猫，其他还有什么备选项？",
+                breadth: "adaptive",
+                knowledgeScope: "contextual",
+                outputContract: "直接回答",
+                requiresTermIdentity: false,
+                maxParagraphs: 3,
+                maxCharacters: 800
+            },
+            "[selected:default]\n日常默认只运行龙猫；龙猫代理端口为 127.0.0.1:7892；三套隧道不能同时打开；此前的慢速、全节点超时和订阅 403 都由叠加产生；\n[section:failover]\n持续失败时使用应急网络服务（WARP）保住网络；\n[document:hiddify]\nHiddify 只在确实需要临时使用时单独启用；"
+        );
+
+        expect(fallback).toContain("同时启用会造成代理叠加");
+        expect(fallback).toContain("应急网络服务（WARP）");
+        expect(fallback).toContain("代理客户端（Hiddify）");
+        expect(fallback).toContain("127.0.0.1:7892");
+        expect(fallback).not.toContain("应急网络服务（WARP）与代理客户端（Hiddify）；");
+    });
+
+    it("uses the selected Direct Access meaning for the final DAX safety fallback", () => {
+        const profile = {
+            kind: "question" as const,
+            objective: "DAX 是什么？",
+            subject: "DAX",
+            breadth: "adaptive" as const,
+            knowledgeScope: "general" as const,
+            outputContract: "通用说明",
+            requiresTermIdentity: false,
+            maxParagraphs: 5,
+            maxCharacters: 5_000
+        };
+        const fallback = buildKnownDirectAccessQuestionFallback(
+            profile,
+            "[selected:dax]\nDAX 直接访问（Direct Access）接口允许处理器绕过页面缓存访问持久内存"
+        );
+        expect(fallback).toBeTruthy();
+        expect(findReadWeaveQualityIssues(fallback!, profile.objective, {
+            kind: "question",
+            subject: "DAX",
+            knowledgeScope: "general"
+        })).toEqual([]);
+        expect(buildKnownDirectAccessQuestionFallback(
+            profile,
+            "[selected:dax-index]\nDAX 是德国股票指数"
+        )).toBeUndefined();
+    });
+
+    it("uses a protocol-layer fallback when CXL.io form repairs do not converge", () => {
+        const profile = {
+            kind: "question" as const,
+            objective: "CXL.io 具体是什么形态？",
+            subject: "CXL.io",
+            breadth: "adaptive" as const,
+            knowledgeScope: "general" as const,
+            outputContract: "通用说明",
+            requiresTermIdentity: false,
+            maxParagraphs: 5,
+            maxCharacters: 5_000
+        };
+        const fallback = buildKnownCxlIoShapeQuestionFallback(
+            profile,
+            "[selected:cxl-io]\nCXL.io 用于设备发现、枚举、配置空间访问和普通输入输出事务"
+        );
+        expect(fallback).toBeTruthy();
+        expect(findReadWeaveQualityIssues(fallback!, profile.objective, {
+            kind: "question",
+            subject: "CXL.io",
+            knowledgeScope: "general"
+        })).toEqual([]);
+    });
+
+    it("falls back to an exact selected mechanism list without inventing examples", () => {
+        const profile = {
+            kind: "question" as const,
+            objective: "专用加速器通过哪些方式改善推理效率？",
+            subject: "专用加速器",
+            breadth: "adaptive" as const,
+            knowledgeScope: "contextual" as const,
+            outputContract: "直接回答",
+            requiresTermIdentity: false,
+            maxParagraphs: 5,
+            maxCharacters: 5_000
+        };
+        const fallback = buildDirectSelectedMechanismQuestionFallback(
+            profile,
+            "[selected:mechanism]\n专用加速器通常通过降低数据搬运成本、使用低精度数值格式和提高并行度来改善推理效率。"
+        );
+        expect(fallback).toBe(
+            "专用加速器主要通过三种方式改善推理效率；第一，降低数据搬运成本；第二，使用低精度数值格式；第三，提高并行度"
+        );
+        expect(findReadWeaveQualityIssues(fallback!, profile.objective, {
+            kind: "question",
+            subject: "专用加速器",
+            knowledgeScope: "contextual"
+        })).toEqual([]);
+    });
+
     it("rejects duplicate answer segments and unformatted English product names", () => {
         const duplicate = `${professionalAnswer("主代理是默认网络路径")}定义与命名：主代理是默认网络路径；`;
         expect(findReadWeaveQualityIssues(duplicate, "为什么只运行主代理？"))
@@ -381,6 +580,31 @@ describe("ReadWeave AI quality harness", () => {
                 }
             }
         )).toContain("答案包含没有实际内容的示例括号");
+        expect(normalizeReadWeaveGeneratedBody(
+            "PCIe 外设组件互连高速（Peripheral Component Interconnect Express）负责设备枚举"
+        )).toBe(
+            "PCIe 高速外设组件互连（Peripheral Component Interconnect Express）负责设备枚举"
+        );
+        expect(normalizeReadWeaveGeneratedBody(
+            "UUID 通用唯一标识符（Universally Unique Identifier）通用唯一标识符在对象生命周期内绝对不变"
+        )).toBe(
+            "UUID 通用唯一标识符（Universally Unique Identifier）在对象生命周期内保持不变"
+        );
+        expect(normalizeReadWeaveGeneratedBody(
+            "NPU 神经网络处理单元（Neural Processing Unit）是一类专用硬件加速器；它通过并行计算加速推理；该对象通常集成在片上系统中，用于手机和服务器等场景其核心机制是减少数据搬运"
+        )).toBe(
+            "NPU 神经网络处理单元（Neural Processing Unit）是一类专用硬件加速器；它通过并行计算加速推理；这种处理单元通常集成在片上系统中，用于手机和服务器等场景；其核心机制是减少数据搬运"
+        );
+        expect(normalizeReadWeaveGeneratedBody(
+            "这种处理单元用于手机、边缘设备和服务器其核心机制是减少数据搬运"
+        )).toBe(
+            "这种处理单元用于手机、边缘设备和服务器；其核心机制是减少数据搬运"
+        );
+        expect(normalizeReadWeaveGeneratedBody(
+            "代理客户端（Hiddify）只在临时需要时单独启用；代理客户端（Hiddify）；"
+        )).toBe(
+            "代理客户端（Hiddify）只在临时需要时单独启用；"
+        );
     });
 
     it("removes fixed environment commentary without changing the factual clauses", () => {
@@ -394,6 +618,30 @@ describe("ReadWeave AI quality harness", () => {
         expect(segments).toHaveLength(3);
         expect(segments[2].paragraphBreakBefore).toBe(true);
         expect(joinReadWeaveAnswerSegments(segments)).toBe("第一句；第二句；\n\n第三句；");
+    });
+
+    it("breaks long generated prose into readable semantic paragraphs", () => {
+        const longClause = [
+            "可调谐系统能够通过外部控制改变工作参数，从而在不同状态下切换或连续调整，并适应动态需求与环境变化",
+            "常见对象包括激光器、超表面、时钟网络、滤波器与振荡器，这些对象分别调整波长、相位、延迟或频率",
+            "这种能力和可配置能力相近，但更强调连续、精细且能够在运行阶段改变的参数范围",
+            "判断一个对象是否可调谐，需要确认受控参数、有效调节范围、控制方式以及调节后仍需满足的性能边界"
+        ].join("；");
+        const rendered = joinReadWeaveAnswerSegments(segmentReadWeaveAnswer(longClause));
+        const paragraphs = rendered.split("\n\n");
+
+        expect(paragraphs.length).toBeGreaterThanOrEqual(2);
+        expect(paragraphs.every(paragraph => paragraph.length <= 190)).toBe(true);
+        expect(rendered).not.toContain("。");
+    });
+
+    it("does not split a long bilingual name inside its parentheses", () => {
+        const body = `定义：${"这是一个用于说明边界的短语，".repeat(8)}`
+            + "数字对象标识符（Digital Object Identifier）用于建立持久链接；";
+        const rendered = joinReadWeaveAnswerSegments(segmentReadWeaveAnswer(body));
+
+        expect(rendered).toContain("数字对象标识符（Digital Object Identifier）");
+        expect(rendered).not.toContain("Digital Object\n\nIdentifier");
     });
 
     it("flattens nested Chinese and ASCII parentheses into one readable level", () => {

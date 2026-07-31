@@ -1,0 +1,12 @@
+services:
+  readweave:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${READWEAVE_IMAGE:-readweave:0.104.0-20260731}
+    container_name: readweave
+    restart: unless-stopped
+    ports:
+      - "${READWEAVE_BIND:-127.0.0.1:11802}:8080"
+    volumes:
+      - ${READWEAVE_DATA_DIR:-/srv/readweave/data}:/home/node/trilium-data

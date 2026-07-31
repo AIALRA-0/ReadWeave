@@ -1,4 +1,5 @@
 import type {
+    ReadWeaveCalloutType,
     ReadWeaveGenerateRequest,
     ReadWeaveGenerateResponse,
     ReadWeaveGenerationIssue,
@@ -6,14 +7,20 @@ import type {
     ReadWeaveGenerationJob,
     ReadWeaveGenerationProgress
 } from "@triliumnext/commons";
-import { becca, NotFoundError, protected_session as protectedSessionModule, ValidationError } from "@triliumnext/core";
+import { becca, cls, NotFoundError, protected_session as protectedSessionModule, ValidationError } from "@triliumnext/core";
 import { randomUUID } from "crypto";
 
-import { generateReadWeaveAnswer, mergeReadWeaveTermIdentity } from "./readweave_ai.js";
+import {
+    formatReadWeaveTermIdentity,
+    generateReadWeaveAnswer,
+    mergeReadWeaveTermIdentity
+} from "./readweave_ai.js";
+import { editReadWeaveLink, saveReadWeaveEntry } from "./readweave_repository.js";
 import sql from "./sql.js";
 
 interface JobRow {
     jobId: string;
+    savedLinkId: string | null;
     articleId: string;
     anchorId: string;
     anchorType: ReadWeaveGenerateRequest["anchorType"];
@@ -68,6 +75,7 @@ function ensureStorage() {
     sql.executeScript(/* sql */`
         CREATE TABLE IF NOT EXISTS readweave_generation_jobs (
             jobId TEXT PRIMARY KEY,
+            savedLinkId TEXT,
             articleId TEXT NOT NULL,
             anchorId TEXT NOT NULL,
             anchorType TEXT NOT NULL,
@@ -101,6 +109,9 @@ function ensureStorage() {
     const columns = sql.getColumn<string>("SELECT name FROM pragma_table_info('readweave_generation_jobs')");
     if (!columns.includes("isProtected")) {
         sql.execute("ALTER TABLE readweave_generation_jobs ADD COLUMN isProtected INTEGER NOT NULL DEFAULT 0");
+    }
+    if (!columns.includes("savedLinkId")) {
+        sql.execute("ALTER TABLE readweave_generation_jobs ADD COLUMN savedLinkId TEXT");
     }
 
     // This also safely upgrades any development-era plaintext rows created before
@@ -177,6 +188,7 @@ function publicJob(row: JobRow, includeProgress = true): ReadWeaveGenerationJob 
     const storedRequest = parseJson<ReadWeaveGenerateRequest>(decodeStoredValue(row.requestJson, row.isProtected));
     return {
         jobId: row.jobId,
+        savedLinkId: row.savedLinkId || undefined,
         articleId: row.articleId,
         anchorId: row.anchorId,
         anchorType: row.anchorType,
@@ -259,21 +271,70 @@ function appendProgress(jobId: string, input: ReadWeaveGenerationProgress) {
     sql.execute("UPDATE readweave_generation_jobs SET updatedAt = ? WHERE jobId = ?", [ timestamp, jobId ]);
 }
 
-function setJobState(jobId: string, status: ReadWeaveGenerationJob["status"], values: { result?: ReadWeaveGenerateResponse; error?: string; unread?: boolean } = {}) {
+function setJobState(
+    jobId: string,
+    status: ReadWeaveGenerationJob["status"],
+    values: { result?: ReadWeaveGenerateResponse; error?: string; unread?: boolean; savedLinkId?: string } = {}
+) {
     const row = rowFor(jobId);
     const updatedAt = new Date().toISOString();
     sql.execute(/* sql */`
         UPDATE readweave_generation_jobs
-        SET status = ?, resultJson = COALESCE(?, resultJson), error = ?, unread = ?, updatedAt = ?
+        SET status = ?, resultJson = COALESCE(?, resultJson), error = ?, unread = ?,
+            savedLinkId = COALESCE(?, savedLinkId), updatedAt = ?
         WHERE jobId = ?
     `, [
         status,
         values.result ? encodeStoredValue(JSON.stringify(values.result), !!row.isProtected) : null,
         encodeStoredValue(values.error ?? null, !!row.isProtected),
         values.unread ? 1 : 0,
+        values.savedLinkId ?? null,
         updatedAt,
         jobId
     ]);
+}
+
+function defaultCalloutType(kind: ReadWeaveGenerateRequest["kind"]): ReadWeaveCalloutType {
+    return kind === "term" ? "tip" : "note";
+}
+
+function persistGeneratedResult(
+    row: JobRow,
+    request: ReadWeaveGenerateRequest,
+    result: ReadWeaveGenerateResponse
+): string {
+    const termIdentity = request.kind === "term" && result.termIdentity
+        ? mergeReadWeaveTermIdentity(result.termIdentity, request.termIdentity)
+        : undefined;
+    const title = request.kind === "question"
+        ? result.optimizedTitle?.trim() || request.title.trim()
+        : termIdentity
+            ? formatReadWeaveTermIdentity(termIdentity)
+            : request.title.trim();
+    const calloutType = request.calloutType ?? defaultCalloutType(request.kind);
+    if (row.savedLinkId) {
+        return editReadWeaveLink(row.savedLinkId, {
+            mode: "article-variant",
+            title,
+            body: result.body,
+            calloutType,
+            termIdentity,
+            verifiedNonExpandableArtifact: result.verifiedNonExpandableArtifact
+        }).linkId;
+    }
+    return saveReadWeaveEntry({
+        articleId: request.articleId,
+        anchorId: request.anchorId,
+        anchorType: request.anchorType,
+        kind: request.kind,
+        parentLinkId: request.parentLinkId,
+        title,
+        body: result.body,
+        sourceExcerpt: sourceExcerpt(request),
+        calloutType,
+        termIdentity,
+        verifiedNonExpandableArtifact: result.verifiedNonExpandableArtifact
+    }).linkId;
 }
 
 function runJob(jobId: string) {
@@ -305,7 +366,20 @@ function runJob(jobId: string) {
         for (let attempt = 1; attempt <= MAX_BACKGROUND_GENERATION_ATTEMPTS; attempt++) {
             try {
                 const result = await generateReadWeaveAnswer(retryRequest, progress => appendProgress(jobId, progress));
-                if (!result.reviewIssues?.length) return result;
+                if (!result.reviewIssues?.length) {
+                    const currentRow = rowFor(jobId);
+                    const savedLinkId = cls.init(() => persistGeneratedResult(currentRow, retryRequest, result));
+                    setJobState(jobId, "running", { savedLinkId });
+                    appendProgress(jobId, {
+                        stage: "complete",
+                        round: 0,
+                        message: currentRow.savedLinkId
+                            ? "全部检查通过，原回答已由新结果覆盖"
+                            : "全部检查通过，回答已自动保存",
+                        issues: []
+                    });
+                    return { result, savedLinkId };
+                }
                 latestError = new ValidationError(result.reviewIssues.join("；"));
                 if (attempt >= MAX_BACKGROUND_GENERATION_ATTEMPTS) break;
                 appendProgress(jobId, {
@@ -347,9 +421,9 @@ function runJob(jobId: string) {
         throw failure;
     };
 
-    void generateUntilClean().then(result => {
+    void generateUntilClean().then(({ result, savedLinkId }) => {
         if (cancelledJobs.has(jobId)) return;
-        setJobState(jobId, "complete", { result, unread: true });
+        setJobState(jobId, "complete", { result, savedLinkId, unread: true });
     }).catch(error => {
         if (cancelledJobs.has(jobId)) return;
         const message = error instanceof Error ? error.message : "ReadWeave generation failed for an unknown reason.";
@@ -429,9 +503,9 @@ export function startReadWeaveGenerationJob(request: ReadWeaveGenerateRequest): 
     const storedRequest = structuredClone(request);
     sql.execute(/* sql */`
         INSERT INTO readweave_generation_jobs (
-            jobId, articleId, anchorId, anchorType, kind, title, sourceExcerpt,
+            jobId, savedLinkId, articleId, anchorId, anchorType, kind, title, sourceExcerpt,
             requestJson, status, resultJson, error, unread, feedback, isProtected, createdAt, updatedAt
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', NULL, NULL, 0, ?, ?, ?, ?)
+        ) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, 'queued', NULL, NULL, 0, ?, ?, ?, ?)
     `, [
         jobId,
         storedRequest.articleId,
@@ -491,6 +565,7 @@ interface ReadWeaveRegenerateRequest {
     feedback?: unknown;
     title?: unknown;
     optimizeQuestion?: unknown;
+    calloutType?: unknown;
     termIdentity?: unknown;
     fragments?: unknown;
 }
@@ -525,6 +600,13 @@ export function regenerateReadWeaveGenerationJob(jobId: string, inputValue: unkn
             throw new ValidationError("optimizeQuestion must be boolean.");
         }
         request.optimizeQuestion = input.optimizeQuestion as boolean | undefined;
+    }
+    if (Object.hasOwn(input, "calloutType")) {
+        if (input.calloutType !== "note" && input.calloutType !== "tip" && input.calloutType !== "important"
+            && input.calloutType !== "warning" && input.calloutType !== "caution") {
+            throw new ValidationError("calloutType is invalid.");
+        }
+        request.calloutType = input.calloutType;
     }
     if (Object.hasOwn(input, "termIdentity")) {
         if (input.termIdentity !== undefined
@@ -582,4 +664,17 @@ export function discardReadWeaveGenerationJob(jobId: string) {
     sql.execute("DELETE FROM readweave_generation_events WHERE jobId = ?", [ jobId ]);
     sql.execute("DELETE FROM readweave_generation_jobs WHERE jobId = ?", [ jobId ]);
     return { discarded: true };
+}
+
+export function discardReadWeaveGenerationJobsForSavedLinks(linkIds: string[]) {
+    ensureStorage();
+    const normalized = Array.from(new Set(linkIds.filter(Boolean)));
+    if (normalized.length === 0) return;
+    for (const linkId of normalized) {
+        const jobIds = sql.getColumn<string>(
+            "SELECT jobId FROM readweave_generation_jobs WHERE savedLinkId = ?",
+            [ linkId ]
+        );
+        for (const jobId of jobIds) discardReadWeaveGenerationJob(jobId);
+    }
 }

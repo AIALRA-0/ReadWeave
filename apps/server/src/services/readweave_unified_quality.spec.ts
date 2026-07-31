@@ -2,6 +2,7 @@ import type { ReadWeaveTermIdentity } from "@triliumnext/commons";
 import { describe, expect, it } from "vitest";
 
 import {
+    buildVerifiedPersonProfileFallback,
     alignTermIdentityWithEvidencePlan,
     buildReadWeaveSystemPrompt,
     buildReadWeaveTaskProfile,
@@ -9,6 +10,7 @@ import {
     deduplicateCanonicalNames,
     findReadWeaveQualityIssues,
     formatReadWeaveTermIdentity,
+    isCurrentPersonProfileTask,
     joinReadWeaveAnswerSegments,
     mergeReadWeaveTermIdentity,
     normalizeGeneralPersonOverview,
@@ -18,6 +20,7 @@ import {
     pruneEvidencePlanForProfile,
     resolveVerifiedNonExpandableArtifact,
     segmentReadWeaveAnswer,
+    stripGeneralPersonPublicationDetails,
     validateReadWeaveTermIdentity,
     validateReadWeaveVerificationPayload
 } from "./readweave_ai.js";
@@ -136,6 +139,71 @@ describe("ReadWeave unified QA and definition quality contract", () => {
         expect(pruned.entityType).toBe("person");
     });
 
+    it("recognizes a Latin person asked through the generic what-template when the local sentence identifies an author", () => {
+        const profile = buildReadWeaveTaskProfile("question", "Mongkol Ekpanyapong是什么？");
+
+        expect(isCurrentPersonProfileTask(
+            profile,
+            "[selected:name]\nMongkol Ekpanyapong\n[document:paper]\n作者：Mongkol Ekpanyapong；论文讨论统计关键时序路径"
+        )).toBe(true);
+    });
+
+    it("removes the local paper, venue, years and dependent claims from a who-answer", () => {
+        const body = [
+            "Mongkol Ekpanyapong 是亚洲理工学院（Asian Institute of Technology）计算机工程系副教授；主要研究电子设计自动化、物理设计及机器学习在医学影像分析中的应用",
+            "可核验贡献包括在 ASP-DAC 亚太设计自动化会议（Asia and South Pacific Design Automation Conference）2007 上发表论文“An Efficient Computation of Statistically Critical Sequential Paths Under Retiming”",
+            "提出一种在重定时下高效计算统计关键时序路径的方法",
+            "此外，其近期合作研究涉及基于深度学习的甲状腺结节超声图像评估（2025）和基于 MRI 磁共振成像（Magnetic Resonance Imaging）的痴呆严重程度评估（2026）",
+            "这些贡献基于公开出版物，但具体贡献边界需参考原文"
+        ].join("；");
+
+        const issues = findReadWeaveQualityIssues(body, "Mongkol Ekpanyapong是谁？", {
+            kind: "question",
+            subject: "Mongkol Ekpanyapong",
+            knowledgeScope: "general",
+            entityType: "person"
+        });
+        const stripped = stripGeneralPersonPublicationDetails(body);
+
+        expect(issues).toContain("用户只询问人物身份，回答却重复了论文、会议、发表年份或合作研究");
+        expect(issues).toContain("普通人物介绍包含用户没有要求的年份履历");
+        expect(stripped).toBe("Mongkol Ekpanyapong 是亚洲理工学院（Asian Institute of Technology）计算机工程系副教授；主要研究电子设计自动化、物理设计及机器学习在医学影像分析中的应用");
+        expect(stripped).not.toMatch(/ASP-DAC|论文|会议|2007|2025|2026|原文/u);
+    });
+
+    it("rejects writing clichés and double negatives under the human-readable Chinese contract", () => {
+        const issues = findReadWeaveQualityIssues(
+            "简单来说，这个问题不能不处理；需要注意的是，继续等待会扩大影响",
+            "这个问题应该怎样处理？",
+            { kind: "question", knowledgeScope: "contextual" }
+        );
+
+        expect(issues).toContain("回答包含妨碍直接阅读的写作套话");
+        expect(issues).toContain("回答包含需要反复消化的双重否定");
+    });
+
+    it("removes common writing clichés and double negatives after every model pass", () => {
+        expect(normalizeReadWeaveGeneratedBody(
+            "简单来说，机会成本衡量决策者不得不舍弃的最佳替代方案价值；需要注意的是，资源不能不进行取舍"
+        )).toBe("机会成本衡量决策者需要舍弃的最佳替代方案价值；资源必须进行取舍");
+    });
+
+    it("accepts a processor definition expressed as an operation-and-control component", () => {
+        const body = "CPU 中央处理器（Central Processing Unit）是计算机系统的核心运算与控制部件，负责解释和执行存储在内存中的指令序列";
+
+        expect(findReadWeaveQualityIssues(body, "CPU", {
+            kind: "term",
+            subject: "CPU",
+            knowledgeScope: "general",
+            termIdentity: {
+                abbreviation: "CPU",
+                chineseName: "中央处理器",
+                englishName: "Central Processing Unit"
+            },
+            entityType: "system"
+        })).toEqual([]);
+    });
+
     it("normalizes a current person profile deterministically and removes awards and publication counts", () => {
         const body = [
             "Sung Kyu Lim 是 IEEE Fellow，现任 Dean's Professor of Electrical and Computer Engineering at the University of Southern California",
@@ -205,6 +273,41 @@ describe("ReadWeave unified QA and definition quality contract", () => {
 
         expect(performanceIssues).toContain("人物介绍包含没有量化证据的显著提升或降低结论");
         expect(historicalIssues).toContain("人物介绍包含历史地位或影响的拔高表述，应改写为可核验的具体工作");
+    });
+
+    it("rejects the malformed abbreviation fragments and duplicated surname continuation found by live human review", () => {
+        const body = [
+            "Sung Kyu Lim 是南加州大学电气与计算机工程系的教授；他主要研究二维半与三维集成电路的架构、设计与电子设计自动化简称；其核心贡献在于开发用于异构人工智能简称芯片的自动化设计方法；这些方法显著",
+            "Lim 的研究推动了 EDA 电子设计自动化（Electronic Design Automation）工具发挥主导作用"
+        ].join("\n\n");
+        const issues = findReadWeaveQualityIssues(body, "Sung Kyu Lim是谁？", {
+            kind: "question",
+            subject: "Sung Kyu Lim",
+            knowledgeScope: "general",
+            entityType: "person"
+        });
+
+        expect(issues).toContain("人物介绍包含“简称”残片或缩写说明粘连");
+        expect(issues).toContain("人物介绍包含没有完成语义的残句");
+        expect(issues).toContain("人物介绍在后续段落重复使用孤立姓氏续写同一回答");
+        expect(issues).toContain("人物介绍包含历史地位或影响的拔高表述，应改写为可核验的具体工作");
+    });
+
+    it("uses a vetted official person fallback only when matching official evidence is present", () => {
+        const official = {
+            provider: "Official profile",
+            title: "Sung-Kyu Lim | USC Viterbi Faculty Directory",
+            url: "https://viterbi.usc.edu/directory/faculty/Lim/Sung-Kyu",
+            snippet: "Sung Kyu Lim is Dean's Professor at the University of Southern California",
+            score: 140
+        };
+
+        expect(buildVerifiedPersonProfileFallback("Sung Kyu Lim", [ official ]))
+            .toContain("南加州大学");
+        expect(buildVerifiedPersonProfileFallback("Sung Kyu Lim", []))
+            .toBeUndefined();
+        expect(buildVerifiedPersonProfileFallback("Moongon Jung", [ official ]))
+            .toBeUndefined();
     });
 
     it("rejects the fluent-looking grammar and bilingual defects found by human live review", () => {
@@ -1196,6 +1299,20 @@ describe("ReadWeave unified QA and definition quality contract", () => {
     });
 
     it("rejects cross-domain disambiguation bloat in a focused technical definition", () => {
+        expect(findReadWeaveQualityIssues(
+            "DAC 设计自动化会议（Design Automation Conference）是电子设计自动化领域的专业会议；该会议也常指代数字模拟转换器（Digital-to-Analog Converter），但在电子设计自动化语境下特指设计自动化会议",
+            "请给出 DAC 的通用、详细定义",
+            {
+                kind: "term",
+                subject: "DAC",
+                knowledgeScope: "general",
+                termIdentity: {
+                    abbreviation: "DAC",
+                    chineseName: "设计自动化会议",
+                    englishName: "Design Automation Conference"
+                }
+            }
+        )).toContain("通用定义加入了当前专业语境不需要的跨领域同名义项");
         expect(findReadWeaveQualityIssues(
             "MOL 中段制程（Middle of Line）是集成电路制造中的工艺阶段；该术语与化学中的摩尔单位无关，后者是另一独立概念",
             "请给出 MOL 的通用、详细定义",

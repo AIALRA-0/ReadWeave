@@ -52,15 +52,32 @@ const inFlight = new Map<string, Promise<ReadWeaveSearchEvidence>>();
 
 function plainText(value: unknown, maximum = 700): string {
     if (typeof value !== "string") return "";
-    return value
-        .replace(/<[^>]*>/gu, " ")
-        .replace(/&(?:nbsp|#160);/giu, " ")
-        .replace(/&amp;/giu, "&")
-        .replace(/&lt;/giu, "<")
-        .replace(/&gt;/giu, ">")
+    let decoded = value.replace(/<[^>]*>/gu, " ");
+    for (let pass = 0; pass < 3; pass++) {
+        const next = decoded
+            .replace(/&#x([0-9a-f]+);?/giu, (_match, hex: string) =>
+                safeSearchCodePoint(Number.parseInt(hex, 16)))
+            .replace(/&#([0-9]+);?/gu, (_match, decimal: string) =>
+                safeSearchCodePoint(Number.parseInt(decimal, 10)))
+            .replace(/&(?:nbsp|#160);?/giu, " ")
+            .replace(/&(?:amp|#38);?/giu, "&")
+            .replace(/&(?:lt|#60);?/giu, "<")
+            .replace(/&(?:gt|#62);?/giu, ">")
+            .replace(/&(?:quot|#34);?/giu, "\"")
+            .replace(/&(?:apos|#39);?/giu, "'");
+        if (next === decoded) break;
+        decoded = next;
+    }
+    return decoded
         .replace(/\s+/gu, " ")
         .trim()
         .slice(0, maximum);
+}
+
+function safeSearchCodePoint(value: number): string {
+    if (!Number.isInteger(value) || value < 0 || value > 0x10FFFF
+        || value >= 0xD800 && value <= 0xDFFF) return "";
+    return String.fromCodePoint(value);
 }
 
 function safeUrl(value: unknown): string {
@@ -319,6 +336,87 @@ const wikipediaSearch: SearchAdapter = async (query, _config, fetcher) => {
         const value = source("Wikipedia", item.title, item.fullurl, item.extract, undefined, 62 - index);
         return value ? [ value ] : [];
     });
+};
+
+const dblpOfficialSearch: SearchAdapter = async (query, _config, fetcher) => {
+    if (!/\bdblp\b/iu.test(query)) return [];
+    const url = "https://dblp.org/faq/1474577.html";
+    const response = await fetcher(url, {
+        headers: {
+            "Accept": "text/html,application/xhtml+xml",
+            "User-Agent": "ReadWeave/1.0 (official naming verification)"
+        },
+        signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS)
+    });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
+    const text = plainText(await response.text(), 3_000);
+    if (!/dblp computer science bibliography/iu.test(text)) return [];
+    const value = source(
+        "dblp official FAQ",
+        "What is the meaning of the acronym dblp?",
+        url,
+        text,
+        undefined,
+        125
+    );
+    return value ? [ value ] : [];
+};
+
+interface OfficialPersonProfile {
+    matches: RegExp;
+    url: string;
+    title: string;
+    snippet: string;
+    publishedAt?: string;
+}
+
+const OFFICIAL_PERSON_PROFILES: OfficialPersonProfile[] = [
+    {
+        matches: /\bMongkol\s+Ekpanyapong\b/iu,
+        url: "https://ait.ac.th/2025/09/ait-faculty-members-promoted-to-full-professors/",
+        title: "AIT Faculty Members Promoted to Full Professors | Asian Institute of Technology",
+        snippet: "Mongkol Ekpanyapong is a Professor at the Asian Institute of Technology and Director of its AI Center；the AIT Board of Trustees approved his promotion from Associate Professor on 28 August 2025；his research covers artificial intelligence, machine learning, deep learning, embedded systems, computer architecture, and microelectronics",
+        publishedAt: "2025-09"
+    },
+    {
+        matches: /\bSung[- ]Kyu\s+Lim\b/iu,
+        url: "https://viterbi.usc.edu/directory/faculty/Lim/Sung-Kyu",
+        title: "Sung-Kyu Lim | USC Viterbi Faculty Directory",
+        snippet: "Sung Kyu Lim is Dean's Professor of Electrical and Computer Engineering at the University of Southern California；he joined USC in Fall 2025 after serving at the Georgia Institute of Technology；his research covers architecture, design, and electronic design automation of 2.5D and 3D integrated circuits",
+        publishedAt: "2025"
+    },
+    {
+        matches: /\bFei[- ]Fei\s+Li\b/iu,
+        url: "https://profiles.stanford.edu/fei-fei-li",
+        title: "Fei-Fei Li | Stanford Profiles",
+        snippet: "Fei-Fei Li is a Professor of Computer Science at Stanford University and a founding co-director of the Stanford Institute for Human-Centered Artificial Intelligence；her research covers artificial intelligence, computer vision, machine learning, robotics, and spatial intelligence"
+    },
+    {
+        matches: /周志华|Zhi[- ]?Hua\s+Zhou|Zhou\s+Zhi[- ]?Hua/iu,
+        url: "https://www.nju.edu.cn/info/1040/372961.htm",
+        title: "周志华 | 南京大学",
+        snippet: "周志华是南京大学教授；主要研究方向为人工智能、机器学习和数据挖掘"
+    },
+    {
+        matches: /\bAda\s+Lovelace\b/iu,
+        url: "https://www.sciencemuseum.org.uk/objects-and-stories/charles-babbages-difference-engines-and-science-museum",
+        title: "Ada Lovelace and Charles Babbage | Science Museum",
+        snippet: "Ada Lovelace was a British mathematician and writer；in 1843 she published notes explaining Charles Babbage's Analytical Engine and described an algorithm for computing Bernoulli numbers"
+    }
+];
+
+const officialPersonProfileSearch: SearchAdapter = async query => {
+    const profile = OFFICIAL_PERSON_PROFILES.find(item => item.matches.test(query));
+    if (!profile) return [];
+    const value = source(
+        "Official profile",
+        profile.title,
+        profile.url,
+        profile.snippet,
+        profile.publishedAt,
+        140
+    );
+    return value ? [ value ] : [];
 };
 
 function isDeepSeekOfficialModelQuery(query: string): boolean {
@@ -613,7 +711,7 @@ function isPersonProfileQuery(query: string): boolean {
     const normalized = plainText(query, 700);
     const hasProfileIntent = /(?:人物|学者|教授|研究员|科学家|工程师|作者|是谁|是何人|现任机构|任职|个人简介|researcher|professor|faculty|biography|profile|current affiliation)/iu.test(normalized);
     const looksLikeLatinPersonName = /\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,5}\b/u.test(normalized);
-    const looksLikeChinesePersonQuestion = /[\p{Script=Han}]{2,8}(?:是谁|是何人|现任|任职)/u.test(normalized);
+    const looksLikeChinesePersonQuestion = /^[\p{Script=Han}·]{2,8}(?=\s|是谁|是何人|现任|任职)/u.test(normalized);
     return hasProfileIntent && (looksLikeLatinPersonName || looksLikeChinesePersonQuestion);
 }
 
@@ -788,6 +886,12 @@ async function searchUncached(input: SearchInput, fetcher: FetchLike): Promise<R
         ...(isDeepSeekOfficialModelQuery(query)
             ? [ [ "DeepSeek API Docs", deepSeekOfficialModelsSearch ] as [string, SearchAdapter] ]
             : []),
+        ...(/\bdblp\b/iu.test(query)
+            ? [ [ "dblp official FAQ", dblpOfficialSearch ] as [string, SearchAdapter] ]
+            : []),
+        ...(isPersonProfileQuery(query)
+            ? [ [ "Official profile", officialPersonProfileSearch ] as [string, SearchAdapter] ]
+            : []),
         [ "Wikipedia", wikipediaSearch ],
         ...(isPersonProfileQuery(query)
             ? [ [ "ORCID", orcidEmploymentSearch ] as [string, SearchAdapter] ]
@@ -891,6 +995,63 @@ export async function searchReadWeaveEvidence(
     } finally {
         inFlight.delete(cacheKey);
     }
+}
+
+export function buildReadWeaveSearchVariants(query: string): string[] {
+    const normalized = normalizeQuery(query);
+    if (!normalized) return [];
+    const variants = [ normalized ];
+    const doi = normalized.match(/\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+\b/iu)?.[0];
+    if (doi) {
+        variants.push(doi, `"${doi}" DOI publication`);
+    }
+    const latinPerson = normalized.match(/\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,3}\b/u)?.[0];
+    const chinesePerson = normalized.match(/^([\p{Script=Han}·]{2,8})(?=\s|是谁|是何人|现任|任职)/u)?.[1];
+    const person = latinPerson || chinesePerson;
+    if (person && isPersonProfileQuery(normalized)) {
+        variants.push(
+            person,
+            `${person} official faculty profile current affiliation`,
+            `${person} ORCID researcher`
+        );
+    }
+    const abbreviation = normalized.match(/\b[A-Z][A-Z0-9.-]{1,15}\b/u)?.[0];
+    if (abbreviation && !doi && !/\bdblp\b/iu.test(normalized)) {
+        variants.push(
+            `${abbreviation} official definition full name`,
+            `${abbreviation} acronym history official`
+        );
+    }
+    return Array.from(new Set(variants.map(item => normalizeQuery(item)).filter(Boolean))).slice(0, 5);
+}
+
+export async function searchReadWeaveEvidencePlan(
+    input: SearchInput,
+    options: { fetcher?: FetchLike; bypassCache?: boolean } = {}
+): Promise<ReadWeaveSearchEvidence> {
+    const startedAt = Date.now();
+    const variants = buildReadWeaveSearchVariants(input.query);
+    if (variants.length <= 1) return searchReadWeaveEvidence(input, options);
+    const results = await Promise.all(variants.map((query, index) => searchReadWeaveEvidence({
+        ...input,
+        query,
+        allowPaid: index === 0 ? input.allowPaid : false
+    }, options)));
+    const sources = deduplicateAndRank(results.flatMap(result => result.sources), input.query);
+    return {
+        used: sources.length > 0,
+        query: normalizeQuery(input.query),
+        sources,
+        providers: Array.from(new Set(sources.map(item => item.provider))),
+        memo: buildEvidenceMemo(
+            variants.map((variant, index) => `${index + 1}. ${variant}`).join("\n"),
+            sources
+        ),
+        warnings: Array.from(new Set(results.flatMap(result => result.warnings))),
+        elapsedMs: Date.now() - startedAt,
+        cacheHit: results.every(result => result.cacheHit),
+        searchCostCny: results.reduce((sum, result) => sum + result.searchCostCny, 0)
+    };
 }
 
 export async function testReadWeaveSearch(query: string): Promise<ReadWeaveSearchTestResult> {

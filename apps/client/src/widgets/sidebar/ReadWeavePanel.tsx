@@ -70,7 +70,8 @@ import {
     READWEAVE_QUESTION_TEMPLATE_STORAGE_KEY,
     type ReadWeaveQuestionTemplate,
     recordReadWeaveTemplateUse,
-    renderReadWeaveQuestionTemplate} from "./readweave_question_templates.js";
+    renderReadWeaveQuestionTemplate
+} from "./readweave_question_templates.js";
 import RightPanelWidget from "./RightPanelWidget.js";
 
 const BLOCK_SELECTOR = "p,h1,h2,h3,h4,h5,h6,li,blockquote,pre";
@@ -159,7 +160,7 @@ export default function ReadWeavePanel() {
     const [kind, setKind] = useState<ReadWeaveObjectKind>("question");
     const [parentLinkId, setParentLinkId] = useState<string>();
     const [questionTitle, setQuestionTitle] = useState("");
-    const [optimizeQuestion, setOptimizeQuestion] = useState(false);
+    const [optimizeQuestion, setOptimizeQuestion] = useState(true);
     const [termIdentity, setTermIdentity] = useState<Partial<ReadWeaveTermIdentity>>({});
     const [termIdentityEdited, setTermIdentityEdited] = useState(false);
     const [body, setBody] = useState("");
@@ -404,7 +405,7 @@ export default function ReadWeavePanel() {
             ?? (nextKind === "question"
                 ? confirmingPendingSelection && questionTitle.trim() ? questionTitle : matchingJob?.title || defaultQuestionForExcerpt(decodeReadWeaveText(nextSelection.excerpt))
                 : ""));
-        setOptimizeQuestion(matchingDraft?.optimizeQuestion ?? (confirmingPendingSelection ? optimizeQuestion : false));
+        setOptimizeQuestion(matchingDraft?.optimizeQuestion ?? (confirmingPendingSelection ? optimizeQuestion : true));
         const restoredFields = recoverReadWeaveGenerationFields({
             draft: matchingDraft,
             fallbackBody: confirmingPendingSelection ? body : "",
@@ -480,7 +481,7 @@ export default function ReadWeavePanel() {
         setKind("question");
         setParentLinkId(undefined);
         setQuestionTitle("");
-        setOptimizeQuestion(false);
+        setOptimizeQuestion(true);
         setTermIdentity({});
         setTermIdentityEdited(false);
         setBody("");
@@ -695,6 +696,23 @@ export default function ReadWeavePanel() {
                         return;
                     }
                     hydrateGenerationJob({ ...job, progress: accumulated });
+                    await refreshCurrent(target.noteId, target.anchorId);
+                    if (job.savedLinkId
+                        && isSelectionActionCurrent(target, polledJobId)
+                        && entriesTarget.current?.noteId === target.noteId
+                        && entriesTarget.current.anchorId === target.anchorId) {
+                        // The generation result and its saved link become
+                        // visible in the same polling turn. A concurrent
+                        // decoration refresh can otherwise overwrite the
+                        // freshly loaded entry list with its earlier empty
+                        // snapshot until the user reselects the fragment.
+                        const savedEntries = await loadReadWeaveEntries(target.noteId, target.anchorId);
+                        if (isSelectionActionCurrent(target, polledJobId)
+                            && entriesTarget.current?.noteId === target.noteId
+                            && entriesTarget.current.anchorId === target.anchorId) {
+                            setEntries(savedEntries);
+                        }
+                    }
                     // Finishing a job is a notification event, not a user-view
                     // event. Keep the persisted unread state (and its green
                     // exact-range indicator) until the user deliberately
@@ -779,6 +797,7 @@ export default function ReadWeavePanel() {
                 anchorId: selection.anchorId,
                 anchorType: selection.anchorType,
                 kind,
+                calloutType,
                 parentLinkId,
                 rootSourceExcerpt: selection.excerpt,
                 title: currentTitle,
@@ -975,6 +994,7 @@ export default function ReadWeavePanel() {
                 feedback: regenerationFeedback.trim() || undefined,
                 title: currentTitle,
                 optimizeQuestion: kind === "question" ? optimizeQuestion : undefined,
+                calloutType,
                 termIdentity: kind === "term" ? cleanPartialTermIdentity(termIdentity) : undefined,
                 fragments: nestedParent
                     ? nestedQuestionFragments(entries, nestedParent, selection!.fragments)
@@ -1201,7 +1221,11 @@ export default function ReadWeavePanel() {
             && job.parentLinkId === entry.linkId);
         const restoredFields = recoverReadWeaveGenerationFields({
             draft: restoredDraft,
-            fallbackQuestionTitle: renderReadWeaveQuestionTemplate(DEFAULT_READWEAVE_QUESTION_TEMPLATES[11], selection?.excerpt ?? entry.title),
+            fallbackQuestionTitle: renderReadWeaveQuestionTemplate(
+                DEFAULT_READWEAVE_QUESTION_TEMPLATES.find(template => template.id === "implication")
+                    ?? DEFAULT_READWEAVE_QUESTION_TEMPLATES[0],
+                selection?.excerpt ?? entry.title
+            ),
             job: restoredJob
         });
         selectionActionRevision.current += 1;
@@ -1209,7 +1233,7 @@ export default function ReadWeavePanel() {
         setParentLinkId(entry.linkId);
         setKind("question");
         setQuestionTitle(restoredFields.questionTitle);
-        setOptimizeQuestion(restoredDraft?.optimizeQuestion ?? false);
+        setOptimizeQuestion(restoredDraft?.optimizeQuestion ?? true);
         setTermIdentity({});
         setTermIdentityEdited(false);
         setBody(restoredFields.body);
@@ -1591,7 +1615,7 @@ export default function ReadWeavePanel() {
                             </button>
                             <div class="readweave-body-heading">
                                 <label for="readweave-draft-body">{t(kind === "question" ? "readweave.answer_label" : "readweave.definition_label")}</label>
-                                {!!body.trim() && (
+                                {!!body.trim() && !currentJob?.savedLinkId && (
                                     <button
                                         type="button"
                                         class="btn btn-sm btn-link readweave-body-edit"
@@ -1654,17 +1678,22 @@ export default function ReadWeavePanel() {
                                     <p>{t(draftEditedAfterFailedReview ? "readweave.review_issues_edited" : "readweave.review_issues_blocked")}</p>
                                 </section>
                             )}
-                            <button
-                                type="button"
-                                class="btn btn-primary"
-                                disabled={editorLocked || !saveReady}
-                                aria-describedby={reviewIssues.length > 0 ? "readweave-review-gate" : undefined}
-                                onClick={save}
-                                data-testid="readweave-save"
-                            >{t("readweave.review_and_save")}</button>
+                            {!currentJob?.savedLinkId && (
+                                <button
+                                    type="button"
+                                    class="btn btn-primary"
+                                    disabled={editorLocked || !saveReady}
+                                    aria-describedby={reviewIssues.length > 0 ? "readweave-review-gate" : undefined}
+                                    onClick={save}
+                                    data-testid="readweave-save"
+                                >{t("readweave.review_and_save")}</button>
+                            )}
+                            {currentJob?.savedLinkId && <p class="readweave-status">{t("readweave.auto_saved")}</p>}
                             {currentJob && (
                                 <div class="readweave-review-actions">
-                                    <button type="button" class="btn btn-secondary" disabled={busy && !generationBusy} onClick={discardDraft}>{t("readweave.discard_draft")}</button>
+                                    {!currentJob.savedLinkId && (
+                                        <button type="button" class="btn btn-secondary" disabled={busy && !generationBusy} onClick={discardDraft}>{t("readweave.discard_draft")}</button>
+                                    )}
                                     <button type="button" class="btn btn-secondary" disabled={editorLocked} aria-expanded={regenerationOpen} onClick={() => setRegenerationOpen(current => !current)}>{t("readweave.regenerate")}</button>
                                 </div>
                             )}

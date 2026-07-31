@@ -13,6 +13,7 @@ import { generateReadWeaveAnswer } from "../../services/readweave_ai.js";
 import { findReadWeaveCandidates } from "../../services/readweave_engine.js";
 import {
     discardReadWeaveGenerationJob,
+    discardReadWeaveGenerationJobsForSavedLinks,
     getReadWeaveGenerationEvents,
     getReadWeaveGenerationJob,
     listReadWeaveGenerationJobs,
@@ -73,7 +74,9 @@ function editLink(req: Request<{ linkId: string }>) {
 
 function deleteLink(req: Request<{ linkId: string }>) {
     const strategy = req.query.children === "promote" ? "promote" : "cascade";
-    return deleteReadWeaveLink(req.params.linkId, strategy);
+    const result = deleteReadWeaveLink(req.params.linkId, strategy);
+    discardReadWeaveGenerationJobsForSavedLinks(result.deletedLinkIds ?? [ result.linkId ]);
+    return result;
 }
 
 async function generate(req: Request) {

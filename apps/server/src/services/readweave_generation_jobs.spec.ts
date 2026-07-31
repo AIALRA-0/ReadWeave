@@ -20,6 +20,11 @@ import {
     regenerateReadWeaveGenerationJob,
     startReadWeaveGenerationJob
 } from "./readweave_generation_jobs.js";
+import {
+    deleteReadWeaveLink,
+    getAnchorSummaries,
+    getEntriesForAnchor
+} from "./readweave_repository.js";
 import sql from "./sql.js";
 import sqlInit from "./sql_init.js";
 
@@ -32,9 +37,12 @@ let request: ReadWeaveGenerateRequest = {
     fragments: [ { id: "selected", role: "selected", text: "测试片段" } ]
 };
 
-function result(body = "这是后台生成并持久化的测试回答；"): ReadWeaveGenerateResponse {
+function result(body = "测试片段说明后台任务能够生成、检查并持久化保存回答"): ReadWeaveGenerateResponse {
+    const completeBody = body.replace(/[。；\s]+$/u, "").length >= 50
+        ? body
+        : `${body.replace(/[。；\s]+$/u, "")}；保存后的内容能够在同一文字锚点重新打开，并继续编辑、重新生成或删除`;
     return {
-        body,
+        body: completeBody,
         context: { fragmentIds: [ "selected" ], characterCount: 4, characterBudget: 800, expansionLevel: 0, attemptedBudgets: [ 800 ] },
         workflow: { generationAttempts: 1, validationPasses: 1, contextExpansions: 0, repairRounds: 0, unchangedSegmentsVerified: true },
         provider: "test",
@@ -46,6 +54,9 @@ async function waitForStatus(jobId: string, status: "complete" | "failed") {
     for (let attempt = 0; attempt < 50; attempt++) {
         const job = getReadWeaveGenerationJob(jobId);
         if (job.status === status) return job;
+        if (job.status === "failed") {
+            throw new Error(`Job ${jobId} failed: ${job.error}; ${job.progress.flatMap(event => event.issues).join(" | ")}`);
+        }
         await new Promise(resolve => setTimeout(resolve, 5));
     }
     throw new Error(`Job ${jobId} did not reach ${status}.`);
@@ -70,6 +81,11 @@ describe("ReadWeave persisted generation jobs", () => {
     beforeEach(() => {
         sql.execute("DELETE FROM readweave_generation_events");
         sql.execute("DELETE FROM readweave_generation_jobs");
+        cls.init(() => {
+            for (const summary of getAnchorSummaries(request.articleId)) {
+                for (const entry of summary.entries) deleteReadWeaveLink(entry.linkId);
+            }
+        });
         generateMock.mockReset();
         generateMock.mockImplementation(async (_request, onProgress) => {
             onProgress?.({ stage: "drafting", round: 1, message: "正在生成测试首稿", issues: [] });
@@ -93,6 +109,13 @@ describe("ReadWeave persisted generation jobs", () => {
         expect(started.sourceExcerpt).toBe("测试片段");
         const completed = await waitForStatus(started.jobId, "complete");
         expect(completed.unread).toBe(true);
+        expect(completed.savedLinkId).toBeTruthy();
+        expect(getEntriesForAnchor(request.articleId, request.anchorId)).toHaveLength(1);
+        expect(getEntriesForAnchor(request.articleId, request.anchorId)[0]).toMatchObject({
+            linkId: completed.savedLinkId,
+            kind: "question",
+            calloutType: "note"
+        });
         expect(listReadWeaveGenerationJobs(request.articleId)).toHaveLength(1);
 
         const firstPage = getReadWeaveGenerationEvents(started.jobId, 0);
@@ -145,7 +168,7 @@ describe("ReadWeave persisted generation jobs", () => {
 
     it("allows regeneration without feedback while retaining the previous result and resetting progress", async () => {
         const started = startReadWeaveGenerationJob(request);
-        await waitForStatus(started.jobId, "complete");
+        const firstCompleted = await waitForStatus(started.jobId, "complete");
         sql.execute("UPDATE readweave_generation_jobs SET createdAt = ? WHERE jobId = ?", [
             "2020-01-01T00:00:00.000Z",
             started.jobId
@@ -171,6 +194,9 @@ describe("ReadWeave persisted generation jobs", () => {
         release?.(result("这是按修正意见生成的新回答；"));
         const completed = await waitForStatus(started.jobId, "complete");
         expect(completed.result?.body).toContain("新回答");
+        expect(completed.savedLinkId).toBe(firstCompleted.savedLinkId);
+        expect(getEntriesForAnchor(request.articleId, request.anchorId)).toHaveLength(1);
+        expect(getEntriesForAnchor(request.articleId, request.anchorId)[0].body).toContain("新回答");
         expect(completed.feedback).toBeUndefined();
         expect(discardReadWeaveGenerationJob(started.jobId)).toEqual({ discarded: true });
         expect(() => getReadWeaveGenerationJob(started.jobId)).toThrow();
@@ -189,6 +215,9 @@ describe("ReadWeave persisted generation jobs", () => {
                 text: "BS-PDN-Last：面向具有多功能背面金属层的最优电源分配网络设计"
             }
         ];
+        generateMock.mockResolvedValueOnce(result(
+            "BS-PDN-Last 是一种面向背面供电网络的设计方法；它在给定设计约束下组织供电路径，并以可检查的网络结果作为输出"
+        ));
         const regenerating = regenerateReadWeaveGenerationJob(started.jobId, {
             title: "BS-PDN-Last是什么",
             optimizeQuestion: true,
@@ -285,13 +314,12 @@ describe("ReadWeave persisted generation jobs", () => {
         expect(second.jobId).toBe(first.jobId);
     });
 
-    it("normalizes a legacy unexpanded method identity when the persisted draft is read", async () => {
+    it("auto-saves a verified method name that has no expandable abbreviation", async () => {
         generateMock.mockResolvedValueOnce({
-            ...result("BS-PDN-Last 是一种背面供电网络设计方法。"),
-            termIdentity: {
-                abbreviation: "BS-PDN-Last",
-                chineseName: "BS-PDN-Last 背面供电网络设计方法",
-                englishName: "BS-PDN-Last"
+            ...result("BS-PDN-Last 是一种背面供电网络设计方法；它面向供电路径的组织与约束检查，并输出可继续验证的网络设计结果"),
+            verifiedNonExpandableArtifact: {
+                originalName: "BS-PDN-Last",
+                entityType: "method"
             }
         });
         const started = startReadWeaveGenerationJob({
@@ -301,11 +329,12 @@ describe("ReadWeave persisted generation jobs", () => {
             termIdentity: undefined
         });
         const completed = await waitForStatus(started.jobId, "complete");
-        expect(completed.result?.termIdentity).toEqual({
-            abbreviation: undefined,
-            chineseName: "背面供电网络设计方法",
-            englishName: undefined
+        expect(completed.result?.verifiedNonExpandableArtifact).toEqual({
+            originalName: "BS-PDN-Last",
+            entityType: "method"
         });
+        expect(completed.savedLinkId).toBeTruthy();
+        expect(getEntriesForAnchor(request.articleId, request.anchorId)[0].title).toBe("BS-PDN-Last");
     });
 
     it("encrypts every protected-note payload and refuses access while the protected session is locked", async () => {

@@ -7,6 +7,13 @@ const describeLive = process.env.READWEAVE_LIVE_AI === "1" ? describe : describe
 
 function expectNaturalDirectAnswer(result: ReadWeaveGenerateResponse, question: string): void {
     const { body } = result;
+    if (process.env.READWEAVE_PRINT_LIVE_BODY === "1") {
+        console.info([
+            `[ReadWeave live question] ${question}`,
+            `[ReadWeave live answer] ${body}`,
+            `[ReadWeave live usage] ¥${(result.usage?.costCny ?? 0).toFixed(4)}；${result.usage?.modelCalls ?? 0} 次模型调用`
+        ].join("\n"));
+    }
     expect(body.length).toBeGreaterThan(10);
     expect(body.length).toBeLessThan(3_000);
     expect(body).not.toMatch(/^(好的|当然|作为(?:一个)?人工智能)/);
@@ -27,6 +34,52 @@ function expectNaturalDirectAnswer(result: ReadWeaveGenerateResponse, question: 
 }
 
 describeLive("ReadWeave live AI quality", () => {
+    it("defines DAX as a kernel access mechanism without hardware or local-context drift", async () => {
+        const question = "DAX 是什么？";
+        const result = await generateReadWeaveAnswer({
+            articleId: "live-quality",
+            anchorId: "dax",
+            anchorType: "range",
+            kind: "question",
+            title: question,
+            fragments: [{
+                id: "dax",
+                role: "selected",
+                text: "DAX 直接访问（Direct Access）接口允许处理器直接访问持久内存中的数据，不经过传统页面缓存；"
+            }]
+        });
+
+        expectNaturalDirectAnswer(result, question);
+        expect(result.body).toContain("DAX 直接访问（Direct Access）");
+        expect(result.body).toMatch(/操作系统内核|内核/);
+        expect(result.body).toMatch(/绕过|不经过/);
+        expect(result.body).toMatch(/页面缓存|页缓存/);
+        expect(result.body).toMatch(/内存映射|地址空间|加载与存储指令|直接寻址/);
+        expect(result.body).toMatch(/不是[^；\n]{0,32}(?:内存硬件|硬件设备|存储介质)/);
+        expect(result.body).not.toMatch(/如或|拷贝这|复制开销使用|硬件支持如/);
+    }, 300_000);
+
+    it("answers CXL.io's concrete form before discussing its purpose", async () => {
+        const question = "CXL.io 具体是什么形态？";
+        const result = await generateReadWeaveAnswer({
+            articleId: "live-quality",
+            anchorId: "cxl-io-shape",
+            anchorType: "range",
+            kind: "question",
+            title: question,
+            fragments: [{
+                id: "cxl-io-shape",
+                role: "selected",
+                text: "CXL.io 用于设备发现、枚举、配置空间访问和普通输入输出事务；"
+            }]
+        });
+
+        expectNaturalDirectAnswer(result, question);
+        expect(result.body.slice(0, 260)).toMatch(/协议层|逻辑接口|报文规则|事务类型/);
+        expect(result.body).toMatch(/不是[^；\n]{0,40}(?:设备|芯片|插槽|线缆|物理接口)/);
+        expect(result.body).not.toMatch(/^CXL\.io 作为基础协议，确保/u);
+    }, 300_000);
+
     it("defines an abbreviation with the canonical bilingual form", async () => {
         const result = await generateReadWeaveAnswer({
             articleId: "live-quality",
@@ -44,6 +97,9 @@ describeLive("ReadWeave live AI quality", () => {
         expectNaturalDirectAnswer(result, "NPU");
         expect(result.body).toContain("NPU 神经网络处理单元（Neural Processing Unit）");
         expect(result.body).toMatch(/专用硬件加速|专门为(?:加速)?神经网络计算(?:而)?设计的硬件|硬件加速器/);
+        expect(result.body).not.toContain("该对象");
+        expect(result.body).not.toMatch(/(?:例如|如)\s*[，,；;]/);
+        expect(result.body).not.toMatch(/(?:手机|服务器|边缘设备|处理器|加速器|系统|平台|场景)其核心(?:机制|功能|作用)/);
     }, 300_000);
 
     it("rejects a prompt injection embedded in causal-analysis evidence", async () => {
@@ -84,6 +140,8 @@ describeLive("ReadWeave live AI quality", () => {
         expectNaturalDirectAnswer(result, "跨文章引用为什么应该按 UUID 而不是显示名称索引？");
         expect(result.body).toContain("UUID 通用唯一标识符（Universally Unique Identifier）");
         expect(result.body).toMatch(/修改|重名/);
+        expect(result.body).not.toContain("）通用唯一标识符");
+        expect(result.body).not.toContain("绝对不变");
     }, 300_000);
 
     it("uses only the relevant measurement paragraph from a long document", async () => {
@@ -108,8 +166,12 @@ describeLive("ReadWeave live AI quality", () => {
         expectNaturalDirectAnswer(result, "根据记录，样品甲和样品乙的读数有什么差异？能判断原因吗？");
         expect(result.context.fragmentIds).toEqual(["measurements"]);
         expect(result.context.characterCount).toBe(selectedText.length);
-        expect(result.body).toMatch(/甲[^；]*(?:高于|大于|超过)[^；]*乙|乙[^；]*(?:低于|小于|少于)[^；]*甲/);
+        expect(result.body).toMatch(
+            /甲[^；]*(?:高于|大于|超过)[^；]*乙|乙[^；]*(?:低于|小于|少于)[^；]*甲|甲[^；]*比[^；]*乙[^；]*高/
+        );
         expect(result.body).toMatch(/3\.8/);
+        expect(result.body).not.toMatch(/3\.8\s*[—–-]\s*4\.0/);
+        expect(result.body).not.toMatch(/显著|稳定/);
         expect(result.body).toMatch(/未说明|没有说明|无法判断|不能判断/);
     }, 300_000);
 
@@ -195,5 +257,25 @@ describeLive("ReadWeave live AI quality", () => {
         expect(result.body).toMatch(/5\s*(?:至|到|[-–—])\s*6\s*秒/);
         expect(result.body).toMatch(/9\s*秒?\s*[-−]\s*6\s*秒?\s*=\s*3\s*秒|3\s*秒[^；]*余量|余量[^；]*3\s*秒/);
         expect(result.body).toMatch(/(?:无法|不能|不足以)[^；]*(?:断言|确定|计算)[^；]*60\s*秒/);
+    }, 300_000);
+
+    it("uses low-cost AI only for lightweight question cleanup", async () => {
+        const originalQuestion = "cxl.io  具体是什么形态?";
+        const result = await generateReadWeaveAnswer({
+            articleId: "live-quality",
+            anchorId: "ai-question-optimization",
+            anchorType: "range",
+            kind: "question",
+            title: originalQuestion,
+            optimizeQuestion: true,
+            fragments: [{
+                id: "ai-question-optimization",
+                role: "selected",
+                text: "CXL.io 用于设备发现、枚举、配置空间访问和普通输入输出事务；"
+            }]
+        });
+
+        expectNaturalDirectAnswer(result, originalQuestion);
+        expect(result.optimizedTitle).toBe("CXL.io 具体是什么形态？");
     }, 300_000);
 });

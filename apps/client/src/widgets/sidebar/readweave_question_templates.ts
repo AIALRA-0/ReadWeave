@@ -9,29 +9,36 @@ export interface ReadWeaveQuestionTemplate {
 export const READWEAVE_QUESTION_TEMPLATE_STORAGE_KEY = "readweave-question-templates-v1";
 
 export const DEFAULT_READWEAVE_QUESTION_TEMPLATES: ReadWeaveQuestionTemplate[] = [
-    { id: "what", label: "是什么", pattern: "“{selection}”是什么？请从零开始给出通用、准确且容易理解的说明", uses: 0, builtin: true },
-    { id: "why", label: "为什么", pattern: "为什么会出现“{selection}”？请解释原因、因果链和成立条件", uses: 0, builtin: true },
-    { id: "how", label: "如何工作", pattern: "“{selection}”是如何工作的？请从底层构成讲到整体机制", uses: 0, builtin: true },
-    { id: "prerequisites", label: "前置知识", pattern: "理解“{selection}”之前需要掌握哪些前置知识？请按依赖顺序说明", uses: 0, builtin: true },
-    { id: "example", label: "举例", pattern: "请用一个具体、完整的例子解释“{selection}”，并说明例子与概念如何对应", uses: 0, builtin: true },
-    { id: "compare", label: "对比", pattern: "“{selection}”容易和哪些相近概念混淆？请比较核心差异和判断方法", uses: 0, builtin: true },
-    { id: "tradeoff", label: "权衡", pattern: "“{selection}”涉及哪些关键权衡？请说明各方案的收益、代价和适用条件", uses: 0, builtin: true },
-    { id: "conditions", label: "成立条件", pattern: "“{selection}”在什么条件下成立或适用？哪些条件变化后结论会失效", uses: 0, builtin: true },
-    { id: "failure", label: "失效模式", pattern: "“{selection}”可能怎样失败？请说明典型现象、根因和识别方法", uses: 0, builtin: true },
-    { id: "evidence", label: "证据", pattern: "关于“{selection}”有哪些可靠证据？请区分已证实事实、合理推断和未知项", uses: 0, builtin: true },
-    { id: "verify", label: "如何验证", pattern: "怎样验证关于“{selection}”的结论？请给出可观察判据和通过、失败条件", uses: 0, builtin: true },
-    { id: "implication", label: "意味着什么", pattern: "“{selection}”意味着什么？请说明它对上层目标、决策和后续步骤的影响", uses: 0, builtin: true }
+    { id: "meaning", label: "什么意思", pattern: "“{selection}”是什么意思？", uses: 0, builtin: true },
+    { id: "who", label: "是谁", pattern: "“{selection}”是谁？", uses: 0, builtin: true },
+    { id: "what", label: "是什么", pattern: "“{selection}”是什么？", uses: 0, builtin: true },
+    { id: "why", label: "为什么", pattern: "为什么会出现“{selection}”？", uses: 0, builtin: true },
+    { id: "how", label: "如何工作", pattern: "“{selection}”如何工作？", uses: 0, builtin: true },
+    { id: "prerequisites", label: "前置知识", pattern: "理解“{selection}”需要哪些前置知识？", uses: 0, builtin: true },
+    { id: "example", label: "举例", pattern: "能用一个例子解释“{selection}”吗？", uses: 0, builtin: true },
+    { id: "compare", label: "对比", pattern: "“{selection}”与相近概念有什么区别？", uses: 0, builtin: true },
+    { id: "tradeoff", label: "权衡", pattern: "“{selection}”有哪些关键权衡？", uses: 0, builtin: true },
+    { id: "conditions", label: "成立条件", pattern: "“{selection}”在什么条件下成立？", uses: 0, builtin: true },
+    { id: "failure", label: "失效模式", pattern: "“{selection}”会如何失效？", uses: 0, builtin: true },
+    { id: "evidence", label: "证据", pattern: "关于“{selection}”有哪些可靠证据？", uses: 0, builtin: true },
+    { id: "verify", label: "如何验证", pattern: "如何验证关于“{selection}”的结论？", uses: 0, builtin: true },
+    { id: "implication", label: "意味着什么", pattern: "“{selection}”意味着什么？", uses: 0, builtin: true }
 ];
 
 export function decodeReadWeaveText(value: string): string {
-    const decoded = value
-        .replace(/&#x([0-9a-f]+);?/giu, (_match, hex: string) => safeCodePoint(Number.parseInt(hex, 16)))
-        .replace(/&#([0-9]+);?/gu, (_match, decimal: string) => safeCodePoint(Number.parseInt(decimal, 10)))
-        .replace(/&(?:amp|#38);/giu, "&")
-        .replace(/&(?:quot|#34);/giu, "\"")
-        .replace(/&(?:apos|#39);/giu, "'")
-        .replace(/&(?:lt|#60);/giu, "<")
-        .replace(/&(?:gt|#62);/giu, ">");
+    let decoded = value;
+    for (let pass = 0; pass < 3; pass++) {
+        const next = decoded
+            .replace(/&#x([0-9a-f]+);?/giu, (_match, hex: string) => safeCodePoint(Number.parseInt(hex, 16)))
+            .replace(/&#([0-9]+);?/gu, (_match, decimal: string) => safeCodePoint(Number.parseInt(decimal, 10)))
+            .replace(/&(?:amp|#38);?/giu, "&")
+            .replace(/&(?:quot|#34);?/giu, "\"")
+            .replace(/&(?:apos|#39);?/giu, "'")
+            .replace(/&(?:lt|#60);?/giu, "<")
+            .replace(/&(?:gt|#62);?/giu, ">");
+        if (next === decoded) break;
+        decoded = next;
+    }
     return Array.from(decoded)
         .filter(character => {
             const codePoint = character.codePointAt(0) ?? 0;
@@ -55,6 +62,7 @@ export function renderReadWeaveQuestionTemplate(template: ReadWeaveQuestionTempl
 
 export function normalizeReadWeaveQuestionTemplates(value: unknown): ReadWeaveQuestionTemplate[] {
     if (!Array.isArray(value)) return DEFAULT_READWEAVE_QUESTION_TEMPLATES.map(template => ({ ...template }));
+    const builtinById = new Map(DEFAULT_READWEAVE_QUESTION_TEMPLATES.map(template => [ template.id, template ]));
     const result: ReadWeaveQuestionTemplate[] = [];
     const seen = new Set<string>();
     for (const candidate of value) {
@@ -65,13 +73,17 @@ export function normalizeReadWeaveQuestionTemplates(value: unknown): ReadWeaveQu
         const pattern = typeof input.pattern === "string" ? decodeReadWeaveText(input.pattern).slice(0, 500) : "";
         if (!id || seen.has(id) || !label || !pattern.includes("{selection}")) continue;
         seen.add(id);
+        const currentBuiltin = input.builtin === true ? builtinById.get(id) : undefined;
         result.push({
             id,
-            label,
-            pattern,
+            label: currentBuiltin?.label ?? label,
+            pattern: currentBuiltin?.pattern ?? pattern,
             uses: Number.isFinite(input.uses) ? Math.max(0, Math.floor(Number(input.uses))) : 0,
             builtin: input.builtin === true
         });
+    }
+    for (const builtin of DEFAULT_READWEAVE_QUESTION_TEMPLATES) {
+        if (!seen.has(builtin.id)) result.push({ ...builtin });
     }
     return result.length > 0 ? result.slice(0, 40) : DEFAULT_READWEAVE_QUESTION_TEMPLATES.map(template => ({ ...template }));
 }

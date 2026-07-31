@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
     buildFocusedGeneralSearchQuery,
+    buildReadWeaveSearchVariants,
     clearReadWeaveSearchCacheForTests,
     searchReadWeaveEvidence
 } from "./readweave_search.js";
@@ -48,6 +49,49 @@ describe("ReadWeave free-source search", () => {
         expect(query).toContain("official current affiliation");
         expect(query).toContain("2026");
         expect(query).not.toMatch(/^截至/u);
+    });
+
+    it("expands person, DOI and acronym searches into independent verification queries", () => {
+        expect(buildReadWeaveSearchVariants("Naifeng Jing researcher professor profile"))
+            .toEqual(expect.arrayContaining([
+                "Naifeng Jing",
+                "Naifeng Jing official faculty profile current affiliation",
+                "Naifeng Jing ORCID researcher"
+            ]));
+        expect(buildReadWeaveSearchVariants("10.1109/TEST.2015.7342405 是什么"))
+            .toEqual(expect.arrayContaining([
+                "10.1109/TEST.2015.7342405",
+                "\"10.1109/TEST.2015.7342405\" DOI publication"
+            ]));
+        expect(buildReadWeaveSearchVariants("NPU definition"))
+            .toEqual(expect.arrayContaining([
+                "NPU official definition full name",
+                "NPU acronym history official"
+            ]));
+    });
+
+    it("uses the official dblp naming FAQ instead of guessing an expansion", async () => {
+        const fetcher = vi.fn(async (input: string | URL | globalThis.Request) => {
+            const url = input.toString();
+            if (url === "https://dblp.org/faq/1474577.html") {
+                return new Response(`
+                    dblp computer science bibliography
+                    Digital Bibliography &amp; Library Project was a backronym and is no longer used
+                `, { status: 200 });
+            }
+            if (url.includes("wikipedia.org")) return Response.json({ query: { pages: {} } });
+            throw new Error(`Unexpected URL ${url}`);
+        }) as unknown as typeof fetch;
+
+        const result = await cls.init(() => searchReadWeaveEvidence({
+            query: "dblp definition",
+            kind: "term",
+            force: true
+        }, { fetcher, bypassCache: true }));
+
+        expect(result.providers).toContain("dblp official FAQ");
+        expect(result.memo).toContain("no longer used");
+        expect(result.memo).toContain("Digital Bibliography & Library Project");
     });
 
     it("checks the official DeepSeek model documentation without requiring a paid search key", async () => {
@@ -171,7 +215,7 @@ describe("ReadWeave free-source search", () => {
         expect(fetcher).not.toHaveBeenCalled();
     });
 
-    it("treats a person profile as time-sensitive and ranks a current official faculty page above stale biography text", async () => {
+    it("treats a person profile as time-sensitive and ranks a free current official faculty page above stale biography text", async () => {
         cls.init(() => {
             updateReadWeaveAiSettings({
                 baseUrl: "https://api.deepseek.com",
@@ -194,6 +238,12 @@ describe("ReadWeave free-source search", () => {
                         fullurl: "https://en.wikipedia.org/wiki/Sung_Kyu_Lim"
                     }
                 } } });
+            }
+            if (url === "https://viterbi.usc.edu/directory/faculty/Lim/Sung-Kyu") {
+                return new Response(
+                    "Sung Kyu Lim is Dean's Professor of Electrical and Computer Engineering at the University of Southern California. "
+                    + "He joined USC in Fall 2025 after serving at the Georgia Institute of Technology."
+                );
             }
             if (url.includes("api.tavily.com")) {
                 requestBodies.push(JSON.parse(String(init?.body)));
@@ -222,7 +272,7 @@ describe("ReadWeave free-source search", () => {
             query: expect.stringMatching(/Sung Kyu Lim.*official primary source/u)
         }) ]);
         expect(result.sources[0]).toMatchObject({
-            provider: "Tavily",
+            provider: "Official profile",
             url: "https://viterbi.usc.edu/directory/faculty/Lim/Sung-Kyu"
         });
         expect(result.memo).toMatch(/joined USC in Fall 2025/u);
@@ -231,6 +281,12 @@ describe("ReadWeave free-source search", () => {
     it("uses a public ORCID employment interval to distinguish a current institution from a former one at no search cost", async () => {
         const fetcher = vi.fn(async (input: string | URL | globalThis.Request) => {
             const url = input.toString();
+            if (url === "https://viterbi.usc.edu/directory/faculty/Lim/Sung-Kyu") {
+                return new Response(
+                    "Sung Kyu Lim is Dean's Professor of Electrical and Computer Engineering at the University of Southern California. "
+                    + "He joined USC in Fall 2025 after serving at the Georgia Institute of Technology."
+                );
+            }
             if (url.includes("pub.orcid.org")) {
                 return Response.json({
                     "affiliation-group": [
@@ -277,10 +333,12 @@ describe("ReadWeave free-source search", () => {
         }, { fetcher, bypassCache: true }));
 
         expect(result.searchCostCny).toBe(0);
-        expect(result.sources[0]).toMatchObject({
-            provider: "ORCID",
-            title: "Sung Kyu Lim — University of Southern California（现任）"
-        });
+        expect(result.sources).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                provider: "ORCID",
+                title: "Sung Kyu Lim — University of Southern California（现任）"
+            })
+        ]));
         expect(result.memo).toMatch(/2025-08-16 至 今/u);
         expect(result.memo).toMatch(/Georgia Institute of Technology（历史任职）/u);
     });

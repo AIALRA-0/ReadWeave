@@ -1470,13 +1470,13 @@ describe("ReadWeave final audit regressions", () => {
 
     it("treats dblp as an official lowercase identity while still expanding the selected name", () => {
         const identity = parseFormattedReadWeaveTermIdentity(
-            "dblp 计算机科学书目数据库（dblp Computer Science Bibliography）"
+            "dblp 计算机科学书目服务（dblp computer science bibliography）"
         );
-        const body = "dblp 计算机科学书目数据库（dblp Computer Science Bibliography）是一个开放的计算机科学书目信息服务；它帮助读者查找作者、论文、会议和期刊的书目记录";
+        const body = "dblp 计算机科学书目服务（dblp computer science bibliography）提供开放的计算机科学书目信息；它帮助读者查找作者、论文、会议和期刊的书目记录";
         expect(identity).toEqual({
             abbreviation: "dblp",
-            chineseName: "计算机科学书目数据库",
-            englishName: "dblp Computer Science Bibliography"
+            chineseName: "计算机科学书目服务",
+            englishName: "dblp computer science bibliography"
         });
         expect(findReadWeaveQualityIssues(body, "DBLP", {
             kind: "term",

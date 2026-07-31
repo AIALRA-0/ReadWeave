@@ -1,0 +1,10 @@
+[Unit]
+Description=Create a consistent ReadWeave recovery snapshot
+After=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/readweave/readweave.env
+ExecStart=/opt/readweave/readweave-backup.sh
+User=root
+Group=root

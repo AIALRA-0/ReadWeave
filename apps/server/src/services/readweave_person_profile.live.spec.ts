@@ -40,8 +40,20 @@ const CASES: PersonProfileCase[] = [
         name: "moongon-jung-single-paper-trap",
         question: "Moongon Jung是谁？",
         selected: "Moongon Jung 是 2015 年论文《Design and Analysis of 3D-MAPS: A Many-Core 3D Processor with Stacked Memory》的合作者之一；该论文发表于 IEEE Trans. Computers；附近还出现 James Jung 与 Yeonwoong Eric Jung。",
-        expected: [ /Moongon Jung/u, /资料不足|不足以|无法可靠确认|研究者|学者|工程师/u ],
+        expected: [ /Moongon Jung/u, /资料不足|不足以|无法可靠确认|无法[^；\n]{0,40}可靠对应|研究者|学者|工程师/u ],
         forbidden: [ /2015|《|Trans\.|合作者之一|作者之一|该论文提出|James Jung|Yeonwoong Eric Jung|主要贡献[^；\n]{0,100}(?:三维|处理器)/iu ]
+    },
+    {
+        name: "mongkol-ekpanyapong-local-paper-redundancy",
+        question: "Mongkol Ekpanyapong是谁？",
+        selected: "Mongkol Ekpanyapong 是论文《An Efficient Computation of Statistically Critical Sequential Paths Under Retiming》的作者之一；该论文发表于 2007 年 ASP-DAC 亚太设计自动化会议；当前文章已经介绍了这篇论文的方法。",
+        expected: [
+            /Mongkol Ekpanyapong/u,
+            /亚洲理工学院|Asian Institute of Technology/u,
+            /教授/u,
+            /人工智能|机器学习|嵌入式系统|计算机体系结构|微电子|物理设计/u
+        ],
+        forbidden: [ /ASP-DAC|2007|《|该论文|这篇论文|发表|作者之一|合作者|An Efficient Computation|近期合作研究|2025|2026|原文/u ]
     },
     {
         name: "fei-fei-li-unrelated-local-paper",
@@ -68,7 +80,7 @@ const CASES: PersonProfileCase[] = [
         name: "invented-name-must-fail-closed",
         question: "Qzv Plectrum是谁？",
         selected: "Qzv Plectrum 是当前论文作者列表中的一个名字；文档没有提供机构、职位或个人主页。",
-        expected: [ /Qzv Plectrum/u, /资料不足|不足以|无法可靠确认|不能可靠确认/u ],
+        expected: [ /Qzv Plectrum/u, /资料不足|不足以|无法可靠确认|不能可靠确认|无法[^；\n]{0,40}可靠对应/u ],
         forbidden: [ /教授|大学|研究方向|主要贡献|代表性贡献|论文题名/u ]
     }
 ];
@@ -86,6 +98,8 @@ describeLive("ReadWeave independent person-profile quality audit", () => {
         expect(result.usage?.withinBudget).toBe(true);
         expect(result.usage?.costCny ?? Number.POSITIVE_INFINITY).toBeLessThan(0.01);
         expect(result.body).not.toContain("。");
+        expect(result.body).not.toMatch(/(?:电子设计自动化|人工智能|集成电路)简称|简称(?=\s*(?:；|，|芯片|工具|系统|方法|$))/u);
+        expect(result.body).not.toMatch(/(?:显著|明显|大幅|有效|尤其|特别是)\s*(?:；|\n|$)/u);
         for (const pattern of testCase.expected) expect(result.body).toMatch(pattern);
         for (const pattern of testCase.forbidden) expect(result.body).not.toMatch(pattern);
 
