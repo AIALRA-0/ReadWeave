@@ -37,6 +37,12 @@ interface SearchInput {
     force?: boolean;
     localEvidenceSufficient?: boolean;
     allowPaid?: boolean;
+    /**
+     * Run one configured general-web adapter even when specialist indexes
+     * returned rows. A result count does not prove that the returned evidence
+     * covers the proposition the user actually asked about.
+     */
+    forcePaidFallback?: boolean;
 }
 
 interface CachedEvidence {
@@ -102,11 +108,43 @@ function source(
     const normalizedTitle = plainText(title, 300);
     const normalizedUrl = safeUrl(url);
     if (!normalizedTitle || !normalizedUrl) return undefined;
+    let normalizedSnippet = plainText(snippet);
+    if (/^(?:www\.)?linkedin\.com$/iu.test(new URL(normalizedUrl).hostname)) {
+        // Public profile search snippets often append the person's activity
+        // feed. Posts they liked or replied to describe other people and must
+        // never be treated as the profile owner's biography or awards.
+        normalizedSnippet = normalizedSnippet
+            .split(/(?:##\s*Activity\b|public_profile__reactions|\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,5}\s+(?:liked|replied)\b)/u)[0]
+            .split(/(?:\[\.\.\.\]|###\s*N\/A\b)/u)[0]
+            .replace(/##\s*About\b[\s\S]*?(?=##\s*(?:Experience|Education)\b)/iu, "")
+            .replace(/\b\d+[\s,]+(?:followers|connections)\b/giu, "")
+            .trim();
+
+        // Some providers flatten the public profile header to
+        // “# Person Company Location ## Experience”. Label the company field
+        // so the writer does not confuse a visible current affiliation with a
+        // hidden Experience detail section.
+        const profileName = normalizedTitle
+            .replace(/\s+[-–—]\s*.+?\s*\|\s*LinkedIn$/iu, "")
+            .replace(/\s*\|\s*LinkedIn$/iu, "")
+            .trim();
+        const escapedTitle = profileName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+        const profileHeader = normalizedSnippet.match(new RegExp(
+            `^#?\\s*${escapedTitle}\\s+(.+?)(?=\\s+##\\s*(?:Experience|Education)\\b)`,
+            "iu"
+        ))?.[1]?.trim();
+        const company = profileHeader?.split(
+            /\s+(?=(?:San Francisco Bay Area|Greater\s+[A-Z][^,]{0,50}\s+Area|[A-Z][A-Za-z .'-]+,\s*(?:CA|US|USA|United States|Canada|UK|United Kingdom))\b)/u
+        )[0]?.replace(/[#,]+$/gu, "").trim();
+        if (company && company.length <= 100 && !/^(?:N\/?A|None|-+)$/iu.test(company)) {
+            normalizedSnippet = `公开职业资料页当前机构：${company}；${normalizedSnippet}`;
+        }
+    }
     return {
         provider,
         title: normalizedTitle,
         url: normalizedUrl,
-        snippet: plainText(snippet),
+        snippet: normalizedSnippet,
         publishedAt: typeof publishedAt === "string" ? plainText(publishedAt, 80) : undefined,
         score
     };
@@ -365,20 +403,26 @@ const wikipediaSearch: SearchAdapter = async (query, _config, fetcher) => {
             pages?: Record<string, { title?: string; extract?: string; fullurl?: string }>;
         };
     }
-    const searchLanguage = /[\p{Script=Han}]/u.test(query) ? "zh" : "en";
-    const url = new URL(`https://${searchLanguage}.wikipedia.org/w/api.php`);
-    url.searchParams.set("action", "query");
-    url.searchParams.set("generator", "search");
-    url.searchParams.set("gsrsearch", query);
-    url.searchParams.set("gsrlimit", "3");
-    url.searchParams.set("prop", "extracts|info");
-    url.searchParams.set("exintro", "1");
-    url.searchParams.set("explaintext", "1");
-    url.searchParams.set("inprop", "url");
-    url.searchParams.set("format", "json");
-    const payload = await fetchJson<Payload>(fetcher, url.toString());
-    return Object.values(payload.query?.pages ?? {}).flatMap((item, index) => {
-        const value = source("Wikipedia", item.title, item.fullurl, item.extract, undefined, 62 - index);
+    const hasHan = /[\p{Script=Han}]/u.test(query);
+    const latinAnchor = query.match(/\b[A-Za-z][A-Za-z0-9+._/-]{1,40}\b/u)?.[0];
+    const searches = hasHan && latinAnchor
+        ? [ { language: "zh", term: query }, { language: "en", term: latinAnchor } ]
+        : [ { language: hasHan ? "zh" : "en", term: query } ];
+    const payloads = await Promise.all(searches.map(async ({ language, term }) => {
+        const url = new URL(`https://${language}.wikipedia.org/w/api.php`);
+        url.searchParams.set("action", "query");
+        url.searchParams.set("generator", "search");
+        url.searchParams.set("gsrsearch", term);
+        url.searchParams.set("gsrlimit", "3");
+        url.searchParams.set("prop", "extracts|info");
+        url.searchParams.set("exintro", "1");
+        url.searchParams.set("explaintext", "1");
+        url.searchParams.set("inprop", "url");
+        url.searchParams.set("format", "json");
+        return await fetchJson<Payload>(fetcher, url.toString());
+    }));
+    return payloads.flatMap(payload => Object.values(payload.query?.pages ?? {})).flatMap((item, index) => {
+        const value = source("Wikipedia", item.title, item.fullurl, item.extract, undefined, 64 - index);
         return value ? [ value ] : [];
     });
 };
@@ -394,8 +438,16 @@ const dblpOfficialSearch: SearchAdapter = async (query, _config, fetcher) => {
         signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS)
     });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
-    const text = plainText(await response.text(), 3_000);
-    if (!/dblp computer science bibliography/iu.test(text)) return [];
+    const html = await response.text();
+    // The official page contains a large JSON-LD header. Extract the FAQ
+    // paragraphs themselves so the naming statement cannot be truncated by
+    // unrelated navigation, styles or structured metadata.
+    const paragraphs = Array.from(html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/giu), match => plainText(match[1], 1_500));
+    const text = paragraphs
+        .filter(paragraph => /(?:initially|backronym|proper name|lost its meaning|dblp computer science bibliography)/iu.test(paragraph))
+        .join(" ")
+        .slice(0, 3_000);
+    if (!/dblp computer science bibliography/iu.test(text) || !/lost its meaning/iu.test(text)) return [];
     const value = source(
         "dblp official FAQ",
         "What is the meaning of the acronym dblp?",
@@ -404,6 +456,29 @@ const dblpOfficialSearch: SearchAdapter = async (query, _config, fetcher) => {
         undefined,
         125
     );
+    return value ? [ value ] : [];
+};
+
+const orcidOfficialDefinitionSearch: SearchAdapter = async (query, _config, fetcher) => {
+    if (!/\bORCID\b/iu.test(query)
+        || !/(?:是什么|全称|含义|标识符|identifier|stands for|meaning)/iu.test(query)) return [];
+    const url = "https://info.orcid.org/what-is-orcid/";
+    const response = await fetcher(url, {
+        headers: {
+            "Accept": "text/html,application/xhtml+xml",
+            "User-Agent": "ReadWeave/1.0 (official identifier verification)"
+        },
+        signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS)
+    });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
+    const html = await response.text();
+    const paragraphs = Array.from(html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/giu), match => plainText(match[1], 1_500));
+    const text = paragraphs
+        .filter(paragraph => /(?:stands for Open Researcher and Contributor ID|unique, persistent identifier|ORCID iD)/iu.test(paragraph))
+        .join(" ")
+        .slice(0, 3_000);
+    if (!/Open Researcher and Contributor ID/iu.test(text) || !/persistent identifier/iu.test(text)) return [];
+    const value = source("ORCID official", "About ORCID", url, text, undefined, 125);
     return value ? [ value ] : [];
 };
 
@@ -698,7 +773,10 @@ function isPersonProfileQuery(query: string): boolean {
     const normalized = plainText(query, 700);
     const hasProfileIntent = /(?:人物|学者|教授|研究员|科学家|工程师|作者|是谁|是何人|现任机构|任职|个人简介|researcher|professor|faculty|biography|profile|current affiliation)/iu.test(normalized);
     const looksLikeLatinPersonName = /\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,5}\b/u.test(normalized);
-    const looksLikeChinesePersonQuestion = /^[\p{Script=Han}·]{2,8}(?=\s|是谁|是何人|现任|任职)/u.test(normalized);
+    const chineseSubject = normalized.match(/^([\p{Script=Han}·]{2,6})(?=\s|是谁|是何人|现任|任职)/u)?.[1];
+    const looksLikeChinesePersonQuestion = !!chineseSubject
+        && !/^(?:某|该|本)/u.test(chineseSubject)
+        && !/(?:机构|大学|公司|组织|实验室|团队|部门)$/u.test(chineseSubject);
     return hasProfileIntent && (looksLikeLatinPersonName || looksLikeChinesePersonQuestion);
 }
 
@@ -741,10 +819,16 @@ export function buildFocusedGeneralSearchQuery(query: string): string {
     )
         .filter(value => !/^(?:current|latest|official|primary|source)$/iu.test(value))
         .toSorted((left, right) => right.length - left.length);
-    const primaryAnchor = latinAnchors[0];
+    const personProfile = isPersonProfileQuery(semanticQuery);
+    const personName = personProfile
+        ? semanticQuery.match(/\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,5}\b/u)?.[0]
+        : undefined;
+    const primaryAnchor = personName ? `"${personName}"` : latinAnchors[0];
 
     let intent = "";
-    if (/(?:模型名称|正式模型|可用模型|模型列表)/u.test(semanticQuery)) intent = "official current model names";
+    if (personProfile) intent = "researcher profile current affiliation";
+    else if (/(?:是什么|全称|名称含义|缩写含义|定义|what is|meaning|full name|acronym)/iu.test(semanticQuery)) intent = "official definition meaning full name";
+    else if (/(?:模型名称|正式模型|可用模型|模型列表)/u.test(semanticQuery)) intent = "official current model names";
     else if (/(?:现任机构|当前任职|现任|任职)/u.test(semanticQuery)) intent = "official current affiliation";
     else if (/(?:最新版本|当前版本|正式版本)/u.test(semanticQuery)) intent = "official latest version";
     else if (/(?:价格|定价|费用)/u.test(semanticQuery)) intent = "official current pricing";
@@ -765,15 +849,30 @@ function deduplicateAndRank(sources: ReadWeaveSearchSource[], query: string): Re
     const currentYear = new Date().getUTCFullYear();
     const freshnessSensitive = isFreshnessSensitiveQuery(query);
     const personProfile = isPersonProfileQuery(query);
+    const latinPerson = personProfile
+        ? query.match(/\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,5}\b/u)?.[0].toLocaleLowerCase()
+        : undefined;
+    const personTokens = latinPerson?.split(/\s+/u).filter(Boolean) ?? [];
     return sources
         .filter(item => item.title && item.url)
         .map(item => {
             let authority = item.score;
             const evidenceText = `${item.title}\n${item.snippet}\n${item.publishedAt ?? ""}`;
+            if (latinPerson) {
+                const normalizedEvidence = evidenceText.toLocaleLowerCase();
+                const mentionsPerson = personTokens.every(token => normalizedEvidence.includes(token));
+                const titleMentionsPerson = personTokens.every(token => item.title.toLocaleLowerCase().includes(token));
+                if (mentionsPerson) {
+                    authority += 70;
+                    if (titleMentionsPerson) authority += 20;
+                } else {
+                    authority -= 70;
+                }
+            }
             try {
                 const hostname = new URL(item.url).hostname;
                 if (/(?:doi\.org|crossref\.org|dblp\.org|openalex\.org|semanticscholar\.org|arxiv\.org|europepmc\.org|nih\.gov|\.edu|\.gov)$/iu.test(hostname)) authority += 12;
-                if (/^(?:orcid\.org|www\.orcid\.org|ieee\.org|www\.ieee\.org|usb\.org|www\.usb\.org|riscv\.org|www\.riscv\.org|nodejs\.org|www\.acm\.org|acm\.org|api-docs\.deepseek\.com)$/iu.test(hostname)) {
+                if (/^(?:orcid\.org|www\.orcid\.org|ieee\.org|www\.ieee\.org|usb\.org|www\.usb\.org|riscv\.org|www\.riscv\.org|nodejs\.org|www\.acm\.org|acm\.org|dblp\.org|www\.dblp\.org|computeexpresslink\.org|www\.computeexpresslink\.org|api-docs\.deepseek\.com)$/iu.test(hostname)) {
                     authority += 24;
                 } else if (/\.org$/iu.test(hostname)) {
                     authority += 3;
@@ -782,6 +881,7 @@ function deduplicateAndRank(sources: ReadWeaveSearchSource[], query: string): Re
                     if (/\.edu$/iu.test(hostname) && /(?:faculty|people|person|profile|directory|professor|homepage)/iu.test(item.url)) authority += 18;
                     if (/^(?:orcid\.org|www\.orcid\.org)$/iu.test(hostname)) authority += 16;
                     if (/(?:crossref|dblp|openalex|semanticscholar|arxiv|europepmc)/iu.test(item.provider)) authority -= 28;
+                    if (/(?:About\s+None|Experience\s+N\/A|Education\s+N\/A|Publications\s+N\/A){2,}/iu.test(evidenceText)) authority -= 140;
                 }
             } catch {
                 // Invalid URLs were already removed.
@@ -876,6 +976,9 @@ async function searchUncached(input: SearchInput, fetcher: FetchLike): Promise<R
         ...(/\bdblp\b/iu.test(query)
             ? [ [ "dblp official FAQ", dblpOfficialSearch ] as [string, SearchAdapter] ]
             : []),
+        ...(/\bORCID\b/iu.test(query)
+            ? [ [ "ORCID official", orcidOfficialDefinitionSearch ] as [string, SearchAdapter] ]
+            : []),
         [ "Wikipedia", wikipediaSearch ],
         ...(isPersonProfileQuery(query)
             ? [
@@ -901,11 +1004,12 @@ async function searchUncached(input: SearchInput, fetcher: FetchLike): Promise<R
         fetcher
     )));
     const warnings = free.flatMap(item => item.warning ? [ item.warning ] : []);
-    let sources = deduplicateAndRank(free.flatMap(item => item.sources), query);
+    const freeSources = free.flatMap(item => item.sources);
+    let sources = deduplicateAndRank(freeSources, query);
     let searchCostCny = 0;
 
     const needsGeneralSearch = input.allowPaid !== false
-        && (isFreshnessSensitiveQuery(query) || sources.length < 2 || config.mode === "always");
+        && (input.forcePaidFallback === true || isFreshnessSensitiveQuery(query) || sources.length < 2 || config.mode === "always");
     if (needsGeneralSearch) {
         const focusedQuery = buildFocusedGeneralSearchQuery(query);
         const paidFallbacks: Array<[string, SearchAdapter, number, boolean]> = [
@@ -919,10 +1023,17 @@ async function searchUncached(input: SearchInput, fetcher: FetchLike): Promise<R
         for (const [ name, adapter, estimatedCost, configured ] of paidFallbacks) {
             if (!configured || searchCostCny + estimatedCost > config.budgetCny) continue;
             const fallback = await runAdapter(name, adapter, focusedQuery, config, fetcher);
+            // A metered search request can be billable even when it returns no
+            // rows. Account for the request when it is sent rather than only
+            // when it succeeds, otherwise a chain of empty fallbacks can hide
+            // real cost from the per-generation budget gate.
+            searchCostCny += estimatedCost;
             if (fallback.warning) warnings.push(fallback.warning);
             if (fallback.sources.length > 0) {
-                searchCostCny += estimatedCost;
-                sources = deduplicateAndRank([ ...sources, ...fallback.sources ], query);
+                // Re-rank from raw adapter scores. Re-ranking the already ranked
+                // free rows would apply authority and entity boosts twice and
+                // could keep a stale generic result above a direct current one.
+                sources = deduplicateAndRank([ ...freeSources, ...fallback.sources ], query);
                 break;
             }
         }
@@ -954,6 +1065,7 @@ export async function searchReadWeaveEvidence(
         kind: input.kind,
         localEvidenceSufficient: !!input.localEvidenceSufficient,
         allowPaid: input.allowPaid !== false,
+        forcePaidFallback: input.forcePaidFallback === true,
         mode: config.mode,
         providers: [
             !!config.serperApiKey,

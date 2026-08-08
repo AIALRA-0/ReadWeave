@@ -51,6 +51,20 @@ describe("ReadWeave free-source search", () => {
         expect(query).not.toMatch(/^截至/u);
     });
 
+    it("turns a person lookup into a direct biography and affiliation query", () => {
+        const query = buildFocusedGeneralSearchQuery("Moongon Jung researcher");
+
+        expect(query).toMatch(/^"Moongon Jung"/u);
+        expect(query).toContain("researcher profile current affiliation");
+    });
+
+    it("focuses a definition lookup on the official meaning instead of nearby publications", () => {
+        const query = buildFocusedGeneralSearchQuery("DBLP 是什么");
+
+        expect(query).toContain("official definition meaning full name");
+        expect(query).toContain("DBLP 是什么");
+    });
+
     it("expands person, DOI and acronym searches into independent verification queries", () => {
         expect(buildReadWeaveSearchVariants("Naifeng Jing researcher professor profile"))
             .toEqual(expect.arrayContaining([
@@ -75,8 +89,11 @@ describe("ReadWeave free-source search", () => {
             const url = input.toString();
             if (url === "https://dblp.org/faq/1474577.html") {
                 return new Response(`
-                    dblp computer science bibliography
-                    Digital Bibliography &amp; Library Project was a backronym and is no longer used
+                    <html><body>
+                    <p>Initially, dblp started at the database systems and logic programming research group</p>
+                    <p>Digital Bibliography &amp; Library Project was a backronym and is no longer used</p>
+                    <p>You may now accept dblp computer science bibliography as the proper name; the initial acronym has lost its meaning</p>
+                    </body></html>
                 `, { status: 200 });
             }
             if (url.includes("wikipedia.org")) return Response.json({ query: { pages: {} } });
@@ -92,6 +109,33 @@ describe("ReadWeave free-source search", () => {
         expect(result.providers).toContain("dblp official FAQ");
         expect(result.memo).toContain("no longer used");
         expect(result.memo).toContain("Digital Bibliography & Library Project");
+    });
+
+    it("uses ORCID's own definition instead of a selected person's identifier", async () => {
+        const fetcher = vi.fn(async (input: string | URL | globalThis.Request) => {
+            const url = input.toString();
+            if (url === "https://info.orcid.org/what-is-orcid/") {
+                return new Response(`
+                    <html><body>
+                    <p>ORCID stands for Open Researcher and Contributor ID</p>
+                    <p>The ORCID iD is a unique, persistent identifier free of charge to researchers</p>
+                    </body></html>
+                `, { status: 200 });
+            }
+            if (url.includes("wikipedia.org")) return Response.json({ query: { pages: {} } });
+            throw new Error(`Unexpected URL ${url}`);
+        }) as unknown as typeof fetch;
+
+        const result = await cls.init(() => searchReadWeaveEvidence({
+            query: "ORCID identifier meaning",
+            kind: "term",
+            force: true,
+            allowPaid: false
+        }, { fetcher, bypassCache: true }));
+
+        expect(result.providers).toContain("ORCID official");
+        expect(result.memo).toContain("Open Researcher and Contributor ID");
+        expect(result.memo).toContain("unique, persistent identifier");
     });
 
     it("checks the official DeepSeek model documentation without requiring a paid search key", async () => {
@@ -271,6 +315,41 @@ describe("ReadWeave free-source search", () => {
             url: "https://viterbi.usc.edu/directory/faculty/Lim/Sung-Kyu"
         });
         expect(result.memo).toMatch(/joined USC in Fall 2025/u);
+    });
+
+    it("removes social activity from a public profile before it becomes biography evidence", async () => {
+        cls.init(() => {
+            updateReadWeaveAiSettings({
+                baseUrl: "https://api.deepseek.com",
+                model: "deepseek-v4-flash",
+                searchMode: "automatic",
+                searchBudgetCny: 0.009,
+                tavilyApiKey: "test-tavily-key"
+            });
+        });
+        const fetcher = vi.fn(async (input: string | URL | globalThis.Request) => {
+            const url = input.toString();
+            if (url.includes("wikipedia.org")) return Response.json({ query: { pages: {} } });
+            if (url.includes("api.openalex.org/authors")) return Response.json({ results: [] });
+            if (url.includes("pub.orcid.org")) return Response.json({ result: [] });
+            if (url.includes("api.tavily.com")) return Response.json({ results: [ {
+                title: "Example Researcher - Apple | LinkedIn",
+                url: "https://www.linkedin.com/in/example-researcher",
+                content: "# Example Researcher Apple San Francisco Bay Area, US ## About A research-oriented position ## Experience Apple ## Education Example University ## Activity Example Researcher liked this Other Person received the 2024 Intel Outstanding Researcher Award",
+                score: 0.9
+            } ] });
+            throw new Error(`Unexpected URL ${url}`);
+        }) as unknown as typeof fetch;
+
+        const result = await cls.init(() => searchReadWeaveEvidence({
+            query: "Example Researcher profile current affiliation",
+            kind: "question",
+            force: true
+        }, { fetcher, bypassCache: true }));
+
+        expect(result.sources[0].snippet).toContain("公开职业资料页当前机构：Apple");
+        expect(result.sources[0].snippet).toContain("Experience Apple");
+        expect(result.sources[0].snippet).not.toMatch(/Activity|Outstanding Researcher Award|research-oriented position/iu);
     });
 
     it("uses a public ORCID employment interval to distinguish a current institution from a former one at no search cost", async () => {

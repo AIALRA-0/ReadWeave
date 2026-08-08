@@ -18,6 +18,7 @@ import {
 } from "./readweave_search.js";
 import { getReadWeaveRuntimeConfig } from "./readweave_settings.js";
 import { HUMAN_READABLE_CHINESE_STYLE_CONTRACT } from "./readweave_style_contract.js";
+import { KNOWN_ENTITY_NAMING_NOTES, KNOWN_PRODUCT_CANONICAL_FORMS } from "./readweave_term_catalog.js";
 import { generateUnifiedReadWeaveAnswer } from "./readweave_unified_ai.js";
 
 interface ChatCompletionResponse {
@@ -478,6 +479,8 @@ const UNRESOLVED_TERM_DEFINITION_PATTERNS = [
     /(?:没有|缺少|尚无|不足)[^。；\n]{0,40}(?:线索|证据|标准|依据)[^。；\n]{0,50}(?:选择|确定|排除|消歧|判断)[^。；\n]{0,30}(?:义项|含义|指代|其中一个|具体对象)?/u,
     /(?:尚无证据排除|没有证据排除|缺少证据排除)[^。；\n]{0,80}(?:义项|含义|候选|可能性)/u
 ];
+/* Shared canonical term catalog is imported from readweave_term_catalog.ts. */
+/*
 const KNOWN_PRODUCT_CANONICAL_FORMS = new Map([
     [ "3D堆叠ML加速器", "三维堆叠机器学习加速器（3D-Stacked Machine Learning Accelerator）" ],
     [ "ACM Transactions on Design Automation of Electronic Systems", "计算机学会设计自动化电子系统汇刊（ACM Transactions on Design Automation of Electronic Systems）" ],
@@ -584,6 +587,7 @@ const KNOWN_ENTITY_NAMING_NOTES = new Map([
         + "不得把任何历史解释写成当前英文全称"
     ]
 ]);
+*/
 const CANONICAL_RESTATEMENT_CONNECTOR_SOURCE = String.raw`(?:即(?:是|为)?|也就是|亦即|是|就是|指(?:的是)?|表示(?:的是)?|全称(?:是|为))`;
 const NON_EXPANDABLE_PRODUCT_NAMES = new Set([ "WARP", "Hiddify", "Windows" ]);
 const NON_EXPANDABLE_ARTIFACT_EVIDENCE_PATTERN = /(?:不是|并非|不作为).{0,16}(?:缩写|可展开(?:形式|全称)?|英文全称)|(?:没有|不存在|无|未获|未能|无法)(?:可核验|公开|官方|正式|确认|已确认|得到确认|获确认|获得确认|的?)*(?:的?正式)?(?:英文)?(?:展开式|展开形式|展开全称|全称)|(?:没有|不存在|无|未获|未能|无法)[^；。！？\n]{0,40}(?:英文)?(?:展开式|展开形式|展开全称|展开|全称)|(?:缩写)?全称.{0,40}(?:未获|没有|不存在|无法|未能).{0,20}(?:确认|核验)|(?:非缩写|原名但无.{0,12}展开|方法原名|系统原名|产品原名)/u;
