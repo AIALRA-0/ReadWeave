@@ -239,12 +239,7 @@ describe("ReadWeave free-source search", () => {
                     }
                 } } });
             }
-            if (url === "https://viterbi.usc.edu/directory/faculty/Lim/Sung-Kyu") {
-                return new Response(
-                    "Sung Kyu Lim is Dean's Professor of Electrical and Computer Engineering at the University of Southern California. "
-                    + "He joined USC in Fall 2025 after serving at the Georgia Institute of Technology."
-                );
-            }
+            if (url.includes("api.openalex.org/authors")) return Response.json({ results: [] });
             if (url.includes("api.tavily.com")) {
                 requestBodies.push(JSON.parse(String(init?.body)));
                 return Response.json({ results: [
@@ -272,7 +267,7 @@ describe("ReadWeave free-source search", () => {
             query: expect.stringMatching(/Sung Kyu Lim.*official primary source/u)
         }) ]);
         expect(result.sources[0]).toMatchObject({
-            provider: "Official profile",
+            provider: "Tavily",
             url: "https://viterbi.usc.edu/directory/faculty/Lim/Sung-Kyu"
         });
         expect(result.memo).toMatch(/joined USC in Fall 2025/u);
@@ -281,12 +276,7 @@ describe("ReadWeave free-source search", () => {
     it("uses a public ORCID employment interval to distinguish a current institution from a former one at no search cost", async () => {
         const fetcher = vi.fn(async (input: string | URL | globalThis.Request) => {
             const url = input.toString();
-            if (url === "https://viterbi.usc.edu/directory/faculty/Lim/Sung-Kyu") {
-                return new Response(
-                    "Sung Kyu Lim is Dean's Professor of Electrical and Computer Engineering at the University of Southern California. "
-                    + "He joined USC in Fall 2025 after serving at the Georgia Institute of Technology."
-                );
-            }
+            if (url.includes("api.openalex.org/authors")) return Response.json({ results: [] });
             if (url.includes("pub.orcid.org")) {
                 return Response.json({
                     "affiliation-group": [

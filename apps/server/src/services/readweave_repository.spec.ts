@@ -268,7 +268,7 @@ describe("ReadWeave repository", () => {
         });
     });
 
-    it("applies a compact semantic save gate to definitions and keeps the canonical identity aligned with the body", () => {
+    it("preserves reviewed manual edits without replaying obsolete generator regex gates and keeps canonical identity aligned", () => {
         cls.init(() => {
             const article = noteService.createNewNote({
                 parentNoteId: "root",
@@ -284,32 +284,15 @@ describe("ReadWeave repository", () => {
                 calloutType: "tip" as const
             };
 
-            expect(() => saveReadWeaveEntry({
+            const manuallyReviewed = saveReadWeaveEntry({
                 ...base,
                 anchorId: "rw_shallow_definition",
                 sourceExcerpt: "Matrix",
                 title: "矩阵",
                 body: "矩阵（Matrix）是一种数学概念。",
                 termIdentity: { chineseName: "矩阵", englishName: "Matrix" }
-            })).toThrow(/定义过于简略|定义过于宽泛/);
-
-            expect(() => saveReadWeaveEntry({
-                ...base,
-                anchorId: "rw_circular_definition",
-                sourceExcerpt: "Matrix",
-                title: "矩阵",
-                body: "矩阵（Matrix）就是矩阵（Matrix）；矩阵（Matrix）是一个常见、重要且应用广泛的数学对象，但这段文字没有给出任何可区分特征。",
-                termIdentity: { chineseName: "矩阵", englishName: "Matrix" }
-            })).toThrow(/同义反复/);
-
-            expect(() => saveReadWeaveEntry({
-                ...base,
-                anchorId: "rw_mismatched_identity",
-                sourceExcerpt: "NPU",
-                title: "NPU",
-                body: "神经网络处理单元是一类面向神经网络计算的专用处理器；它通过并行乘加数据路径加速张量运算，并不等同于通用中央处理器。",
-                termIdentity: { abbreviation: "NPU", chineseName: "神经网络处理单元", englishName: "Neural Processing Unit" }
-            })).toThrow(/未使用规范术语身份/);
+            });
+            expect(manuallyReviewed.title).toBe("矩阵（Matrix）");
 
             const saved = saveReadWeaveEntry({
                 ...base,
@@ -374,7 +357,60 @@ describe("ReadWeave repository", () => {
         });
     });
 
-    it("requires and persists the evidence-plan attestation when saving a non-expandable MAVERICK method", () => {
+    it("persists evidence, claim mappings and the unified audit with the saved answer", () => {
+        cls.init(() => {
+            const article = noteService.createNewNote({
+                parentNoteId: "root",
+                title: "ReadWeave unified provenance",
+                type: "text",
+                mime: "text/html",
+                content: "<p>Evidence-backed answer</p>"
+            }).note;
+            const generatedAt = new Date().toISOString();
+            const saved = saveReadWeaveEntry({
+                articleId: article.noteId,
+                anchorId: "rw_provenance",
+                anchorType: "range",
+                sourceExcerpt: "Evidence-backed answer",
+                kind: "question",
+                title: "该结论的依据是什么？",
+                body: "该结论由公开资料直接支持",
+                calloutType: "note",
+                evidenceSources: [ {
+                    sourceId: "S1",
+                    sourceType: "external",
+                    provider: "Official",
+                    title: "Official source",
+                    url: "https://example.org/source",
+                    excerpt: "Direct evidence",
+                    accessedAt: generatedAt
+                } ],
+                claims: [ { claimId: "C1", text: "该结论由公开资料支持", sourceIds: [ "S1" ], confidence: "high" } ],
+                audit: {
+                    workflowVersion: "unified-evidence-v1",
+                    questionContract: {
+                        normalizedQuestion: "该结论的依据是什么？",
+                        objective: "说明依据",
+                        answerRequirements: [ "给出直接证据" ],
+                        exclusions: [],
+                        searchQueries: [ "direct evidence" ],
+                        requiresCurrentEvidence: true
+                    },
+                    searchQueries: [ "direct evidence" ],
+                    unresolvedClaims: [],
+                    validationIssues: [],
+                    citationsVerified: true,
+                    generatedAt
+                }
+            });
+
+            expect(saved.evidenceSources?.[0]).toMatchObject({ sourceId: "S1", title: "Official source" });
+            expect(saved.claims?.[0]).toMatchObject({ claimId: "C1", sourceIds: [ "S1" ] });
+            expect(saved.audit?.workflowVersion).toBe("unified-evidence-v1");
+        });
+    });
+
+    it("persists optional evidence-plan attestation without blocking a reviewed manual answer", () => {
         cls.init(() => {
             const article = noteService.createNewNote({
                 parentNoteId: "root",
@@ -401,7 +437,7 @@ describe("ReadWeave repository", () => {
 
             expect(saved.verifiedNonExpandableArtifact).toEqual(verifiedNonExpandableArtifact);
             expect(saved.body).toContain("MAVERICK 是一种");
-            expect(() => saveReadWeaveEntry({
+            const manuallyReviewed = saveReadWeaveEntry({
                 articleId: article.noteId,
                 anchorId: "rw_maverick_unverified",
                 anchorType: "range",
@@ -410,7 +446,8 @@ describe("ReadWeave repository", () => {
                 title,
                 body,
                 calloutType: "note"
-            })).toThrow(/缩写 MAVERICK/);
+            });
+            expect(manuallyReviewed.body).toContain("MAVERICK 是一种");
             expect(() => saveReadWeaveEntry({
                 articleId: article.noteId,
                 anchorId: "rw_maverick_wrong_subject",

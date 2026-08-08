@@ -1,5 +1,6 @@
 import {
     READWEAVE_LEGACY_SCHEMA_VERSION,
+    READWEAVE_PREVIOUS_SCHEMA_VERSION,
     READWEAVE_SCHEMA_VERSION,
     type ReadWeaveAnchorSummary,
     type ReadWeaveAnchorType,
@@ -19,9 +20,6 @@ import { becca, type BNote, note_service as noteService, NotFoundError, Validati
 import crypto from "crypto";
 
 import {
-    buildReadWeaveTaskProfile,
-    findReadWeaveQualityIssues,
-    findReadWeaveTermDefinitionSemanticIssues,
     formatReadWeaveTermIdentity,
     parseFormattedReadWeaveTermIdentity,
     validateReadWeaveTermIdentity
@@ -101,7 +99,7 @@ function parseLegacyTermTitle(title: string): ReadWeaveTermIdentity | undefined 
 function parseObject(note: BNote): ReadWeaveObject | null {
     if (!note.isContentAvailable()) return null;
     const value = note.getJsonContentSafely() as Partial<ReadWeaveObject> & { schemaVersion?: string } | null;
-    if (!value || ![ READWEAVE_SCHEMA_VERSION, READWEAVE_LEGACY_SCHEMA_VERSION ].includes(value.schemaVersion as never) || value.objectId !== note.noteId) return null;
+    if (!value || ![ READWEAVE_SCHEMA_VERSION, READWEAVE_PREVIOUS_SCHEMA_VERSION, READWEAVE_LEGACY_SCHEMA_VERSION ].includes(value.schemaVersion as never) || value.objectId !== note.noteId) return null;
     if (value.kind !== "question" && value.kind !== "term") return null;
     if (typeof value.title !== "string" || typeof value.body !== "string") return null;
     const termIdentity = value.kind === "term"
@@ -124,7 +122,7 @@ function parseObject(note: BNote): ReadWeaveObject | null {
 function parseLink(note: BNote): ReadWeaveLink | null {
     if (!note.isContentAvailable()) return null;
     const value = note.getJsonContentSafely() as Partial<ReadWeaveLink> & { schemaVersion?: string } | null;
-    if (!value || ![ READWEAVE_SCHEMA_VERSION, READWEAVE_LEGACY_SCHEMA_VERSION ].includes(value.schemaVersion as never) || value.linkId !== note.noteId) return null;
+    if (!value || ![ READWEAVE_SCHEMA_VERSION, READWEAVE_PREVIOUS_SCHEMA_VERSION, READWEAVE_LEGACY_SCHEMA_VERSION ].includes(value.schemaVersion as never) || value.linkId !== note.noteId) return null;
     if (typeof value.articleId !== "string" || typeof value.anchorId !== "string" || typeof value.objectId !== "string") return null;
     return {
         ...value,
@@ -209,6 +207,9 @@ function resolveLink(link: ReadWeaveLink): ReadWeaveResolvedEntry | null {
         calloutType: link.displayCalloutType || object.calloutType,
         termIdentity: object.termIdentity,
         verifiedNonExpandableArtifact: object.verifiedNonExpandableArtifact,
+        evidenceSources: object.evidenceSources,
+        claims: object.claims,
+        audit: object.audit,
         canonicalTitle: object.title,
         canonicalBody: object.body,
         canonicalCalloutType: object.calloutType,
@@ -258,21 +259,7 @@ export function getAnchorSummaries(articleIdValue: unknown): ReadWeaveAnchorSumm
     }).toSorted((left, right) => left.anchorId.localeCompare(right.anchorId));
 }
 
-function findTermDefinitionQualityIssues(body: string, title: string, termIdentity: ReadWeaveTermIdentity | undefined): string[] {
-    const issues = new Set<string>();
-    const canonicalIdentity = termIdentity ? formatReadWeaveTermIdentity(termIdentity) : title;
-    const normalizedDefinition = body.normalize("NFKC")
-        .replace(/^(?:定义与命名|定义|术语)[：:]\s*/u, "")
-        .trimStart();
-    if (!normalizedDefinition.startsWith(canonicalIdentity.normalize("NFKC"))) {
-        issues.add(`定义正文未使用规范术语身份“${canonicalIdentity}”`);
-    }
-
-    for (const issue of findReadWeaveTermDefinitionSemanticIssues(body, title, termIdentity)) issues.add(issue);
-    return Array.from(issues);
-}
-
-function normalizeObjectInput(request: Pick<ReadWeaveSaveRequest, "kind" | "title" | "body" | "calloutType" | "termIdentity" | "verifiedNonExpandableArtifact">) {
+function normalizeObjectInput(request: Pick<ReadWeaveSaveRequest, "kind" | "title" | "body" | "calloutType" | "termIdentity" | "verifiedNonExpandableArtifact" | "evidenceSources" | "claims" | "audit">) {
     const kind = request.kind;
     if (kind !== "question" && kind !== "term") throw new ValidationError("kind must be question or term.");
     const rawIdentity = request.termIdentity && typeof request.termIdentity === "object"
@@ -296,30 +283,29 @@ function normalizeObjectInput(request: Pick<ReadWeaveSaveRequest, "kind" | "titl
     const title = structuredTitle || requireText(request.title, "title", 1_000);
     const body = requireText(request.body, "body", 50_000);
     const verifiedNonExpandableArtifact = normalizeVerifiedNonExpandableArtifact(request.verifiedNonExpandableArtifact, title);
-    const qualityBody = body;
-    const qualityTarget = kind === "question"
-        ? title
-        : `“${title}”在当前语境中是什么，它的角色、机制和适用边界是什么？`;
-    const qualityProfile = buildReadWeaveTaskProfile(kind, title);
-    const qualityIssues = new Set(findReadWeaveQualityIssues(qualityBody, qualityTarget, {
-        kind,
-        subject: qualityProfile.subject,
-        knowledgeScope: qualityProfile.knowledgeScope,
-        termIdentity,
-        verifiedNonExpandableArtifact
-    }));
-    if (kind === "term") {
-        for (const issue of findTermDefinitionQualityIssues(body, title, termIdentity)) qualityIssues.add(issue);
-    }
-    if (qualityIssues.size > 0) {
-        throw new ValidationError(`The reviewed content does not meet ReadWeave quality requirements: ${Array.from(qualityIssues).join("; ")}`);
-    }
+    const evidenceSources = Array.isArray(request.evidenceSources) ? request.evidenceSources
+        .filter(source => source && typeof source.sourceId === "string" && typeof source.title === "string" && typeof source.excerpt === "string")
+        .filter(source => !source.url || (() => {
+            try { return [ "http:", "https:" ].includes(new URL(source.url).protocol); } catch { return false; }
+        })())
+        .slice(0, 30) : undefined;
+    const sourceIds = new Set(evidenceSources?.map(source => source.sourceId) ?? []);
+    const claims = Array.isArray(request.claims) ? request.claims
+        .filter(claim => claim && typeof claim.claimId === "string" && typeof claim.text === "string" && Array.isArray(claim.sourceIds))
+        .map(claim => ({ ...claim, sourceIds: claim.sourceIds.filter(sourceId => sourceIds.has(sourceId)).slice(0, 12) }))
+        .slice(0, 50) : undefined;
+    const provenance = request.audit ? {
+        evidenceSources,
+        claims,
+        audit: request.audit
+    } : {};
     return {
         kind,
         termIdentity,
         title,
         body,
         verifiedNonExpandableArtifact,
+        ...provenance,
         calloutType: requireCalloutType(request.calloutType, kind)
     };
 }
@@ -490,7 +476,10 @@ function updateCanonicalObject(note: BNote, object: ReadWeaveObject, request: Re
     const input = normalizeObjectInput({
         kind: object.kind,
         ...request,
-        verifiedNonExpandableArtifact: request.verifiedNonExpandableArtifact ?? object.verifiedNonExpandableArtifact
+        verifiedNonExpandableArtifact: request.verifiedNonExpandableArtifact ?? object.verifiedNonExpandableArtifact,
+        evidenceSources: request.evidenceSources ?? object.evidenceSources,
+        claims: request.claims ?? object.claims,
+        audit: request.audit ? { ...request.audit, manuallyEdited: true } : object.audit ? { ...object.audit, manuallyEdited: true } : undefined
     });
     const updated: ReadWeaveObject = {
         ...object,
@@ -525,7 +514,10 @@ export function editReadWeaveLink(linkIdValue: unknown, request: ReadWeaveEditRe
             sourceExcerpt: object.sourceExcerpt,
             calloutType: request.calloutType,
             termIdentity: request.termIdentity,
-            verifiedNonExpandableArtifact: request.verifiedNonExpandableArtifact ?? object.verifiedNonExpandableArtifact
+            verifiedNonExpandableArtifact: request.verifiedNonExpandableArtifact ?? object.verifiedNonExpandableArtifact,
+            evidenceSources: request.evidenceSources ?? object.evidenceSources,
+            claims: request.claims ?? object.claims,
+            audit: request.audit ? { ...request.audit, manuallyEdited: true } : object.audit ? { ...object.audit, manuallyEdited: true } : undefined
         }, object);
         link.objectId = variant.objectId;
         link.displayTitle = undefined;
@@ -538,7 +530,10 @@ export function editReadWeaveLink(linkIdValue: unknown, request: ReadWeaveEditRe
         const input = normalizeObjectInput({
             kind: object.kind,
             ...request,
-            verifiedNonExpandableArtifact: request.verifiedNonExpandableArtifact ?? object.verifiedNonExpandableArtifact
+            verifiedNonExpandableArtifact: request.verifiedNonExpandableArtifact ?? object.verifiedNonExpandableArtifact,
+            evidenceSources: request.evidenceSources ?? object.evidenceSources,
+            claims: request.claims ?? object.claims,
+            audit: request.audit ? { ...request.audit, manuallyEdited: true } : object.audit ? { ...object.audit, manuallyEdited: true } : undefined
         });
         link.displayTitle = input.title;
         link.displayBody = input.body;
@@ -687,7 +682,7 @@ export function exportReadWeave(articleIdValue?: unknown): ReadWeaveExport {
             name: "ReadWeave",
             version: "0.2.0",
             triliumVersion: "0.103.0",
-            workflowVersion: "context-v2-no-fallback"
+            workflowVersion: "unified-evidence-v1"
         },
         scope: articleId ? { type: "articles", articleIds: [ articleId ], includeContent: true } : { type: "all", includeContent: true },
         articles,

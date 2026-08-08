@@ -242,6 +242,65 @@
     white-space: pre-wrap;
 }
 
+.readweave-evidence-sources {
+    margin-top: 0.55rem;
+    padding-top: 0.45rem;
+    border-top: 1px solid var(--main-border-color);
+    font-size: 0.86em;
+}
+
+.readweave-evidence-sources summary {
+    color: var(--muted-text-color);
+    cursor: pointer;
+    user-select: none;
+}
+
+.readweave-evidence-sources ol {
+    margin: 0.5rem 0 0;
+    padding-left: 1.4rem;
+}
+
+.readweave-evidence-claims {
+    display: grid;
+    gap: 0.35rem;
+    margin: 0.5rem 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.readweave-evidence-claims li {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.45rem;
+    padding: 0.35rem 0.45rem;
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--accented-background-color) 72%, transparent);
+}
+
+.readweave-evidence-claims small {
+    white-space: nowrap;
+}
+
+.readweave-evidence-sources li + li {
+    margin-top: 0.55rem;
+}
+
+.readweave-evidence-sources a,
+.readweave-evidence-sources span {
+    overflow-wrap: anywhere;
+}
+
+.readweave-evidence-sources small {
+    display: block;
+    color: var(--muted-text-color);
+}
+
+.readweave-evidence-sources p {
+    margin: 0.15rem 0 0;
+    color: var(--muted-text-color);
+    line-height: 1.45;
+}
+
 .readweave-eyebrow,
 .readweave-section-title {
     color: var(--muted-text-color);

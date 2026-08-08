@@ -2786,6 +2786,7 @@
     "default_question_long": "这段内容是什么意思？",
     "saved_items": "已保存的问题与术语",
     "no_saved_items": "这个锚点还没有已保存内容。",
+    "sources": "可核验来源（{{count}}）",
     "local_display": "仅本文显示",
     "edit": "修改",
     "edit_item": "修改“{{title}}”",

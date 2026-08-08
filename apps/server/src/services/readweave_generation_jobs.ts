@@ -319,7 +319,10 @@ function persistGeneratedResult(
             body: result.body,
             calloutType,
             termIdentity,
-            verifiedNonExpandableArtifact: result.verifiedNonExpandableArtifact
+            verifiedNonExpandableArtifact: result.verifiedNonExpandableArtifact,
+            evidenceSources: result.evidenceSources,
+            claims: result.claims,
+            audit: result.audit
         }).linkId;
     }
     return saveReadWeaveEntry({
@@ -333,7 +336,10 @@ function persistGeneratedResult(
         sourceExcerpt: sourceExcerpt(request),
         calloutType,
         termIdentity,
-        verifiedNonExpandableArtifact: result.verifiedNonExpandableArtifact
+        verifiedNonExpandableArtifact: result.verifiedNonExpandableArtifact,
+        evidenceSources: result.evidenceSources,
+        claims: result.claims,
+        audit: result.audit
     }).linkId;
 }
 

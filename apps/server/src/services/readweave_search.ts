@@ -233,6 +233,51 @@ const openAlexSearch: SearchAdapter = async (query, config, fetcher) => {
     });
 };
 
+const openAlexAuthorSearch: SearchAdapter = async (query, config, fetcher) => {
+    interface Payload {
+        results?: Array<{
+            id?: string;
+            display_name?: string;
+            orcid?: string;
+            works_count?: number;
+            cited_by_count?: number;
+            last_known_institutions?: Array<{ display_name?: string; country_code?: string }>;
+            topics?: Array<{ display_name?: string; count?: number }>;
+        }>;
+    }
+    const url = new URL("https://api.openalex.org/authors");
+    url.searchParams.set("search", query);
+    url.searchParams.set("per-page", "3");
+    if (config.openAlexApiKey) url.searchParams.set("api_key", config.openAlexApiKey);
+    const payload = await fetchJson<Payload>(fetcher, url.toString());
+    return (payload.results ?? []).flatMap((item, index) => {
+        const institutions = item.last_known_institutions
+            ?.map(institution => [ institution.display_name, institution.country_code ].filter(Boolean).join(" "))
+            .filter(Boolean)
+            .join("、");
+        const topics = item.topics
+            ?.toSorted((left, right) => (right.count ?? 0) - (left.count ?? 0))
+            .slice(0, 5)
+            .map(topic => topic.display_name)
+            .filter(Boolean)
+            .join("、");
+        const value = source(
+            "OpenAlex Authors",
+            item.display_name,
+            item.orcid || item.id,
+            [
+                institutions ? `公开记录中的最近机构：${institutions}` : "",
+                topics ? `高频研究主题：${topics}` : "",
+                typeof item.works_count === "number" ? `收录成果数：${item.works_count}` : "",
+                typeof item.cited_by_count === "number" ? `被引次数：${item.cited_by_count}` : ""
+            ].filter(Boolean).join("；"),
+            undefined,
+            82 - index
+        );
+        return value ? [ value ] : [];
+    });
+};
+
 const semanticScholarSearch: SearchAdapter = async (query, config, fetcher) => {
     interface Payload {
         data?: Array<{
@@ -362,63 +407,6 @@ const dblpOfficialSearch: SearchAdapter = async (query, _config, fetcher) => {
     return value ? [ value ] : [];
 };
 
-interface OfficialPersonProfile {
-    matches: RegExp;
-    url: string;
-    title: string;
-    snippet: string;
-    publishedAt?: string;
-}
-
-const OFFICIAL_PERSON_PROFILES: OfficialPersonProfile[] = [
-    {
-        matches: /\bMongkol\s+Ekpanyapong\b/iu,
-        url: "https://ait.ac.th/2025/09/ait-faculty-members-promoted-to-full-professors/",
-        title: "AIT Faculty Members Promoted to Full Professors | Asian Institute of Technology",
-        snippet: "Mongkol Ekpanyapong is a Professor at the Asian Institute of Technology and Director of its AI Center；the AIT Board of Trustees approved his promotion from Associate Professor on 28 August 2025；his research covers artificial intelligence, machine learning, deep learning, embedded systems, computer architecture, and microelectronics",
-        publishedAt: "2025-09"
-    },
-    {
-        matches: /\bSung[- ]Kyu\s+Lim\b/iu,
-        url: "https://viterbi.usc.edu/directory/faculty/Lim/Sung-Kyu",
-        title: "Sung-Kyu Lim | USC Viterbi Faculty Directory",
-        snippet: "Sung Kyu Lim is Dean's Professor of Electrical and Computer Engineering at the University of Southern California；he joined USC in Fall 2025 after serving at the Georgia Institute of Technology；his research covers architecture, design, and electronic design automation of 2.5D and 3D integrated circuits",
-        publishedAt: "2025"
-    },
-    {
-        matches: /\bFei[- ]Fei\s+Li\b/iu,
-        url: "https://profiles.stanford.edu/fei-fei-li",
-        title: "Fei-Fei Li | Stanford Profiles",
-        snippet: "Fei-Fei Li is a Professor of Computer Science at Stanford University and a founding co-director of the Stanford Institute for Human-Centered Artificial Intelligence；her research covers artificial intelligence, computer vision, machine learning, robotics, and spatial intelligence"
-    },
-    {
-        matches: /周志华|Zhi[- ]?Hua\s+Zhou|Zhou\s+Zhi[- ]?Hua/iu,
-        url: "https://www.nju.edu.cn/info/1040/372961.htm",
-        title: "周志华 | 南京大学",
-        snippet: "周志华是南京大学教授；主要研究方向为人工智能、机器学习和数据挖掘"
-    },
-    {
-        matches: /\bAda\s+Lovelace\b/iu,
-        url: "https://www.sciencemuseum.org.uk/objects-and-stories/charles-babbages-difference-engines-and-science-museum",
-        title: "Ada Lovelace and Charles Babbage | Science Museum",
-        snippet: "Ada Lovelace was a British mathematician and writer；in 1843 she published notes explaining Charles Babbage's Analytical Engine and described an algorithm for computing Bernoulli numbers"
-    }
-];
-
-const officialPersonProfileSearch: SearchAdapter = async query => {
-    const profile = OFFICIAL_PERSON_PROFILES.find(item => item.matches.test(query));
-    if (!profile) return [];
-    const value = source(
-        "Official profile",
-        profile.title,
-        profile.url,
-        profile.snippet,
-        profile.publishedAt,
-        140
-    );
-    return value ? [ value ] : [];
-};
-
 function isDeepSeekOfficialModelQuery(query: string): boolean {
     return /\bDeepSeek\b/iu.test(query)
         && /(?:模型名称|正式模型|可用模型|模型列表|current model|available model|model name)/iu.test(query);
@@ -453,10 +441,9 @@ const deepSeekOfficialModelsSearch: SearchAdapter = async (query, _config, fetch
 
 const orcidEmploymentSearch: SearchAdapter = async (query, _config, fetcher) => {
     const explicitOrcidId = query.match(/\b\d{4}-\d{4}-\d{4}-\d{3}[\dX]\b/iu)?.[0]?.toLocaleUpperCase();
-    const expectedName = plainText(
-        query.match(/^(.+?)\s+(?:current\s+professor|researcher\s+professor\s+profile)/iu)?.[1],
-        160
-    );
+    const personCandidates = Array.from(query.matchAll(/\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,5}\b/gu), match => match[0])
+        .filter(value => !/^(?:Current|Latest|Official|Primary|Researcher|Professor|Faculty|Profile)(?:\s|$)/u.test(value));
+    const expectedName = plainText(personCandidates.toSorted((left, right) => right.length - left.length)[0], 160);
     interface OrcidDate {
         year?: { value?: string };
         month?: { value?: string };
@@ -889,12 +876,12 @@ async function searchUncached(input: SearchInput, fetcher: FetchLike): Promise<R
         ...(/\bdblp\b/iu.test(query)
             ? [ [ "dblp official FAQ", dblpOfficialSearch ] as [string, SearchAdapter] ]
             : []),
-        ...(isPersonProfileQuery(query)
-            ? [ [ "Official profile", officialPersonProfileSearch ] as [string, SearchAdapter] ]
-            : []),
         [ "Wikipedia", wikipediaSearch ],
         ...(isPersonProfileQuery(query)
-            ? [ [ "ORCID", orcidEmploymentSearch ] as [string, SearchAdapter] ]
+            ? [
+                [ "OpenAlex Authors", openAlexAuthorSearch ] as [string, SearchAdapter],
+                [ "ORCID", orcidEmploymentSearch ] as [string, SearchAdapter]
+            ]
             : []),
         ...(academic ? [
             [ "Crossref", crossrefSearch ],

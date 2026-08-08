@@ -17,6 +17,8 @@ import {
     searchReadWeaveEvidencePlan
 } from "./readweave_search.js";
 import { getReadWeaveRuntimeConfig } from "./readweave_settings.js";
+import { HUMAN_READABLE_CHINESE_STYLE_CONTRACT } from "./readweave_style_contract.js";
+import { generateUnifiedReadWeaveAnswer } from "./readweave_unified_ai.js";
 
 interface ChatCompletionResponse {
     model?: string;
@@ -339,18 +341,6 @@ const HUMAN_READABLE_CLAUSE_PREDICATE_PATTERN =
     /(?:是|为|有|由|在|向|从|比|能|可|会|将|让|使|需|要|现任|曾任|担任|任教|负责|提供|采用|使用|支持|允许|依赖|包含|包括|收录|记录|存储|管理|维护|生成|连接|组织|发布|识别|用于|通过|保持|发生|触发|切换|启用|关闭|退出|运行|工作|访问|处理|传输|映射|降低|提高|减少|增加|改善|解释|说明|表示|意味着|属于|不承担|不经过|不代表)/u;
 const UNGROUNDED_SIGNIFICANCE_OR_STABILITY_PATTERN =
     /(?:差异|结果|读数|变化)[^；\n]{0,20}(?:显著|稳定)|(?:显著|稳定)[^；\n]{0,20}(?:差异|结果|读数|变化)|显著且稳定/u;
-const HUMAN_READABLE_CHINESE_STYLE_CONTRACT = [
-    "先确定读者真正要判断或理解什么，只保留完成这个目标需要的内容",
-    "判断、限制和建议按照“具体原因或证据 → 实际后果 → 结论或行动”组织；普通陈述使用“主体 → 动作或状态 → 结果”",
-    "术语在第一次出现时自然说明它是什么；只保留当前结论需要的正式名称，后文优先使用中文指代",
-    "两个以上能够分别核对的事实、原因、对象或行动应换行展示；相关且不可拆分的事实保留在同一自然段；不得把每句话机械拆成短行",
-    "简单问题优先使用一至三段；只有用户确实要求步骤、比较或清单时才使用列表、表格或编号章节",
-    "从第一次接触该主题的读者出发；先用普通事物建立认知锚点，再解释专业机制；不得用更多未解释的术语替代原术语",
-    "问题问什么就先回答什么；不得用对象的作用替代其形态，不得用文章中的局部用途替代通用身份，也不得把机制问题改写成定义问题",
-    "删除“先说结论、简单来说、换句话说、需要注意的是、值得一提的是、可以确定的是”等套话；避免双重否定",
-    "用户没有要求技术证据、来源或书目时，不主动展开论文、会议、年份、作者、英文全称清单和原始内部名称",
-    "普通正文、标题和列表项目的结尾不使用中文句号或中文分号；行内按语义使用逗号、分号和冒号"
-] as const;
 const QUESTION_SHAPE_INTENT_PATTERN = /(?:具体|实际)?(?:是什么|属于什么|以什么|哪种)?(?:物理|逻辑|实现|存在)?形态|长什么样|以什么形式(?:存在|实现|出现)?/u;
 const QUESTION_SHAPE_ANSWER_PATTERN = /(?:(?:物理|逻辑|实现|存在|表现|呈现|承载|封装|部署|运行)(?:形态|形式|为|在)|(?:不是|并非)(?:一个|一种|一类|独立的?)?(?:芯片|设备|插槽|线缆|接口|文件|程序|进程|数据结构)|(?:属于|是一种|是一个|是一类)[^；\n]{0,50}(?:协议|接口|命令|报文|数据结构|文件|程序|进程|芯片|设备|硬件|软件))/u;
 const RUN_ON_DEFINITION_BOUNDARY_PATTERN = /(?:应用|服务|职责|用途|分析|作用|规则|义务|交流平台)适用(?:边界|范围)|(?:组件|结构|流程)在集成电路|集成度在芯片|(?:平坦化|处理|实现|方法|形成)该阶段|(?:教育|实践|传播|发展)该(?:组织|机构|团体)|等其(?:工作|出版|适用|职责)|等(?:通过|面向|用于|由|会员|成员)(?:包括|涵盖|覆盖|聚焦|服务|组成|提供|$)?|会议作为|(?:领域|分支|机构|组织|团体)其(?:会员|成员|工作|职责|出版)/u;
@@ -3976,7 +3966,7 @@ function removeRepeatedNominalReadWeaveFragments(body: string): string {
                     return !clauses.some((other, otherIndex) =>
                         otherIndex !== index
                         && other.replace(/\s+/gu, "").includes(clause.replace(/\s+/gu, "")));
-                })
+                });
             if (retained.length === clauses.length) return paragraph;
             const terminal = paragraph.trimEnd().endsWith("；") ? "；" : "";
             return `${retained.join("；")}${terminal}`;
@@ -6755,41 +6745,6 @@ function unresolvedPersonProfileBody(subject: string): string {
     ].join("\n\n");
 }
 
-const VERIFIED_PERSON_PROFILE_FALLBACKS = new Map<string, string>([
-    [
-        "Sung Kyu Lim",
-        "Sung Kyu Lim 是南加州大学电气与计算机工程教授；他的研究集中于二维半与三维集成电路的架构、物理设计及电子设计自动化；其工作关注多芯片集成与异构芯片的自动化设计、仿真和优化"
-    ],
-    [
-        "Fei-Fei Li",
-        "Fei-Fei Li 是斯坦福大学计算机科学教授；她的研究涵盖人工智能、计算机视觉、机器学习、机器人和空间智能；其工作包括建设大规模图像识别数据资源并推动计算机视觉学习方法的发展"
-    ],
-    [
-        "Ada Lovelace",
-        "Ada Lovelace 是英国数学家和作家；她在 1843 年发表的笔记中解释了查尔斯·巴贝奇的分析机，并描述了计算伯努利数的算法；这份笔记展示了如何把一组明确步骤交给通用计算装置执行"
-    ],
-    [
-        "周志华",
-        "周志华是南京大学教授；他的主要研究领域为人工智能、机器学习和数据挖掘；其工作关注如何让学习算法从数据中建立可靠模型，并研究集成学习等机器学习方法"
-    ]
-]);
-
-export function buildVerifiedPersonProfileFallback(
-    subject: string | undefined,
-    sources: ReadWeaveSearchSource[]
-): string | undefined {
-    const normalizedSubject = subject?.normalize("NFKC").trim();
-    if (!normalizedSubject) return undefined;
-    const body = VERIFIED_PERSON_PROFILE_FALLBACKS.get(normalizedSubject);
-    if (!body) return undefined;
-    const hasOfficialEvidence = sources.some(source =>
-        source.provider === "Official profile"
-        && `${source.title}\n${source.snippet}`.normalize("NFKC")
-            .toLocaleLowerCase()
-            .includes(normalizedSubject.toLocaleLowerCase()));
-    return hasOfficialEvidence ? normalizeReadWeaveGeneratedBody(body) : undefined;
-}
-
 async function generateLowCostReadWeaveAnswer(
     request: ReadWeaveGenerateRequest,
     report: (
@@ -7291,28 +7246,6 @@ async function generateLowCostReadWeaveAnswer(
             }
         }
     }
-    if (reviewIssues.length > 0 && currentPerson) {
-        const personFallback = buildVerifiedPersonProfileFallback(
-            profile.subject,
-            searchEvidence.sources
-        );
-        if (personFallback) {
-            const fallbackIssues = findReadWeaveQualityIssues(personFallback, profile.objective, {
-                kind: request.kind,
-                subject: profile.subject,
-                knowledgeScope: profile.knowledgeScope,
-                termIdentity,
-                verifiedNonExpandableArtifact,
-                entityType: evidencePlan.entityType
-            });
-            if (fallbackIssues.length === 0) {
-                report("repairing", "模型修复未收敛，已使用核验过的官方人物资料生成安全回答");
-                body = personFallback;
-                reviewIssues = [];
-                qualityRepairUsed = true;
-            }
-        }
-    }
     // A person-profile draft can pass through one or two model repair rounds
     // after the first deterministic normalization.  Re-apply the profile
     // normalizer to the actual return candidate so a repair cannot reintroduce
@@ -7538,10 +7471,13 @@ export async function generateReadWeaveAnswer(
         };
     }
 
-    const runtimeConfig = getReadWeaveRuntimeConfig();
-    if (shouldUseLowCostPipeline(runtimeConfig.baseUrl)) {
-        return generateLowCostReadWeaveAnswer(request, report);
+    if (process.env.READWEAVE_ENABLE_LEGACY_REPLAY !== "1") {
+        return generateUnifiedReadWeaveAnswer(request, onProgress);
     }
+
+    // Explicitly isolated migration replay only; production and normal tests never enter this branch.
+    const runtimeConfig = getReadWeaveRuntimeConfig();
+    if (shouldUseLowCostPipeline(runtimeConfig.baseUrl)) return generateLowCostReadWeaveAnswer(request, report);
 
     const initialProfile = buildReadWeaveTaskProfile(request.kind, request.title);
     const initialSelection = selectReadWeaveContext(initialProfile.subject || request.title, request.fragments, budgets[0], false);

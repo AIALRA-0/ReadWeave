@@ -3194,6 +3194,7 @@
     "default_question_long": "What does this passage mean?",
     "saved_items": "Saved questions and terms",
     "no_saved_items": "No saved items for this anchor.",
+    "sources": "Verifiable sources ({{count}})",
     "local_display": "Local display",
     "edit": "Edit",
     "edit_item": "Edit “{{title}}”",

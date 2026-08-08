@@ -1640,6 +1640,7 @@ export default function ReadWeavePanel() {
                                 onInput={event => changeGeneratedBody(event.currentTarget.value)}
                                 data-testid="readweave-answer"
                             />
+                            <EvidenceSources sources={displayedJob?.result?.evidenceSources} claims={displayedJob?.result?.claims} />
                             {reuseObjectId && <p class="readweave-status">{t("readweave.reusing_object")}</p>}
                             {contextDecision && <p class="readweave-status">{readWeaveCompactStatusText(t("readweave.context_used", { count: contextDecision.characterCount, budget: contextDecision.characterBudget, expansions: contextDecision.expansionLevel }))}</p>}
                             {workflow && <p class="readweave-status">{readWeaveCompactStatusText(t("readweave.workflow_used", { generations: workflow.generationAttempts, checks: workflow.validationPasses }))}</p>}
@@ -1805,6 +1806,42 @@ function HoverEntry({ entry }: { entry: ReadWeaveResolvedEntry }) {
     );
 }
 
+function EvidenceSources({
+    sources,
+    claims
+}: {
+    sources: ReadWeaveResolvedEntry["evidenceSources"];
+    claims?: ReadWeaveResolvedEntry["claims"];
+}) {
+    if (!sources?.length) return null;
+    return (
+        <details class="readweave-evidence-sources">
+            <summary>{t("readweave.sources", { count: sources.length })}</summary>
+            {!!claims?.length && (
+                <ul class="readweave-evidence-claims">
+                    {claims.map(claim => (
+                        <li key={claim.claimId}>
+                            <span>{claim.text}</span>
+                            <small>{claim.sourceIds.join(" · ")}</small>
+                        </li>
+                    ))}
+                </ul>
+            )}
+            <ol>
+                {sources.map(source => (
+                    <li key={source.sourceId}>
+                        {source.url
+                            ? <a href={source.url} target="_blank" rel="noreferrer">{source.title}</a>
+                            : <span>{source.title}</span>}
+                        <small>{source.provider}{source.publishedAt ? ` · ${source.publishedAt}` : ""}</small>
+                        <p>{source.excerpt}</p>
+                    </li>
+                ))}
+            </ol>
+        </details>
+    );
+}
+
 function SavedEntryTree({
     entries,
     busy,
@@ -1877,6 +1914,7 @@ function SavedEntry({
             </div>
             <div class="readweave-entry-detail">
                 <p>{entry.body}</p>
+                <EvidenceSources sources={entry.evidenceSources} claims={entry.claims} />
             </div>
         </article>
     );
@@ -2874,12 +2912,19 @@ function reconcileOrphanedRangeAnchors(
         const exact = exactReadWeaveExcerptRange(elements, BLOCK_SELECTOR, saved);
         if (full && exact) repairs.push({ full, exact, orphanAnchorId: anchorId, summary });
     }
-    const missingJobRanges = generationJobs.flatMap(job => {
-        if (job.anchorType !== "range" || job.jobId.startsWith("readweave-local-") || grouped.has(job.anchorId)) return [];
-        const exact = uniqueReadWeaveExcerptRange(root, BLOCK_SELECTOR, job.sourceExcerpt);
-        return exact ? [ { exact, anchorId: job.anchorId } ] : [];
+    const missingPersistedRanges = Array.from(new Map([
+        ...summaries
+            .filter(summary => summary.anchorType === "range")
+            .map(summary => [ summary.anchorId, { anchorId: summary.anchorId, excerpt: summary.excerpt } ] as const),
+        ...generationJobs
+            .filter(job => job.anchorType === "range" && !job.jobId.startsWith("readweave-local-"))
+            .map(job => [ job.anchorId, { anchorId: job.anchorId, excerpt: job.sourceExcerpt } ] as const)
+    ]).values()).flatMap(candidate => {
+        if (grouped.has(candidate.anchorId)) return [];
+        const exact = uniqueReadWeaveExcerptRange(root, BLOCK_SELECTOR, candidate.excerpt);
+        return exact ? [ { exact, anchorId: candidate.anchorId } ] : [];
     });
-    if (!repairs.length && !staleRanges.length && !missingJobRanges.length) return false;
+    if (!repairs.length && !staleRanges.length && !missingPersistedRanges.length) return false;
     const staleModelRanges = staleRanges.flatMap(stale => {
         try {
             const fullViewRange = editor.editing.view.domConverter.domRangeToView(stale.full);
@@ -2904,7 +2949,7 @@ function reconcileOrphanedRangeAnchors(
             return [];
         }
     });
-    const missingJobModelRanges = missingJobRanges.flatMap(repair => {
+    const missingPersistedModelRanges = missingPersistedRanges.flatMap(repair => {
         try {
             const exactViewRange = editor.editing.view.domConverter.domRangeToView(repair.exact);
             const exactModelRange = exactViewRange ? editor.editing.mapper.toModelRange(exactViewRange) : null;
@@ -2915,7 +2960,7 @@ function reconcileOrphanedRangeAnchors(
             return [];
         }
     });
-    if (!modelRepairs.length && !staleModelRanges.length && !missingJobModelRanges.length) return false;
+    if (!modelRepairs.length && !staleModelRanges.length && !missingPersistedModelRanges.length) return false;
     editor.model.change(writer => {
         for (const stale of staleModelRanges) {
             updateReadWeaveAnchorIdOnRange(writer, stale.fullModelRange, stale.anchorId, "remove");
@@ -2924,7 +2969,7 @@ function reconcileOrphanedRangeAnchors(
             updateReadWeaveAnchorIdOnRange(writer, repair.fullModelRange, repair.orphanAnchorId, "remove");
             updateReadWeaveAnchorIdOnRange(writer, repair.exactModelRange, repair.anchorId, "add");
         }
-        for (const repair of missingJobModelRanges) {
+        for (const repair of missingPersistedModelRanges) {
             updateReadWeaveAnchorIdOnRange(writer, repair.exactModelRange, repair.anchorId, "add");
         }
     });

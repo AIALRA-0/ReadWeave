@@ -1,4 +1,5 @@
-export const READWEAVE_SCHEMA_VERSION = "1.1" as const;
+export const READWEAVE_SCHEMA_VERSION = "1.2" as const;
+export const READWEAVE_PREVIOUS_SCHEMA_VERSION = "1.1" as const;
 export const READWEAVE_LEGACY_SCHEMA_VERSION = "1.0" as const;
 
 export type ReadWeaveObjectKind = "question" | "term";
@@ -51,6 +52,45 @@ export interface ReadWeaveUsageSummary {
     costCny: number;
     budgetCny: number;
     withinBudget: boolean;
+}
+
+export interface ReadWeaveQuestionContract {
+    normalizedQuestion: string;
+    objective: string;
+    answerRequirements: string[];
+    exclusions: string[];
+    searchQueries: string[];
+    requiresCurrentEvidence: boolean;
+}
+
+export interface ReadWeaveEvidenceSource {
+    sourceId: string;
+    sourceType: "local" | "external";
+    provider: string;
+    title: string;
+    url?: string;
+    excerpt: string;
+    publishedAt?: string;
+    accessedAt: string;
+}
+
+export interface ReadWeaveClaim {
+    claimId: string;
+    text: string;
+    sourceIds: string[];
+    confidence: "high" | "medium" | "low";
+    unresolved?: boolean;
+}
+
+export interface ReadWeaveGenerationAudit {
+    workflowVersion: "unified-evidence-v1";
+    questionContract: ReadWeaveQuestionContract;
+    searchQueries: string[];
+    unresolvedClaims: string[];
+    validationIssues: string[];
+    citationsVerified: boolean;
+    generatedAt: string;
+    manuallyEdited?: boolean;
 }
 
 export type ReadWeaveGenerationStage = "queued" | "optimizing" | "gathering-context" | "drafting" | "checking" | "repairing" | "expanding-context" | "complete" | "failed";
@@ -108,6 +148,9 @@ export interface ReadWeaveObject {
     calloutType: ReadWeaveCalloutType;
     termIdentity?: ReadWeaveTermIdentity;
     verifiedNonExpandableArtifact?: ReadWeaveVerifiedNonExpandableArtifact;
+    evidenceSources?: ReadWeaveEvidenceSource[];
+    claims?: ReadWeaveClaim[];
+    audit?: ReadWeaveGenerationAudit;
     revision: number;
     sourceArticleId: string;
     sourceAnchorId: string;
@@ -151,6 +194,9 @@ export interface ReadWeaveResolvedEntry {
     calloutType: ReadWeaveCalloutType;
     termIdentity?: ReadWeaveTermIdentity;
     verifiedNonExpandableArtifact?: ReadWeaveVerifiedNonExpandableArtifact;
+    evidenceSources?: ReadWeaveEvidenceSource[];
+    claims?: ReadWeaveClaim[];
+    audit?: ReadWeaveGenerationAudit;
     canonicalTitle: string;
     canonicalBody: string;
     canonicalCalloutType: ReadWeaveCalloutType;
@@ -209,6 +255,9 @@ export interface ReadWeaveGenerateResponse {
     optimizedTitle?: string;
     termIdentity?: ReadWeaveTermIdentity;
     verifiedNonExpandableArtifact?: ReadWeaveVerifiedNonExpandableArtifact;
+    evidenceSources?: ReadWeaveEvidenceSource[];
+    claims?: ReadWeaveClaim[];
+    audit?: ReadWeaveGenerationAudit;
     reviewIssues?: string[];
     context: ReadWeaveContextDecision;
     workflow: ReadWeaveWorkflowSummary;
@@ -237,6 +286,9 @@ export interface ReadWeaveSaveRequest {
     calloutType: ReadWeaveCalloutType;
     termIdentity?: ReadWeaveTermIdentity;
     verifiedNonExpandableArtifact?: ReadWeaveVerifiedNonExpandableArtifact;
+    evidenceSources?: ReadWeaveEvidenceSource[];
+    claims?: ReadWeaveClaim[];
+    audit?: ReadWeaveGenerationAudit;
     reuseObjectId?: string;
 }
 
@@ -247,6 +299,9 @@ export interface ReadWeaveEditRequest {
     calloutType: ReadWeaveCalloutType;
     termIdentity?: ReadWeaveTermIdentity;
     verifiedNonExpandableArtifact?: ReadWeaveVerifiedNonExpandableArtifact;
+    evidenceSources?: ReadWeaveEvidenceSource[];
+    claims?: ReadWeaveClaim[];
+    audit?: ReadWeaveGenerationAudit;
 }
 
 export interface ReadWeaveDeleteResult {

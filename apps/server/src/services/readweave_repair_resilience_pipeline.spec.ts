@@ -1,5 +1,12 @@
 import type { ReadWeaveGenerateRequest } from "@triliumnext/commons";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+
+const previousLegacyReplay = process.env.READWEAVE_ENABLE_LEGACY_REPLAY;
+process.env.READWEAVE_ENABLE_LEGACY_REPLAY = "1";
+afterAll(() => {
+    if (previousLegacyReplay === undefined) delete process.env.READWEAVE_ENABLE_LEGACY_REPLAY;
+    else process.env.READWEAVE_ENABLE_LEGACY_REPLAY = previousLegacyReplay;
+});
 
 vi.mock("./readweave_settings.js", () => ({
     getReadWeaveRuntimeConfig: () => ({

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://readweave.local/schemas/readweave-index-export-1.1.schema.json",
+  "$id": "https://readweave.local/schemas/readweave-index-export-1.2.schema.json",
   "title": "ReadWeave index export",
   "type": "object",
   "additionalProperties": false,
@@ -17,7 +17,7 @@
     "integrity"
   ],
   "properties": {
-    "schemaVersion": { "const": "1.1" },
+    "schemaVersion": { "const": "1.2" },
     "exportId": { "$ref": "#/$defs/id" },
     "exportedAt": { "type": "string", "format": "date-time" },
     "generator": { "$ref": "#/$defs/generator" },
@@ -128,7 +128,7 @@
         "updatedAt"
       ],
       "properties": {
-        "schemaVersion": { "const": "1.1" },
+        "schemaVersion": { "const": "1.2" },
         "objectId": { "$ref": "#/$defs/id" },
         "kind": { "enum": ["question", "term"] },
         "title": { "type": "string", "minLength": 1 },
@@ -136,6 +136,16 @@
         "normalizedTitle": { "type": "string" },
         "calloutType": { "$ref": "#/$defs/calloutType" },
         "termIdentity": { "$ref": "#/$defs/termIdentity" },
+        "verifiedNonExpandableArtifact": { "$ref": "#/$defs/verifiedNonExpandableArtifact" },
+        "evidenceSources": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/evidenceSource" }
+        },
+        "claims": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/claim" }
+        },
+        "audit": { "$ref": "#/$defs/generationAudit" },
         "revision": { "type": "integer", "minimum": 1 },
         "sourceArticleId": { "$ref": "#/$defs/id" },
         "sourceAnchorId": { "$ref": "#/$defs/id" },
@@ -159,12 +169,16 @@
         "updatedAt"
       ],
       "properties": {
-        "schemaVersion": { "const": "1.1" },
+        "schemaVersion": { "const": "1.2" },
         "linkId": { "$ref": "#/$defs/id" },
         "articleId": { "$ref": "#/$defs/id" },
         "anchorId": { "$ref": "#/$defs/id" },
         "anchorType": { "enum": ["paragraph", "range"] },
         "objectId": { "$ref": "#/$defs/id" },
+        "parentLinkId": { "$ref": "#/$defs/id" },
+        "rootLinkId": { "$ref": "#/$defs/id" },
+        "depth": { "type": "integer", "minimum": 0, "maximum": 5 },
+        "parentRevision": { "type": "integer", "minimum": 1 },
         "sourceExcerpt": { "type": "string" },
         "displayTitle": { "type": "string" },
         "displayBody": { "type": "string" },
@@ -183,6 +197,74 @@
         "abbreviation": { "type": "string", "minLength": 1 },
         "chineseName": { "type": "string", "minLength": 1 },
         "englishName": { "type": "string", "minLength": 1 }
+      }
+    },
+    "verifiedNonExpandableArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["originalName", "entityType"],
+      "properties": {
+        "originalName": { "type": "string", "minLength": 1 },
+        "entityType": { "enum": ["method", "system", "product"] }
+      }
+    },
+    "evidenceSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceId", "sourceType", "provider", "title", "excerpt", "accessedAt"],
+      "properties": {
+        "sourceId": { "$ref": "#/$defs/id" },
+        "sourceType": { "enum": ["local", "external"] },
+        "provider": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "format": "uri" },
+        "excerpt": { "type": "string" },
+        "publishedAt": { "type": "string" },
+        "accessedAt": { "type": "string", "format": "date-time" }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claimId", "text", "sourceIds", "confidence"],
+      "properties": {
+        "claimId": { "$ref": "#/$defs/id" },
+        "text": { "type": "string", "minLength": 1 },
+        "sourceIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "$ref": "#/$defs/id" }
+        },
+        "confidence": { "enum": ["high", "medium", "low"] },
+        "unresolved": { "type": "boolean" }
+      }
+    },
+    "questionContract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["normalizedQuestion", "objective", "answerRequirements", "exclusions", "searchQueries", "requiresCurrentEvidence"],
+      "properties": {
+        "normalizedQuestion": { "type": "string", "minLength": 1 },
+        "objective": { "type": "string", "minLength": 1 },
+        "answerRequirements": { "type": "array", "items": { "type": "string" } },
+        "exclusions": { "type": "array", "items": { "type": "string" } },
+        "searchQueries": { "type": "array", "items": { "type": "string" } },
+        "requiresCurrentEvidence": { "type": "boolean" }
+      }
+    },
+    "generationAudit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["workflowVersion", "questionContract", "searchQueries", "unresolvedClaims", "validationIssues", "citationsVerified", "generatedAt"],
+      "properties": {
+        "workflowVersion": { "const": "unified-evidence-v1" },
+        "questionContract": { "$ref": "#/$defs/questionContract" },
+        "searchQueries": { "type": "array", "items": { "type": "string" } },
+        "unresolvedClaims": { "type": "array", "items": { "type": "string" } },
+        "validationIssues": { "type": "array", "items": { "type": "string" } },
+        "citationsVerified": { "type": "boolean" },
+        "generatedAt": { "type": "string", "format": "date-time" },
+        "manuallyEdited": { "type": "boolean" }
       }
     },
     "integrity": {

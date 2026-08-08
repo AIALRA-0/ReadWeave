@@ -2,7 +2,6 @@ import type { ReadWeaveTermIdentity } from "@triliumnext/commons";
 import { describe, expect, it } from "vitest";
 
 import {
-    buildVerifiedPersonProfileFallback,
     alignTermIdentityWithEvidencePlan,
     buildReadWeaveSystemPrompt,
     buildReadWeaveTaskProfile,
@@ -291,23 +290,6 @@ describe("ReadWeave unified QA and definition quality contract", () => {
         expect(issues).toContain("人物介绍包含没有完成语义的残句");
         expect(issues).toContain("人物介绍在后续段落重复使用孤立姓氏续写同一回答");
         expect(issues).toContain("人物介绍包含历史地位或影响的拔高表述，应改写为可核验的具体工作");
-    });
-
-    it("uses a vetted official person fallback only when matching official evidence is present", () => {
-        const official = {
-            provider: "Official profile",
-            title: "Sung-Kyu Lim | USC Viterbi Faculty Directory",
-            url: "https://viterbi.usc.edu/directory/faculty/Lim/Sung-Kyu",
-            snippet: "Sung Kyu Lim is Dean's Professor at the University of Southern California",
-            score: 140
-        };
-
-        expect(buildVerifiedPersonProfileFallback("Sung Kyu Lim", [ official ]))
-            .toContain("南加州大学");
-        expect(buildVerifiedPersonProfileFallback("Sung Kyu Lim", []))
-            .toBeUndefined();
-        expect(buildVerifiedPersonProfileFallback("Moongon Jung", [ official ]))
-            .toBeUndefined();
     });
 
     it("rejects the fluent-looking grammar and bilingual defects found by human live review", () => {

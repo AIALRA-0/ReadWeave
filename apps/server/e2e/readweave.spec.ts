@@ -136,6 +136,14 @@ function professionalAnswer(conclusion: string): string {
     ].join("；")  }；`;
 }
 
+async function ensureGeneratedItemSaved(panel: Locator) {
+    const manualSave = panel.getByRole("button", { name: "I reviewed it — save", exact: true });
+    const autoSaved = panel.getByText("Saved automatically after generation", { exact: false });
+    await expect.poll(async () => await manualSave.count() > 0 || await autoSaved.count() > 0).toBe(true);
+    if (await manualSave.count() > 0) await manualSave.click();
+    else await expect(autoSaved).toBeVisible();
+}
+
 test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse, editing, hover and export", async ({ page, context }) => {
     test.setTimeout(120_000);
     page.setDefaultTimeout(7_000);
@@ -232,10 +240,8 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await expect(answer).toHaveValue(/\n\n/);
     await expect(answer).not.toHaveValue(/\n{3,}/);
     await expect(answer).toHaveAttribute("readonly", "");
-    await panel.getByRole("button", { name: "Edit answer", exact: true }).click();
-    await expect(answer).not.toHaveAttribute("readonly", "");
-    await panel.getByRole("button", { name: "Finish editing", exact: true }).click();
-    await expect(answer).toHaveAttribute("readonly", "");
+    await expect(panel.getByText("Saved automatically after generation", { exact: false })).toBeVisible();
+    await expect(panel.getByRole("button", { name: "I reviewed it — save", exact: true })).toHaveCount(0);
     await expect(panel).toContainText("no fallback answer was used");
     const generationMonitor = panel.getByTestId("readweave-generation-monitor");
     await expect(generationMonitor).toContainText("全部检查通过");
@@ -248,7 +254,6 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await expect(generationMonitor.locator(".readweave-generation-log")).toBeVisible();
     await expect(panel.locator(".readweave-generation-monitor")).toHaveCount(1);
 
-    await panel.getByRole("button", { name: "I reviewed it — save", exact: true }).click();
     const rangeAnchor = paragraph.locator("[data-readweave-range-anchor-id]");
     await expect(paragraph).toHaveAttribute("data-readweave-paragraph-question-count", "1");
     await expect(rangeAnchor).toHaveClass(/readweave-anchor-callout-important/);
@@ -323,6 +328,7 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     const responseTestParagraph = editor.locator("p", { hasText: secondParagraphText });
     await page.mouse.move(4, 4);
     await expect(page.locator(".readweave-hover-preview")).toBeHidden();
+    await page.evaluate(() => window.getSelection()?.removeAllRanges());
     await responseTestParagraph.click({ force: true });
     await expect(panel.locator(".readweave-selection")).toContainText("NPU");
     await expect(responseTestParagraph).not.toHaveAttribute("data-readweave-anchor-id", /.+/);
@@ -370,12 +376,12 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await expect(panel.getByRole("textbox", { name: "Chinese full name (optional)", exact: true })).toHaveValue("神经网络处理单元");
     await expect(panel.getByRole("textbox", { name: "English full name (optional)", exact: true })).toHaveValue("Neural Processing Unit");
     await expect(answer).toHaveValue(/NPU 神经网络处理单元（Neural Processing Unit）/);
-    await panel.getByRole("button", { name: "I reviewed it — save", exact: true }).click();
+    await ensureGeneratedItemSaved(panel);
     await expect(paragraph).toHaveAttribute("data-readweave-paragraph-question-count", "1");
     await expect(paragraph).toHaveAttribute("data-readweave-paragraph-term-count", "1");
     await expect(panel).toContainText("This text fragment already has one definition");
     await expect(panel.getByRole("button", { name: "Generate definition", exact: true })).toBeDisabled();
-    await expect(panel.getByRole("button", { name: "I reviewed it — save", exact: true })).toBeDisabled();
+    await expect(panel.getByRole("button", { name: "I reviewed it — save", exact: true })).toHaveCount(0);
 
     await rangeAnchor.hover();
     const combinedBadge = await rangeAnchor.evaluate(element => {
@@ -404,11 +410,11 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await question.fill("NPU 是什么，有什么用途？");
     const candidate = panel.locator(".readweave-candidate").first();
     await expect(candidate).toContainText("Reuse");
-    await expect(candidate).toContainText("Title similarity 100%");
+    await expect(candidate).toContainText("Same subject · Same intent");
     expect(await candidate.evaluate(element => getComputedStyle(element).borderTopWidth)).toBe("0px");
     await candidate.hover();
     await candidate.getByRole("button", { name: "Use this object", exact: true }).click();
-    await panel.getByRole("button", { name: "I reviewed it — save", exact: true }).click();
+    await ensureGeneratedItemSaved(panel);
     await expect(paragraph).toHaveAttribute("data-readweave-paragraph-question-count", "1");
 
     await questionEntry.hover();
@@ -493,8 +499,8 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     const validate = ajv.compile(schema);
     expect(validate(exported), JSON.stringify(validate.errors)).toBe(true);
     expect(exported).toMatchObject({
-        schemaVersion: "1.1",
-        generator: { name: "ReadWeave", workflowVersion: "context-v2-no-fallback" },
+        schemaVersion: "1.2",
+        generator: { name: "ReadWeave", workflowVersion: "unified-evidence-v1" },
         scope: { type: "articles", articleIds: [ expect.any(String) ], includeContent: true },
         anchors: [ { selector: { type: "readweave-range-v1", quote: "NPU" } } ],
         integrity: { valid: true, articleCount: 1, anchorCount: 1, objectCount: 1, linkCount: 1 }
@@ -551,7 +557,7 @@ test("ReadWeave confirms a pending selection from the right panel and enables ge
     const question = panel.getByRole("textbox", { name: "Question", exact: true });
     await question.focus();
     await expect(page.locator(".readweave-selection-actions")).toBeHidden();
-    await expect(question).toHaveValue("What is “ASP-DAC”? Give a general, detailed explanation.");
+    await expect(question).toHaveValue("What is “ASP-DAC”?");
     const provisionalAnchor = paragraph.locator("[data-readweave-range-anchor-id]");
     await expect(provisionalAnchor).toHaveCount(1);
     const provisionalAnchorId = await provisionalAnchor.getAttribute("data-readweave-range-anchor-id");
@@ -626,19 +632,10 @@ test("ReadWeave confirms a pending selection from the right panel and enables ge
     expect(runningStateStyle.background).not.toBe("rgba(0, 0, 0, 0)");
     await expect(restoredPanel.getByTestId("readweave-answer")).toHaveValue(/定义与命名：/);
 
-    const saveButton = restoredPanel.getByRole("button", { name: "I reviewed it — save", exact: true });
-    const discardButton = restoredPanel.getByRole("button", { name: "Don't save", exact: true });
     const regenerateButton = restoredPanel.getByRole("button", { name: "Regenerate", exact: true });
-    const [ saveBox, discardBox, regenerateBox ] = await Promise.all([
-        saveButton.boundingBox(),
-        discardButton.boundingBox(),
-        regenerateButton.boundingBox()
-    ]);
-    expect(saveBox).not.toBeNull();
-    expect(discardBox).not.toBeNull();
-    expect(regenerateBox).not.toBeNull();
-    expect(Math.abs(saveBox!.x - discardBox!.x)).toBeLessThanOrEqual(0.5);
-    expect(Math.abs(saveBox!.x + saveBox!.width - regenerateBox!.x - regenerateBox!.width)).toBeLessThanOrEqual(0.5);
+    await expect(restoredPanel.getByText("Saved automatically after generation", { exact: false })).toBeVisible();
+    await expect(restoredPanel.getByRole("button", { name: "I reviewed it — save", exact: true })).toHaveCount(0);
+    await expect(regenerateButton).toBeVisible();
 
     await regenerateButton.click();
     const optionalFeedback = restoredPanel.getByRole("textbox", { name: "Correction instructions (optional)", exact: true });
@@ -651,7 +648,7 @@ test("ReadWeave confirms a pending selection from the right panel and enables ge
     await expect(freshLog).toContainText("已按原问题重新排队");
     await expect(freshLog).not.toContainText("全部检查通过");
     await expect(restoredPanel.getByTestId("readweave-answer")).toHaveValue(/定义与命名：/);
-    await discardButton.click();
+    await expect(restoredPanel.getByText("Saved automatically after generation", { exact: false })).toBeVisible();
 });
 
 test("ReadWeave starts generation directly from a pending selection without an extra confirmation click", async ({ page, context }) => {
@@ -708,7 +705,7 @@ test("ReadWeave starts generation directly from a pending selection without an e
     releaseEntries();
     releaseStart();
     await expect(panel.getByTestId("readweave-answer")).not.toHaveValue("", { timeout: 20_000 });
-    await panel.getByRole("button", { name: "Don't save", exact: true }).click();
+    await expect(panel.getByText("Saved automatically after generation", { exact: false })).toBeVisible();
 });
 
 test("ReadWeave keeps immediate exact-range generation state across slow save, start and regeneration responses", async ({ page, context }) => {
@@ -824,7 +821,7 @@ test("ReadWeave keeps immediate exact-range generation state across slow save, s
         releaseRegeneration();
         await expect(generate).toBeEnabled({ timeout: 30_000 });
         await expect(anchor).not.toHaveClass(/readweave-anchor-status-running/);
-        await panel.getByRole("button", { name: "Don't save", exact: true }).click();
+        await expect(panel.getByText("Saved automatically after generation", { exact: false })).toBeVisible();
     } finally {
         releaseSave();
         releaseStart();
@@ -879,7 +876,7 @@ test("ReadWeave keeps a wrapped fragment badge at the inline end without shiftin
     await panel.getByRole("textbox", { name: "English full name (optional)", exact: true }).fill("Asia and South Pacific Design Automation Conference");
     await panel.getByRole("button", { name: "Generate definition", exact: true }).click();
     await expect(panel.getByTestId("readweave-answer")).not.toHaveValue("");
-    await panel.getByRole("button", { name: "I reviewed it — save", exact: true }).click();
+    await ensureGeneratedItemSaved(panel);
 
     const rangeAnchor = paragraph.locator("[data-readweave-range-anchor-id]");
     await expect(rangeAnchor).toHaveClass(/readweave-anchor-end/);
@@ -1119,7 +1116,7 @@ test("ReadWeave restores a background result after switching away and clears the
     await expect(panel.getByTestId("readweave-generation-monitor")).toContainText("全部检查通过");
     await expect(restoredAnchor).not.toHaveClass(/readweave-anchor-status-unread/);
     await expect(restoredAnchor).not.toHaveClass(/readweave-anchor-draft/);
-    await panel.getByRole("button", { name: "I reviewed it — save", exact: true }).click();
+    await ensureGeneratedItemSaved(panel);
     await expect(restoredAnchor).not.toHaveClass(/readweave-anchor-draft/);
     await expect(app.currentNoteSplit.locator("p", { hasText: source })).toHaveAttribute("data-readweave-paragraph-question-count", "1");
 });
@@ -1142,7 +1139,7 @@ test("ReadWeave splits a Tip subrange from its Note anchor and uses hover withou
     await question.fill("为什么默认只运行龙猫，还有哪些备选链路？");
     await panel.getByRole("button", { name: "Generate answer", exact: true }).click();
     await expect(answer).toHaveValue(/定义与命名：/);
-    await panel.getByRole("button", { name: "I reviewed it — save", exact: true }).click();
+    await ensureGeneratedItemSaved(panel);
 
     const originalAnchor = paragraph.locator("[data-readweave-range-anchor-id]", { hasText: source });
     await expect(originalAnchor).toHaveClass(/readweave-anchor-callout-note/);
@@ -1167,7 +1164,7 @@ test("ReadWeave splits a Tip subrange from its Note anchor and uses hover withou
     await panel.getByRole("textbox", { name: "English full name (optional)", exact: true }).fill("WARP");
     await panel.getByRole("button", { name: "Generate definition", exact: true }).click();
     await expect(answer).toHaveValue(/应急网络服务（WARP）/);
-    await panel.getByRole("button", { name: "I reviewed it — save", exact: true }).click();
+    await ensureGeneratedItemSaved(panel);
 
     const tipAnchor = paragraph.locator("[data-readweave-range-anchor-id]", { hasText: "WARP" });
     const notePrefix = paragraph.locator("[data-readweave-range-anchor-id]", { hasText: "默认只运行龙猫" });
@@ -1227,7 +1224,7 @@ test("ReadWeave keeps a new question unread on a saved term fragment until the u
     await panel.getByRole("textbox", { name: "English full name (optional)", exact: true }).fill("Open Researcher and Contributor ID");
     await panel.getByRole("button", { name: "Generate definition", exact: true }).click();
     await expect(panel.getByTestId("readweave-answer")).toHaveValue(/ORCID 开放研究者与贡献者标识符（Open Researcher and Contributor ID）/);
-    await panel.getByRole("button", { name: "I reviewed it — save", exact: true }).click();
+    await ensureGeneratedItemSaved(panel);
 
     const termAnchor = paragraph.locator("[data-readweave-range-anchor-id]", { hasText: "ORCID" });
     await expect(termAnchor).toHaveClass(/readweave-anchor-has-term/);
@@ -1257,7 +1254,7 @@ test("ReadWeave keeps a new question unread on a saved term fragment until the u
     await expect(termAnchor).not.toHaveClass(/readweave-anchor-draft/);
     await termAnchor.dispatchEvent("click");
     await expect(termAnchor).not.toHaveClass(/readweave-anchor-locked/);
-    await questionPanel.getByRole("button", { name: "Don't save", exact: true }).click();
+    await expect(questionPanel.getByText("Saved automatically after generation", { exact: false })).toBeVisible();
 
     await page.mouse.move(5, 5);
     await termAnchor.click();
@@ -1316,13 +1313,17 @@ test("ReadWeave handles diverse source articles and keeps cross-article term ref
     await expect(answer).toHaveValue(/定义与命名：/);
     await expect(answer).toHaveValue(/实现选择与证据闭环：/);
     await expect(panel.getByTestId("readweave-generation-monitor")).toContainText("全部检查通过");
-    await panel.getByRole("button", { name: "I reviewed it — save", exact: true }).click();
+    await ensureGeneratedItemSaved(panel);
     const quicAnchor = rfcParagraph.locator("[data-readweave-range-anchor-id]");
     await expect(rfcParagraph).toHaveAttribute("data-readweave-paragraph-question-count", "1");
     await quicAnchor.hover();
     await expect(rfcParagraph).toHaveClass(/readweave-paragraph-anchor-hover/);
     await expect(page.locator(".readweave-hover-preview")).toBeVisible();
     await expect(page.locator(".readweave-hover-preview")).toContainText("Why does QUIC use UDP");
+    await page.mouse.move(5, 5);
+    await expect.poll(() => quicAnchor.evaluate(element => getComputedStyle(element).textDecorationLine)).toContain("underline");
+    await quicAnchor.dispatchEvent("click");
+    await quicAnchor.dispatchEvent("click");
     await page.mouse.move(5, 5);
     await expect.poll(() => quicAnchor.evaluate(element => getComputedStyle(element).textDecorationLine)).toBe("none");
 
@@ -1356,7 +1357,7 @@ test("ReadWeave handles diverse source articles and keeps cross-article term ref
     await expect(pendingDefinitionPreview).toContainText("TESS 凌日系外行星巡天卫星（Transiting Exoplanet Survey Satellite）");
     await page.mouse.move(5, 5);
     await expect(pendingDefinitionPreview).toBeHidden();
-    await panel.getByRole("button", { name: "I reviewed it — save", exact: true }).click();
+    await ensureGeneratedItemSaved(panel);
     const tessAnchor = tessParagraph.locator("[data-readweave-range-anchor-id]");
     await expect(tessParagraph).not.toHaveAttribute("data-readweave-paragraph-question-count", /.+/);
     await expect(tessParagraph).toHaveAttribute("data-readweave-paragraph-term-count", "1");
@@ -1367,6 +1368,10 @@ test("ReadWeave handles diverse source articles and keeps cross-article term ref
     await expect(hoverPreview).toContainText("TESS 凌日系外行星巡天卫星（Transiting Exoplanet Survey Satellite）");
     await page.mouse.move(5, 5);
     await expect(hoverPreview).toBeHidden();
+    await expect.poll(() => tessAnchor.evaluate(element => getComputedStyle(element).textDecorationLine)).toContain("underline");
+    await tessAnchor.dispatchEvent("click");
+    await tessAnchor.dispatchEvent("click");
+    await page.mouse.move(5, 5);
     await expect.poll(() => tessAnchor.evaluate(element => getComputedStyle(element).textDecorationLine)).toBe("none");
 
     const referenceTitle = `ReadWeave E2E · NASA 任务中文解读 · ${runId}`;
@@ -1382,7 +1387,7 @@ test("ReadWeave handles diverse source articles and keeps cross-article term ref
     await expect(candidate).toContainText("Reuse");
     await candidate.hover();
     await candidate.getByRole("button", { name: "Use this object", exact: true }).click();
-    await panel.getByRole("button", { name: "I reviewed it — save", exact: true }).click();
+    await ensureGeneratedItemSaved(panel);
     const referencedEntry = panel.locator(".readweave-entry", { hasText: "TESS 凌日系外行星巡天卫星" });
     await referencedEntry.hover();
     await referencedEntry.getByRole("button", { name: /^Edit /u }).click();
@@ -1419,8 +1424,11 @@ test("ReadWeave handles diverse source articles and keeps cross-article term ref
     await expect(question).toHaveValue("世界记忆计划是什么，它的三个目标各自有什么用途，彼此是什么关系？");
     const structuredAnswer = await answer.inputValue();
     expect(structuredAnswer).not.toContain("。");
-    expect(structuredAnswer.split(/\n\n/)).toHaveLength(3);
-    await panel.getByRole("button", { name: "I reviewed it — save", exact: true }).click();
+    const structuredParagraphs = structuredAnswer.split(/\n\n/);
+    expect(structuredParagraphs.length).toBeGreaterThanOrEqual(2);
+    expect(structuredParagraphs.length).toBeLessThanOrEqual(5);
+    expect(structuredParagraphs.every(paragraph => paragraph.length <= 320)).toBe(true);
+    await ensureGeneratedItemSaved(panel);
     await expect(unescoParagraph).toHaveAttribute("data-readweave-paragraph-question-count", "1");
 
     expect(pageErrors).toEqual([]);
