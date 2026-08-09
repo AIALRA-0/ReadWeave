@@ -1808,6 +1808,21 @@ function GenerationMonitor({ job, pinned, onTogglePinned }: { job: ReadWeaveGene
     );
 }
 
+function normalizeReadableMathMarkup(value: string): string {
+    return value.split(/(\$\$[\s\S]*?\$\$|\$(?!\$)[^$\n]+?\$)/u).map((part, index) => {
+        if (index % 2 === 1) return part;
+        return part
+            .replace(
+                /(?<![\p{L}\p{N}$])(\d+(?:\.\d+)?)\s*[×x]\s*10\s*\^\s*([+-]?\d+)(?![\p{L}\p{N}])/gu,
+                (_match, coefficient: string, exponent: string) => `$${coefficient} \\times 10^{${exponent}}$`
+            )
+            .replace(
+                /(?<![\p{L}\p{N}$])10\s*\^\s*([+-]?\d+)(?![\p{L}\p{N}])/gu,
+                (_match, exponent: string) => `$10^{${exponent}}$`
+            );
+    }).join("");
+}
+
 function ReadableBody({
     body,
     className,
@@ -1822,11 +1837,12 @@ function ReadableBody({
     testId?: string;
 }) {
     const contentRef = useRef<HTMLDivElement>(null);
-    const paragraphs = body.split(/\n{2,}/u).map(paragraph => paragraph.trim()).filter(Boolean);
+    const displayBody = normalizeReadableMathMarkup(body);
+    const paragraphs = displayBody.split(/\n{2,}/u).map(paragraph => paragraph.trim()).filter(Boolean);
 
     useLayoutEffect(() => {
         const container = contentRef.current;
-        if (!container || !/(?:\$\$[\s\S]+?\$\$|\$(?!\$)[^$\n]+?\$)/u.test(body)) return;
+        if (!container || !/(?:\$\$[\s\S]+?\$\$|\$(?!\$)[^$\n]+?\$)/u.test(displayBody)) return;
 
         let cancelled = false;
         void import("../../services/math.js").then(({ renderMathInElement }) => {
@@ -1844,11 +1860,11 @@ function ReadableBody({
         return () => {
             cancelled = true;
         };
-    }, [ body ]);
+    }, [ displayBody ]);
 
     return (
         <div
-            key={body}
+            key={displayBody}
             ref={contentRef}
             id={id}
             class={`readweave-readable-body ${className}`}
