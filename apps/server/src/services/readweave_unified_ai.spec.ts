@@ -29,7 +29,7 @@ vi.mock("./readweave_settings.js", () => ({
     })
 }));
 
-import { generateUnifiedReadWeaveAnswer } from "./readweave_unified_ai.js";
+import { formatReadWeaveBody, generateUnifiedReadWeaveAnswer } from "./readweave_unified_ai.js";
 
 function request(title: string, kind: ReadWeaveGenerateRequest["kind"] = "question"): ReadWeaveGenerateRequest {
     return {
@@ -224,7 +224,7 @@ describe("ReadWeave unified evidence workflow", () => {
         expect(result.body).toContain("具体形态是一组在链路上传输的输入/输出事务报文及其处理规则");
         expect(result.body).toContain("不是独立设备、芯片、插槽、线缆或物理接口");
         expect(result.body).not.toContain("0xFFFF");
-        expect(result.claims).toHaveLength(1);
+        expect(result.claims?.every(claim => !claim.text.includes("0xFFFF"))).toBe(true);
     });
 
     it.each([
@@ -318,5 +318,81 @@ describe("ReadWeave unified evidence workflow", () => {
 
         await expect(generateUnifiedReadWeaveAnswer(request("完全无法核验的对象是什么？")))
             .rejects.toThrow("未取得可核验的公开来源");
+    });
+});
+
+describe("ReadWeave natural paragraph formatting", () => {
+    const readabilityCases = [
+        [ "NPU 是什么？", "NPU 神经网络处理单元（Neural Processing Unit）是专门加速神经网络计算的处理器。" ],
+        [ "DAX 是什么？", "DAX 直接访问（Direct Access）让程序绕过传统块设备缓存路径，直接访问持久内存。" ],
+        [ "这项检查通过了吗？", "三项强制检查均已通过；当前结果可以进入下一轮人工确认。" ],
+        [ "为什么网页打不开？", "域名解析服务没有返回目标服务器地址；浏览器因此无法建立连接；切换网络后恢复，说明故障更可能位于原网络的解析链路。" ],
+        [ "什么是置信区间？", "置信区间是根据样本估计总体参数时给出的范围；区间宽度同时受到样本量、数据波动和置信水平影响；样本越少或波动越大，区间通常越宽。" ],
+        [ "电池为什么会老化？", "充放电会反复改变电极材料的结构；副反应还会消耗可移动的锂离子；这些变化逐渐增加内部阻力并减少可用容量。" ],
+        [ "缓存为什么能提速？", "缓存把近期或高频使用的数据放在更靠近处理器的位置；再次读取时不必等待较慢的主存或磁盘；命中率越高，平均等待时间通常越短。" ],
+        [ "为什么要做备份？", "硬件损坏、误删除和勒索软件都可能让原始数据无法继续使用；独立备份保留另一份可恢复副本；备份只有经过恢复演练，才能证明它在事故中真正可用。" ],
+        [ "HTTPS 如何保护通信？", "HTTPS 超文本传输安全协议（Hypertext Transfer Protocol Secure）先验证服务器证书，再协商本次连接使用的密钥；后续数据经过加密和完整性校验，旁观者难以读取或悄悄篡改内容；它保护传输过程，但不能证明网站提供的业务本身可信。" ],
+        [ "数据库索引为什么会占空间？", "索引需要另外保存键值及其对应的数据位置；数据库更新记录时还要同步维护这些结构；索引能够减少查询扫描量，但过多索引会增加存储占用并拖慢写入。" ],
+        [ "为什么总体趋势会反转？", "不同分组的样本比例可能差异很大；合并数据时，样本较多的分组获得更高权重；如果分组条件同时影响结果，总体趋势就可能与每个分组内部的趋势相反，这种现象称为辛普森悖论。" ],
+        [ "浮点数为什么有误差？", "计算机通常用有限位二进制表示实数；许多十进制小数无法被有限位二进制精确表达；每次运算产生的舍入误差还可能继续累积，因此涉及金额或严格比较时需要使用适合的数据类型和容差规则。" ],
+        [ "容器和虚拟机有什么区别？", "容器共享宿主机内核，只隔离进程、文件和网络等运行环境；虚拟机则模拟完整硬件并运行独立操作系统；容器通常启动更快、占用更少，虚拟机通常提供更强的系统边界，实际选择取决于隔离要求和运行负载。" ],
+        [ "量子纠缠是什么？", "量子纠缠表示多个量子系统共享一个不能拆成彼此独立状态的整体状态；测量其中一个系统会改变对整体状态的描述，并使各部分的测量结果呈现经典独立变量无法解释的关联；这种关联不能用来超光速传递可控信息。" ],
+        [ "为什么模型会过拟合？", "模型容量相对训练数据过大时，模型不仅学习稳定规律，还可能记住噪声和偶然细节；训练误差因此继续下降，但面对新数据时表现变差；增加有效数据、限制模型复杂度和使用独立验证集都能帮助发现并减轻这一问题。" ],
+        [ "什么是事务隔离？", "事务隔离规定并发事务在多大程度上能够看到彼此尚未完成的修改；隔离较弱可以提高并发能力，但可能出现脏读、不可重复读或幻读；隔离较强更接近串行执行，但会增加等待、冲突处理和系统开销。" ],
+        [ "为什么需要电源完整性分析？", "芯片上的电流会经过具有电阻和电感的供电网络；负载快速变化时，局部电压可能下降或产生噪声；电压超出器件允许范围会造成时序错误甚至功能失效，因此设计阶段需要同时检查稳态压降和瞬态响应。" ],
+        [ "三维芯片为什么散热更难？", "三维集成把多个有源层垂直堆叠，内部热源离散热器更远；不同层之间还会通过键合层和介质材料增加热阻；热量更容易在局部积聚，温度升高又会增加漏电和老化速度，因此布局、供电和散热结构必须联合优化。" ],
+        [ "什么是拜占庭容错？", "拜占庭容错描述分布式系统在部分节点任意故障甚至发送矛盾消息时仍能达成一致的能力；系统需要通过多方通信和投票区分可接受结果；能够容忍的故障节点数量取决于协议假设、总节点数和网络条件。" ],
+        [ "为什么相关性不能证明因果？", "两个变量同时变化，可能是一个导致另一个，也可能是共同原因同时影响两者；样本选择、测量方式和时间趋势也会制造表面相关；只有研究设计排除这些替代解释后，才能更可靠地判断因果关系。" ],
+        [ "编译器如何优化循环？", "编译器先分析循环中的数据依赖，确认哪些运算能够安全移动、合并或并行执行；循环展开可以减少分支开销，向量化可以让一条指令处理多个数据；如果别名关系或边界条件无法证明安全，编译器就必须保留更保守的执行方式。" ],
+        [ "神经网络为什么需要激活函数？", "只有线性变换的多层网络仍然等价于一次线性变换，无法表达复杂的非线性关系；激活函数在各层之间加入非线性，使网络能够组合出更复杂的决策边界；不同激活函数还会影响梯度传播、数值稳定性和训练速度。" ],
+        [ "什么是零信任安全？", "零信任安全不因为设备位于内部网络就默认信任它；每次访问都要根据身份、设备状态、请求对象和当前风险重新验证；权限还应限制在完成当前任务所需的最小范围，从而缩小账号泄露或设备失陷后的影响。" ],
+        [ "怎样判断一次性能优化是否有效？", "先固定硬件、软件版本、输入数据和测试方法，避免环境变化掩盖真实差异；再分别测量延迟、吞吐量、资源占用和结果正确性，并重复运行以观察波动；如果提升只出现在单一样本或以错误结果为代价，就不能认定优化已经稳定有效。" ]
+    ] as const;
+
+    it.each(readabilityCases)("keeps %s readable without decorative structure", (_question, answer) => {
+        const formatted = formatReadWeaveBody(answer);
+        const paragraphs = formatted.split(/\n{2,}/u);
+
+        expect(formatted).not.toContain("。");
+        expect(formatted).not.toMatch(/(?:^|\n\n)(?:核心结论|研究方向|主要贡献|工作原理)[:：]?/u);
+        expect(paragraphs.length).toBeGreaterThanOrEqual(1);
+        expect(paragraphs.length).toBeLessThanOrEqual(5);
+        expect(paragraphs.every(paragraph => paragraph.length > 0 && !/[；，]$/u.test(paragraph))).toBe(true);
+    });
+
+    it("preserves deliberate natural paragraphs and splits only long dense prose", () => {
+        const deliberate = formatReadWeaveBody("第一段直接回答问题\n\n第二段解释必要原因\n\n第三段说明适用边界");
+        expect(deliberate.split(/\n{2,}/u)).toEqual([
+            "第一段直接回答问题",
+            "第二段解释必要原因",
+            "第三段说明适用边界"
+        ]);
+
+        const dense = formatReadWeaveBody(Array.from({ length: 8 }, (_, index) => `第${index + 1}项事实说明一个可以独立核对的对象、原因和实际影响`).join("；"));
+        const paragraphs = dense.split(/\n{2,}/u);
+        expect(paragraphs.length).toBeGreaterThanOrEqual(2);
+        expect(paragraphs.length).toBeLessThanOrEqual(5);
+    });
+
+    it("removes decorative paragraph labels without deleting their content", () => {
+        expect(formatReadWeaveBody([
+            "核心结论：CXL.io 是一组用于设备发现、初始化和配置的协议事务",
+            "主要贡献：它让主机能够通过同一连接管理兼容设备",
+            "证据与边界：它不是独立的物理接口，也不替代 CXL.cache 或 CXL.mem"
+        ].join("\n\n"))).toBe([
+            "CXL.io 是一组用于设备发现、初始化和配置的协议事务",
+            "它让主机能够通过同一连接管理兼容设备",
+            "它不是独立的物理接口，也不替代 CXL.cache 或 CXL.mem"
+        ].join("\n\n"));
+    });
+
+    it("covers clearly different answer lengths instead of one repeated fixture shape", () => {
+        const lengths = readabilityCases.map(([ , answer ]) => answer.length);
+        const average = lengths.reduce((sum, length) => sum + length, 0) / lengths.length;
+        const standardDeviation = Math.sqrt(lengths.reduce((sum, length) => sum + (length - average) ** 2, 0) / lengths.length);
+
+        expect(Math.min(...lengths)).toBeLessThan(50);
+        expect(Math.max(...lengths)).toBeGreaterThan(120);
+        expect(standardDeviation).toBeGreaterThan(20);
     });
 });

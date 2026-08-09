@@ -1614,7 +1614,7 @@ export default function ReadWeavePanel() {
                                 {generationBusy ? t("readweave.generating") : t(kind === "question" ? "readweave.generate_answer" : "readweave.generate_definition")}
                             </button>
                             <div class="readweave-body-heading">
-                                <label for="readweave-draft-body">{t(kind === "question" ? "readweave.answer_label" : "readweave.definition_label")}</label>
+                                <span id="readweave-draft-body-label">{t(kind === "question" ? "readweave.answer_label" : "readweave.definition_label")}</span>
                                 {!!body.trim() && !currentJob?.savedLinkId && (
                                     <button
                                         type="button"
@@ -1629,17 +1629,27 @@ export default function ReadWeavePanel() {
                                     </button>
                                 )}
                             </div>
-                            <textarea
-                                id="readweave-draft-body"
-                                ref={bodyTextareaRef}
-                                rows={9}
-                                value={body}
-                                disabled={editorLocked}
-                                readOnly={!bodyEditing}
-                                class={bodyEditing ? "readweave-body-editing" : "readweave-body-readonly"}
-                                onInput={event => changeGeneratedBody(event.currentTarget.value)}
-                                data-testid="readweave-answer"
-                            />
+                            {bodyEditing || !body.trim() ? (
+                                <textarea
+                                    id="readweave-draft-body"
+                                    ref={bodyTextareaRef}
+                                    rows={9}
+                                    value={body}
+                                    disabled={editorLocked}
+                                    class="readweave-body-editing"
+                                    aria-labelledby="readweave-draft-body-label"
+                                    onInput={event => changeGeneratedBody(event.currentTarget.value)}
+                                    data-testid="readweave-answer"
+                                />
+                            ) : (
+                                <ReadableBody
+                                    id="readweave-draft-body"
+                                    body={body}
+                                    className="readweave-body-readonly"
+                                    labelledBy="readweave-draft-body-label"
+                                    testId="readweave-answer"
+                                />
+                            )}
                             <EvidenceSources sources={displayedJob?.result?.evidenceSources} claims={displayedJob?.result?.claims} />
                             {reuseObjectId && <p class="readweave-status">{t("readweave.reusing_object")}</p>}
                             {contextDecision && <p class="readweave-status">{readWeaveCompactStatusText(t("readweave.context_used", { count: contextDecision.characterCount, budget: contextDecision.characterBudget, expansions: contextDecision.expansionLevel }))}</p>}
@@ -1797,11 +1807,38 @@ function GenerationMonitor({ job, pinned, onTogglePinned }: { job: ReadWeaveGene
     );
 }
 
+function ReadableBody({
+    body,
+    className,
+    id,
+    labelledBy,
+    testId
+}: {
+    body: string;
+    className: string;
+    id?: string;
+    labelledBy?: string;
+    testId?: string;
+}) {
+    const paragraphs = body.split(/\n{2,}/u).map(paragraph => paragraph.trim()).filter(Boolean);
+    return (
+        <div
+            id={id}
+            class={`readweave-readable-body ${className}`}
+            role={labelledBy ? "region" : undefined}
+            aria-labelledby={labelledBy}
+            data-testid={testId}
+        >
+            {paragraphs.map((paragraph, index) => <p key={`${index}:${paragraph.slice(0, 24)}`}>{paragraph}</p>)}
+        </div>
+    );
+}
+
 function HoverEntry({ entry }: { entry: ReadWeaveResolvedEntry }) {
     return (
         <article class={`${entry.kind === "question" ? "readweave-hover-question" : "readweave-hover-term"} readweave-callout-${entry.calloutType}`} tabindex={0}>
             <div class="readweave-hover-title"><i class={CALLOUT_ICONS[entry.calloutType]} /><span>{entry.title}</span>{entry.kind === "question" && <i class="bx bx-chevron-down readweave-hover-chevron" />}</div>
-            <p class={entry.kind === "question" ? "readweave-hover-answer" : "readweave-hover-definition"}>{entry.body}</p>
+            <ReadableBody body={entry.body} className={entry.kind === "question" ? "readweave-hover-answer" : "readweave-hover-definition"} />
         </article>
     );
 }
@@ -1913,7 +1950,7 @@ function SavedEntry({
                 </span>
             </div>
             <div class="readweave-entry-detail">
-                <p>{entry.body}</p>
+                <ReadableBody body={entry.body} className="readweave-entry-body" />
                 <EvidenceSources sources={entry.evidenceSources} claims={entry.claims} />
             </div>
         </article>

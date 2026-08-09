@@ -235,11 +235,10 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await expect(undecoratedAnchor).toHaveClass(/readweave-anchor-draft/);
 
     await expect(question).toHaveValue("NPU 是什么，有什么用途？");
-    await expect(answer).toHaveValue(/定义与命名：NPU 神经网络处理单元（Neural Processing Unit）是用于加速神经网络计算的专用处理单元/);
-    await expect(answer).toHaveValue(/实现选择与证据闭环：/);
-    await expect(answer).toHaveValue(/\n\n/);
-    await expect(answer).not.toHaveValue(/\n{3,}/);
-    await expect(answer).toHaveAttribute("readonly", "");
+    await expect(answer).toContainText(/定义与命名：NPU 神经网络处理单元（Neural Processing Unit）是用于加速神经网络计算的专用处理单元/);
+    await expect(answer).toContainText(/实现选择与证据闭环：/);
+    await expect(answer.locator("p")).toHaveCount(2);
+    await expect(answer).toHaveAttribute("role", "region");
     await expect(panel.getByText("Saved automatically after generation", { exact: false })).toBeVisible();
     await expect(panel.getByRole("button", { name: "I reviewed it — save", exact: true })).toHaveCount(0);
     await expect(panel).toContainText("no fallback answer was used");
@@ -375,7 +374,7 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await expect(panel.getByRole("textbox", { name: "Abbreviation (optional)", exact: true })).toHaveValue("NPU");
     await expect(panel.getByRole("textbox", { name: "Chinese full name (optional)", exact: true })).toHaveValue("神经网络处理单元");
     await expect(panel.getByRole("textbox", { name: "English full name (optional)", exact: true })).toHaveValue("Neural Processing Unit");
-    await expect(answer).toHaveValue(/NPU 神经网络处理单元（Neural Processing Unit）/);
+    await expect(answer).toContainText(/NPU 神经网络处理单元（Neural Processing Unit）/);
     await ensureGeneratedItemSaved(panel);
     await expect(paragraph).toHaveAttribute("data-readweave-paragraph-question-count", "1");
     await expect(paragraph).toHaveAttribute("data-readweave-paragraph-term-count", "1");
@@ -630,7 +629,7 @@ test("ReadWeave confirms a pending selection from the right panel and enables ge
     });
     expect(runningStateStyle.borderWidth).toBe("0px");
     expect(runningStateStyle.background).not.toBe("rgba(0, 0, 0, 0)");
-    await expect(restoredPanel.getByTestId("readweave-answer")).toHaveValue(/定义与命名：/);
+    await expect(restoredPanel.getByTestId("readweave-answer")).toContainText(/定义与命名：/);
 
     const regenerateButton = restoredPanel.getByRole("button", { name: "Regenerate", exact: true });
     await expect(restoredPanel.getByText("Saved automatically after generation", { exact: false })).toBeVisible();
@@ -647,7 +646,7 @@ test("ReadWeave confirms a pending selection from the right panel and enables ge
     await expect(freshLog.locator("li")).toHaveCount(1);
     await expect(freshLog).toContainText("已按原问题重新排队");
     await expect(freshLog).not.toContainText("全部检查通过");
-    await expect(restoredPanel.getByTestId("readweave-answer")).toHaveValue(/定义与命名：/);
+    await expect(restoredPanel.getByTestId("readweave-answer")).toContainText(/定义与命名：/);
     await expect(restoredPanel.getByText("Saved automatically after generation", { exact: false })).toBeVisible();
 });
 
@@ -704,7 +703,7 @@ test("ReadWeave starts generation directly from a pending selection without an e
 
     releaseEntries();
     releaseStart();
-    await expect(panel.getByTestId("readweave-answer")).not.toHaveValue("", { timeout: 20_000 });
+    await expect(panel.getByTestId("readweave-answer")).toContainText(/\S/u, { timeout: 20_000 });
     await expect(panel.getByText("Saved automatically after generation", { exact: false })).toBeVisible();
 });
 
@@ -781,7 +780,7 @@ test("ReadWeave keeps immediate exact-range generation state across slow save, s
         await expect(generate).toHaveAttribute("aria-busy", "true");
 
         releaseStart();
-        await expect(panel.getByTestId("readweave-answer")).not.toHaveValue("", { timeout: 30_000 });
+        await expect(panel.getByTestId("readweave-answer")).toContainText(/\S/u, { timeout: 30_000 });
         await expect(generate).toBeEnabled();
         await expect(anchor).not.toHaveClass(/readweave-anchor-status-running/);
         await expect(anchor).toHaveClass(/readweave-anchor-status-unread/);
@@ -875,7 +874,7 @@ test("ReadWeave keeps a wrapped fragment badge at the inline end without shiftin
     await panel.getByRole("textbox", { name: "Chinese full name (optional)", exact: true }).fill("亚洲及南太平洋设计自动化会议");
     await panel.getByRole("textbox", { name: "English full name (optional)", exact: true }).fill("Asia and South Pacific Design Automation Conference");
     await panel.getByRole("button", { name: "Generate definition", exact: true }).click();
-    await expect(panel.getByTestId("readweave-answer")).not.toHaveValue("");
+    await expect(panel.getByTestId("readweave-answer")).toContainText(/\S/u);
     await ensureGeneratedItemSaved(panel);
 
     const rangeAnchor = paragraph.locator("[data-readweave-range-anchor-id]");
@@ -1112,7 +1111,7 @@ test("ReadWeave restores a background result after switching away and clears the
     await page.mouse.click(restoredBox!.x + restoredBox!.width / 2, restoredBox!.y + restoredBox!.height / 2);
     panel = app.sidebar.locator("#readweave-panel");
     await expect(panel.locator(".readweave-selection")).toContainText("后台任务");
-    await expect(panel.getByTestId("readweave-answer")).toHaveValue(/定义与命名：/);
+    await expect(panel.getByTestId("readweave-answer")).toContainText(/定义与命名：/);
     await expect(panel.getByTestId("readweave-generation-monitor")).toContainText("全部检查通过");
     await expect(restoredAnchor).not.toHaveClass(/readweave-anchor-status-unread/);
     await expect(restoredAnchor).not.toHaveClass(/readweave-anchor-draft/);
@@ -1138,7 +1137,7 @@ test("ReadWeave splits a Tip subrange from its Note anchor and uses hover withou
     const answer = panel.getByTestId("readweave-answer");
     await question.fill("为什么默认只运行龙猫，还有哪些备选链路？");
     await panel.getByRole("button", { name: "Generate answer", exact: true }).click();
-    await expect(answer).toHaveValue(/定义与命名：/);
+    await expect(answer).toContainText(/定义与命名：/);
     await ensureGeneratedItemSaved(panel);
 
     const originalAnchor = paragraph.locator("[data-readweave-range-anchor-id]", { hasText: source });
@@ -1163,7 +1162,7 @@ test("ReadWeave splits a Tip subrange from its Note anchor and uses hover withou
     await panel.getByRole("textbox", { name: "Chinese full name (optional)", exact: true }).fill("应急网络服务");
     await panel.getByRole("textbox", { name: "English full name (optional)", exact: true }).fill("WARP");
     await panel.getByRole("button", { name: "Generate definition", exact: true }).click();
-    await expect(answer).toHaveValue(/应急网络服务（WARP）/);
+    await expect(answer).toContainText(/应急网络服务（WARP）/);
     await ensureGeneratedItemSaved(panel);
 
     const tipAnchor = paragraph.locator("[data-readweave-range-anchor-id]", { hasText: "WARP" });
@@ -1223,7 +1222,7 @@ test("ReadWeave keeps a new question unread on a saved term fragment until the u
     await panel.getByRole("textbox", { name: "Chinese full name (optional)", exact: true }).fill("开放研究者与贡献者标识符");
     await panel.getByRole("textbox", { name: "English full name (optional)", exact: true }).fill("Open Researcher and Contributor ID");
     await panel.getByRole("button", { name: "Generate definition", exact: true }).click();
-    await expect(panel.getByTestId("readweave-answer")).toHaveValue(/ORCID 开放研究者与贡献者标识符（Open Researcher and Contributor ID）/);
+    await expect(panel.getByTestId("readweave-answer")).toContainText(/ORCID 开放研究者与贡献者标识符（Open Researcher and Contributor ID）/);
     await ensureGeneratedItemSaved(panel);
 
     const termAnchor = paragraph.locator("[data-readweave-range-anchor-id]", { hasText: "ORCID" });
@@ -1241,7 +1240,7 @@ test("ReadWeave keeps a new question unread on a saved term fragment until the u
     await questionPanel.getByRole("button", { name: "Generate answer", exact: true }).click();
     await expect(termAnchor).toHaveClass(/readweave-anchor-draft/);
     await expect(termAnchor).toHaveClass(/readweave-anchor-status-running/);
-    await expect(questionPanel.getByTestId("readweave-answer")).not.toHaveValue("");
+    await expect(questionPanel.getByTestId("readweave-answer")).toContainText(/\S/u);
     await expect(termAnchor).toHaveClass(/readweave-anchor-draft/);
     await expect(termAnchor).toHaveClass(/readweave-anchor-status-unread/);
     await expect(termAnchor).toHaveClass(/readweave-anchor-has-term/);
@@ -1310,8 +1309,8 @@ test("ReadWeave handles diverse source articles and keeps cross-article term ref
     await panel.getByTestId("readweave-optimize-question").check();
     await panel.getByRole("button", { name: "Warning", exact: true }).click();
     await panel.getByRole("button", { name: "Generate answer", exact: true }).click();
-    await expect(answer).toHaveValue(/定义与命名：/);
-    await expect(answer).toHaveValue(/实现选择与证据闭环：/);
+    await expect(answer).toContainText(/定义与命名：/);
+    await expect(answer).toContainText(/实现选择与证据闭环：/);
     await expect(panel.getByTestId("readweave-generation-monitor")).toContainText("全部检查通过");
     await ensureGeneratedItemSaved(panel);
     const quicAnchor = rfcParagraph.locator("[data-readweave-range-anchor-id]");
@@ -1347,7 +1346,7 @@ test("ReadWeave handles diverse source articles and keeps cross-article term ref
     await expect(abbreviation).toHaveValue("TESS");
     await expect(chineseName).toHaveValue("凌日系外行星巡天卫星");
     await expect(englishName).toHaveValue("Transiting Exoplanet Survey Satellite");
-    await expect(answer).toHaveValue(/TESS 凌日系外行星巡天卫星（Transiting Exoplanet Survey Satellite）/);
+    await expect(answer).toContainText(/TESS 凌日系外行星巡天卫星（Transiting Exoplanet Survey Satellite）/);
     const pendingTessAnchor = tessParagraph.locator("[data-readweave-range-anchor-id]", { hasText: "TESS" });
     await expect(pendingTessAnchor).toHaveClass(/readweave-anchor-status-unread/);
     await pendingTessAnchor.hover();

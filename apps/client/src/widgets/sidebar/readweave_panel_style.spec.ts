@@ -16,4 +16,11 @@ describe("ReadWeave generation monitor disclosure", () => {
         expect(css).toContain(".readweave-monitor-error:focus > p");
         expect(css).not.toContain(".readweave-generation-monitor.pinned .readweave-monitor-error > p");
     });
+
+    it("renders finished answers as spaced natural paragraphs instead of a read-only textarea", () => {
+        expect(css).toContain(".readweave-readable-body p + p");
+        expect(css).toContain("line-height: 1.68");
+        expect(css).toContain("background: transparent");
+        expect(css).not.toContain("textarea.readweave-body-readonly");
+    });
 });

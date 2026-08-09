@@ -553,7 +553,8 @@ function writerSystemPrompt(): string {
         "英文全称按其官方写法；不要把缩写自身塞进括号冒充英文全称，不要嵌套括号，不要把中文和英文拆碎后重组",
         "先判断字符序列是否仍是有效缩写；如果官方资料说明它已经成为专名、原缩写含义已经失效或某个展开只是弃用的逆向首字母缩略词，就明确说明这种边界，不得把历史名称或民间展开冒充现行全称",
         "绝对禁止“中文名（缩写）”格式；例如必须写“EDA 电子设计自动化（Electronic Design Automation）”“TSV 硅通孔（Through-Silicon Via）”“3D IC 三维集成电路（Three-Dimensional Integrated Circuit）”",
-        "段落只承载一个中心意思；两个以上能分别核对的事实必须换行；超过约 180 个汉字时在语义边界自然分段；一般使用 1 至 5 个短段落，不要用逗号把身份、机制、边界和例子塞成一整块，也不要为了格式制造大量标题或列表",
+        "段落只承载一个中心意思；两个以上能分别核对的事实必须换行；超过约 180 个汉字时在语义边界自然分段；一般使用 1 至 5 个自然段，不要用逗号把身份、机制、边界和例子塞成一整块",
+        "普通问答默认不使用小标题、编号或列表，不要输出‘核心结论’‘研究方向’‘主要贡献’‘工作原理’等标签；只有用户明确要求步骤、清单或逐项比较，或者三个以上项目必须分别核对时，才使用列表",
         "每一段必须增加新的理解层次；后文若只是换一种说法重复前文的定义或因果链，就删除后文，不得用同义重复增加长度",
         "正文禁止使用中文句号“。”，句内关系用逗号、冒号或分号，段落结束直接换行；英文名称内部的点号和 DOI 等标识符不受此限制",
         "凡是询问对象本身的通用信息，答案必须脱离当前文章仍然成立；先建立对象的独立身份或通用含义，再按用户所问补充必要信息，不得用所在句中的单篇论文、局部用途或测试材料代替对象本身",
@@ -641,7 +642,57 @@ function normalizeOutsideParenthesesPunctuation(value: string): string {
     }).join("");
 }
 
-function formatBody(value: unknown): string {
+function withoutParagraphEndPunctuation(value: string): string {
+    return value.trim().replace(/[；，]\s*$/u, "");
+}
+
+const DECORATIVE_PARAGRAPH_HEADING = /(?:核心结论|直接回答|简要回答|定义与命名|基本定义|研究方向|主要贡献|工作原理|适用范围|实际意义|证据与边界|实现选择与证据闭环)/u;
+
+function removeDecorativeParagraphHeadings(value: string): string {
+    return value
+        .split(/\n{2,}/u)
+        .map(paragraph => paragraph.replace(new RegExp(`^(?:#{1,6}\\s*)?${DECORATIVE_PARAGRAPH_HEADING.source}\\s*[:：]?\\s*`, "u"), ""))
+        .filter(Boolean)
+        .join("\n\n");
+}
+
+function splitNaturalParagraph(paragraph: string): string[] {
+    const cleaned = withoutParagraphEndPunctuation(paragraph);
+    if (cleaned.length <= 190) return cleaned ? [ cleaned ] : [];
+
+    let clauses = cleaned.split(/(?<=；)/u).map(item => item.trim()).filter(Boolean);
+    if (clauses.length === 1 && cleaned.length > 360) {
+        clauses = cleaned.split(/(?<=，)/u).map(item => item.trim()).filter(Boolean);
+    }
+    if (clauses.length === 1) return [ cleaned ];
+
+    const desiredCount = Math.min(5, Math.max(2, Math.ceil(cleaned.length / 170)));
+    const targetLength = Math.max(105, Math.ceil(cleaned.length / desiredCount));
+    const result: string[] = [];
+    let current = "";
+
+    for (const clause of clauses) {
+        const next = `${current}${clause}`;
+        if (current.length >= 82 && next.length > targetLength + 24) {
+            result.push(withoutParagraphEndPunctuation(current));
+            current = clause;
+        } else {
+            current = next;
+        }
+    }
+    if (current) result.push(withoutParagraphEndPunctuation(current));
+
+    // A very short final fragment reads like an accidental line wrap. Merge it
+    // back into the preceding paragraph so the output keeps a natural rhythm.
+    if (result.length > 1 && result.at(-1)!.length < 58) {
+        const tail = result.pop()!;
+        result[result.length - 1] = `${result.at(-1)}；${tail}`;
+    }
+
+    return result.filter(Boolean);
+}
+
+export function formatReadWeaveBody(value: unknown): string {
     let body = cleanText(value, 12_000)
         .replace(/。/gu, "；")
         .replace(/:(?=\S)/gu, "：")
@@ -688,24 +739,9 @@ function formatBody(value: unknown): string {
         .replace(/2\.5D\s*(?:和|与|及|、)\s*3D\s*集成电路/giu, "二维半与三维集成电路")
         .replace(/[，；]?\s*可简称为\s*[“"]?dblp[”"]?/giu, "")
         .replace(/[“”]/gu, "");
+    body = removeDecorativeParagraphHeadings(body);
     body = deduplicateBodyLines(body).replace(/(?<!\n)\n(?!\n)/gu, "；");
-    const paragraphs = body.split(/\n{2,}/u).flatMap(paragraph => {
-        if (paragraph.length <= 280) return [ paragraph ];
-        let clauses = paragraph.split(/(?<=[；])/u);
-        if (clauses.length === 1 && paragraph.length > 320) clauses = paragraph.split(/(?<=[，])/u);
-        const result: string[] = [];
-        let current = "";
-        for (const clause of clauses) {
-            if (current && current.length >= 120 && current.length + clause.length > 260) {
-                result.push(current.replace(/[；，]$/u, ""));
-                current = clause;
-            } else {
-                current += clause;
-            }
-        }
-        if (current) result.push(current.replace(/[；，]$/u, ""));
-        return result;
-    });
+    const paragraphs = body.split(/\n{2,}/u).flatMap(splitNaturalParagraph);
     body = paragraphs.filter(Boolean).join("\n\n");
     return body;
 }
@@ -866,11 +902,11 @@ function applyDeterministicContractCorrections(
     correctedBody = applyKnownTermCatalog(correctedBody);
     correctedClaims = correctedClaims.map(claim => ({
         ...claim,
-        text: formatBody(applyKnownTermCatalog(claim.text)).replace(/\n+/gu, " ")
+        text: formatReadWeaveBody(applyKnownTermCatalog(claim.text)).replace(/\n+/gu, " ")
     }));
 
     return {
-        body: formatBody(correctedBody),
+        body: formatReadWeaveBody(correctedBody),
         claims: correctedClaims,
         termIdentity: correctedIdentity
     };
@@ -918,7 +954,7 @@ function applyEvidenceReviewedKnownAnswer(
         ].join("\n\n");
     }
     if (!reviewedBody) return { body, claims };
-    const normalized = formatBody(reviewedBody);
+    const normalized = formatReadWeaveBody(reviewedBody);
     return {
         body: normalized,
         claims: normalized.split(/\n{2,}/u).map((text, index) => ({
@@ -1114,7 +1150,7 @@ export async function generateUnifiedReadWeaveAnswer(
     report("drafting", "正在按问题契约和证据清单生成回答");
     let writer = await requestJson<WriterPayload>(writerSystemPrompt(), writerInput(contract, sources, request), 2_200);
     usages.push(writer.usage);
-    let body = formatBody(writer.value.body);
+    let body = formatReadWeaveBody(writer.value.body);
     const sourceIds = new Set(sources.map(source => source.sourceId));
     const articleSpecificQuestion = /(?:本文|文章|文中|上述|这篇|该论文|当前选区|原文)/u.test(contract.normalizedQuestion);
     const evidenceScopeIssues = (candidateClaims: ReadWeaveClaim[]): string[] => {
@@ -1160,7 +1196,7 @@ export async function generateUnifiedReadWeaveAnswer(
         report("repairing", "统一审计发现问题，正在使用同一写作器重写完整答案", issues);
         writer = await requestJson<WriterPayload>(writerSystemPrompt(), writerInput(contract, sources, request, { body, issues }), 2_200);
         usages.push(writer.usage);
-        body = formatBody(writer.value.body);
+        body = formatReadWeaveBody(writer.value.body);
         claims = normalizeClaims(writer.value.claims, sourceIds);
         termIdentity = request.kind === "term" ? normalizeTermIdentity(writer.value.termIdentity) : undefined;
         ({ body, claims, termIdentity } = applyDeterministicContractCorrections(body, claims, contract, termIdentity));

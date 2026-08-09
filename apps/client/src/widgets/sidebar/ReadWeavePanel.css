@@ -242,6 +242,23 @@
     white-space: pre-wrap;
 }
 
+.readweave-readable-body {
+    min-width: 0;
+    color: var(--main-text-color);
+    font-size: 0.96rem;
+    line-height: 1.68;
+    overflow-wrap: anywhere;
+}
+
+.readweave-readable-body p {
+    margin: 0;
+    white-space: pre-wrap;
+}
+
+.readweave-readable-body p + p {
+    margin-top: 0.82em;
+}
+
 .readweave-evidence-sources {
     margin-top: 0.55rem;
     padding-top: 0.45rem;
@@ -621,9 +638,10 @@
     color: var(--main-text-color) !important;
 }
 
-.readweave-editor textarea.readweave-body-readonly {
-    background: color-mix(in srgb, var(--input-background-color) 72%, var(--accented-background-color));
-    cursor: default;
+.readweave-editor .readweave-body-readonly {
+    padding: 2px 1px 4px;
+    border: 0;
+    background: transparent;
 }
 
 .readweave-editor textarea.readweave-body-editing {
