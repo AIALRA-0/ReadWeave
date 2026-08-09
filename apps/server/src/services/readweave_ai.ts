@@ -7428,7 +7428,7 @@ export async function generateReadWeaveAnswer(
         const mockQuestionBody = joinReadWeaveAnswerSegments(segmentReadWeaveAnswer(/\bNPU\b/.test(effectiveTitle)
             ? `${[
                 "定义与命名：NPU 神经网络处理单元（Neural Processing Unit）是用于加速神经网络计算的专用处理单元",
-                "底层构造：它围绕矩阵、卷积与张量等并行运算组织专用计算资源",
+                "底层构造：它围绕矩阵、卷积与张量等并行运算组织专用计算资源，矩阵乘法可以写成 $C = A B$",
                 "层次关系：它处于神经网络推理计算的硬件加速层并服务于上层模型运算",
                 "参数配置：测试资料没有给出频率、精度或吞吐量等可验证配置参数",
                 "行为语义：输入神经网络运算后由专用并行单元执行并缩短推理计算路径",

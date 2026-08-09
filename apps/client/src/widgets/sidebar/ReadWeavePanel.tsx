@@ -1,6 +1,7 @@
 import "./ReadWeavePanel.css";
 
 import { type CKTextEditor, updateReadWeaveAnchorIdOnRange } from "@triliumnext/ckeditor5";
+import { KATEX_MACROS } from "@triliumnext/commons";
 import type {
     ReadWeaveAnchorSummary,
     ReadWeaveAnchorType,
@@ -19,7 +20,7 @@ import type {
     ReadWeaveTermIdentity
 } from "@triliumnext/commons";
 import type { JSX } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
 
 import { t } from "../../services/i18n.js";
 import server from "../../services/server.js";
@@ -1820,9 +1821,35 @@ function ReadableBody({
     labelledBy?: string;
     testId?: string;
 }) {
+    const contentRef = useRef<HTMLDivElement>(null);
     const paragraphs = body.split(/\n{2,}/u).map(paragraph => paragraph.trim()).filter(Boolean);
+
+    useLayoutEffect(() => {
+        const container = contentRef.current;
+        if (!container || !/(?:\$\$[\s\S]+?\$\$|\$(?!\$)[^$\n]+?\$)/u.test(body)) return;
+
+        let cancelled = false;
+        void import("../../services/math.js").then(({ renderMathInElement }) => {
+            if (cancelled || !container.isConnected) return;
+            renderMathInElement(container, {
+                trust: false,
+                throwOnError: false,
+                macros: { ...KATEX_MACROS },
+                delimiters: [
+                    { left: "$$", right: "$$", display: true },
+                    { left: "$", right: "$", display: false }
+                ]
+            });
+        });
+        return () => {
+            cancelled = true;
+        };
+    }, [ body ]);
+
     return (
         <div
+            key={body}
+            ref={contentRef}
             id={id}
             class={`readweave-readable-body ${className}`}
             role={labelledBy ? "region" : undefined}

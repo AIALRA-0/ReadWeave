@@ -34,7 +34,10 @@ declare module "@mind-elixir/node-menu" {
 
 declare module "katex/contrib/auto-render" {
     var renderMathInElement: (element: HTMLElement, options: {
-        trust: boolean;
+        trust?: boolean;
+        throwOnError?: boolean;
+        macros?: Record<string, string>;
+        delimiters?: Array<{ left: string; right: string; display: boolean }>;
     }) => void;
     export default renderMathInElement;
 }

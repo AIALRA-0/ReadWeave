@@ -238,6 +238,8 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await expect(answer).toContainText(/定义与命名：NPU 神经网络处理单元（Neural Processing Unit）是用于加速神经网络计算的专用处理单元/);
     await expect(answer).toContainText(/实现选择与证据闭环：/);
     await expect(answer.locator("p")).toHaveCount(2);
+    await expect(answer.locator(".katex")).toHaveCount(1);
+    await expect(answer).not.toContainText("$C = A B$");
     await expect(answer).toHaveAttribute("role", "region");
     await expect(panel.getByText("Saved automatically after generation", { exact: false })).toBeVisible();
     await expect(panel.getByRole("button", { name: "I reviewed it — save", exact: true })).toHaveCount(0);
@@ -309,6 +311,23 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await expect(questionEntry).toHaveClass(/readweave-callout-important/);
     await expect(questionEntry.getByRole("button", { name: /^Edit /u })).toBeVisible();
     await expect(questionEntry.getByRole("button", { name: /^Delete /u })).toBeVisible();
+    const savedEntryHeadingLayout = await questionEntry.evaluate(element => {
+        const card = element.getBoundingClientRect();
+        const title = element.querySelector<HTMLElement>(".readweave-entry-title > span:first-child")!.getBoundingClientRect();
+        const actionsElement = element.querySelector<HTMLElement>(".readweave-entry-heading-actions")!;
+        const actions = actionsElement.getBoundingClientRect();
+        return {
+            cardWidth: card.width,
+            titleWidth: title.width,
+            overlap:
+                title.left < actions.right - 0.5 &&
+                title.right > actions.left + 0.5 &&
+                title.top < actions.bottom - 0.5 &&
+                title.bottom > actions.top + 0.5
+        };
+    });
+    expect(savedEntryHeadingLayout.titleWidth).toBeGreaterThan(savedEntryHeadingLayout.cardWidth * 0.55);
+    expect(savedEntryHeadingLayout.overlap).toBe(false);
 
     const paragraphBox = await paragraph.boundingBox();
     expect(paragraphBox).not.toBeNull();
@@ -532,7 +551,16 @@ test("ReadWeave keeps launcher and right-panel headers separated across desktop 
             const next = cards[index + 1]?.getBoundingClientRect();
             if (header && (header.top < rect.top - 0.5 || header.bottom > rect.bottom + 0.5)) issues.push(`${card.id}:header-outside-card`);
             if (next && rect.bottom > next.top + 0.5) issues.push(`${card.id}:overlaps-next-card`);
-            if (title && buttons && title.right > buttons.left + 0.5) issues.push(`${card.id}:title-overlaps-buttons`);
+            if (
+                title &&
+                buttons &&
+                title.left < buttons.right - 0.5 &&
+                title.right > buttons.left + 0.5 &&
+                title.top < buttons.bottom - 0.5 &&
+                title.bottom > buttons.top + 0.5
+            ) {
+                issues.push(`${card.id}:title-overlaps-buttons`);
+            }
             return issues;
         }));
         expect(layoutIssues, JSON.stringify(viewport)).toEqual([]);

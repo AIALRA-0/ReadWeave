@@ -23,4 +23,16 @@ describe("ReadWeave generation monitor disclosure", () => {
         expect(css).toContain("background: transparent");
         expect(css).not.toContain("textarea.readweave-body-readonly");
     });
+
+    it("keeps saved-entry actions compact and lets narrow titles use their own row", () => {
+        expect(css).toContain("min-width: 26px !important");
+        expect(css).toContain("max-width: 26px !important");
+        expect(css).toContain("@container (max-width: 360px)");
+        expect(css).toContain("grid-template-columns: minmax(0, 1fr)");
+    });
+
+    it("keeps displayed formulas readable inside a narrow sidebar", () => {
+        expect(css).toContain(".readweave-readable-body .katex-display");
+        expect(css).toContain("overflow-x: auto");
+    });
 });

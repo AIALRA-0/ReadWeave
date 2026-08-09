@@ -386,6 +386,11 @@ describe("ReadWeave natural paragraph formatting", () => {
         ].join("\n\n"));
     });
 
+    it("normalizes common scientific notation and inequalities to LaTeX without rewriting existing formulas", () => {
+        expect(formatReadWeaveBody("1 纳米等于 10^-9 米；16 nm 等于 16×10^-9 米；当 x>=3 时继续；已有 $C_{pk}$ 保持不变"))
+            .toBe("1 纳米等于 $10^{-9}$ 米；16 nm 等于 $16 \\times 10^{-9}$ 米；当 $x \\geq 3$ 时继续；已有 $C_{pk}$ 保持不变");
+    });
+
     it("covers clearly different answer lengths instead of one repeated fixture shape", () => {
         const lengths = readabilityCases.map(([ , answer ]) => answer.length);
         const average = lengths.reduce((sum, length) => sum + length, 0) / lengths.length;

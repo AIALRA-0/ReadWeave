@@ -338,6 +338,10 @@
     background: color-mix(in srgb, var(--readweave-callout) 8%, var(--main-background-color));
 }
 
+.readweave-entry {
+    container-type: inline-size;
+}
+
 .readweave-callout-note { --readweave-callout: var(--admonition-note-accent-color); }
 .readweave-callout-tip { --readweave-callout: var(--admonition-tip-accent-color); }
 .readweave-callout-important { --readweave-callout: var(--admonition-important-accent-color); }
@@ -386,13 +390,39 @@
 
 .readweave-entry-heading-actions .btn {
     display: inline-grid;
-    width: 28px;
-    height: 28px;
+    box-sizing: border-box;
+    width: 26px !important;
+    min-width: 26px !important;
+    max-width: 26px !important;
+    height: 26px;
+    flex: 0 0 26px !important;
     padding: 0;
     place-items: center;
     color: var(--muted-text-color);
     border-radius: 50%;
     font-size: 0.9rem;
+}
+
+@container (max-width: 360px) {
+    .readweave-entry-title {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .readweave-entry-heading-actions {
+        justify-self: end;
+    }
+}
+
+.readweave-readable-body .katex-display {
+    margin: 0.75em 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.readweave-readable-body .katex {
+    max-width: 100%;
+    font-size: 1em;
 }
 
 .readweave-entry-heading-actions .btn:hover,

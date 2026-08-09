@@ -553,6 +553,7 @@ function writerSystemPrompt(): string {
         "英文全称按其官方写法；不要把缩写自身塞进括号冒充英文全称，不要嵌套括号，不要把中文和英文拆碎后重组",
         "先判断字符序列是否仍是有效缩写；如果官方资料说明它已经成为专名、原缩写含义已经失效或某个展开只是弃用的逆向首字母缩略词，就明确说明这种边界，不得把历史名称或民间展开冒充现行全称",
         "绝对禁止“中文名（缩写）”格式；例如必须写“EDA 电子设计自动化（Electronic Design Automation）”“TSV 硅通孔（Through-Silicon Via）”“3D IC 三维集成电路（Three-Dimensional Integrated Circuit）”",
+        "公式、上下标、上标、希腊字母、不等式、统计符号和科学计数法必须优先使用 LaTeX；行内公式写成 $...$，独立公式写成 $$...$$；例如 10 的负 9 次方写成 $10^{-9}$，16 乘 10 的负 9 次方写成 $16 \\times 10^{-9}$，不得写成 10^-9、16×10^-9 或 x>=3",
         "段落只承载一个中心意思；两个以上能分别核对的事实必须换行；超过约 180 个汉字时在语义边界自然分段；一般使用 1 至 5 个自然段，不要用逗号把身份、机制、边界和例子塞成一整块",
         "普通问答默认不使用小标题、编号或列表，不要输出‘核心结论’‘研究方向’‘主要贡献’‘工作原理’等标签；只有用户明确要求步骤、清单或逐项比较，或者三个以上项目必须分别核对时，才使用列表",
         "每一段必须增加新的理解层次；后文若只是换一种说法重复前文的定义或因果链，就删除后文，不得用同义重复增加长度",
@@ -656,6 +657,28 @@ function removeDecorativeParagraphHeadings(value: string): string {
         .join("\n\n");
 }
 
+function normalizeSimpleMathNotation(value: string): string {
+    return value.split(/(\$\$[\s\S]*?\$\$|\$(?!\$)[^$\n]+?\$)/u).map((part, index) => {
+        if (index % 2 === 1) return part;
+        return part
+            .replace(
+                /(?<![\p{L}\p{N}$])(\d+(?:\.\d+)?)\s*[×x]\s*10\s*\^\s*([+-]?\d+)(?![\p{L}\p{N}])/gu,
+                (_match, coefficient: string, exponent: string) => `$${coefficient} \\times 10^{${exponent}}$`
+            )
+            .replace(
+                /(?<![\p{L}\p{N}$])10\s*\^\s*([+-]?\d+)(?![\p{L}\p{N}])/gu,
+                (_match, exponent: string) => `$10^{${exponent}}$`
+            )
+            .replace(
+                /(?<![\p{L}\p{N}$])([A-Za-z])\s*(>=|<=|!=)\s*(-?\d+(?:\.\d+)?)(?![\p{L}\p{N}])/gu,
+                (_match, variable: string, operator: string, operand: string) => {
+                    const latexOperator = operator === ">=" ? "\\geq" : operator === "<=" ? "\\leq" : "\\neq";
+                    return `$${variable} ${latexOperator} ${operand}$`;
+                }
+            );
+    }).join("");
+}
+
 function splitNaturalParagraph(paragraph: string): string[] {
     const cleaned = withoutParagraphEndPunctuation(paragraph);
     if (cleaned.length <= 190) return cleaned ? [ cleaned ] : [];
@@ -739,6 +762,7 @@ export function formatReadWeaveBody(value: unknown): string {
         .replace(/2\.5D\s*(?:和|与|及|、)\s*3D\s*集成电路/giu, "二维半与三维集成电路")
         .replace(/[，；]?\s*可简称为\s*[“"]?dblp[”"]?/giu, "")
         .replace(/[“”]/gu, "");
+    body = normalizeSimpleMathNotation(body);
     body = removeDecorativeParagraphHeadings(body);
     body = deduplicateBodyLines(body).replace(/(?<!\n)\n(?!\n)/gu, "；");
     const paragraphs = body.split(/\n{2,}/u).flatMap(splitNaturalParagraph);
@@ -977,6 +1001,10 @@ function deterministicIssues(
     const issues: string[] = [];
     if (!body) issues.push("正文为空");
     if (body.includes("。")) issues.push("正文仍包含中文句号");
+    const bodyOutsideMath = body.replace(/\$\$[\s\S]*?\$\$|\$(?!\$)[^$\n]+?\$/gu, "");
+    if (/(?:\b\d+(?:\.\d+)?(?:\s*[×x]\s*10)?\s*\^\s*[+-]?\d+\b|\b[A-Za-z]\s*(?:>=|<=|!=)\s*-?\d|\b[A-Za-z][A-Za-z0-9]*_[A-Za-z0-9]+\b)/u.test(bodyOutsideMath)) {
+        issues.push("正文中的公式、上下标、科学计数法或不等式没有使用 LaTeX 排版");
+    }
     if (/&#(?:x[0-9a-f]+|\d+);?/iu.test(body)) issues.push("正文包含未解码字符实体");
     if (/[（(][^（）()\n]{0,180}[（(]/u.test(body)) issues.push("正文包含嵌套括号");
     const reversedBilingual = body.match(/[\p{Script=Han}]{2,40}[（(](?=[^（）()\n]{0,40}[A-Z])[A-Z0-9][A-Z0-9+._/-]*(?:\s+[A-Z][A-Z0-9+._/-]*){0,4}[）)]/u)?.[0];
@@ -1058,6 +1086,7 @@ function verifierSystemPrompt(): string {
         "逐项核对协议层级、物理或逻辑载体、数据单位、标准状态和对象类别；证据只提到事务层或链路层时，不得自行改写成传输层，类似的相邻技术分类也必须判为证据不足",
         "比较回答必须区分定义差异、产品实现和常见取舍；把某类系统一律归为某种扩展方式、事务模型或一致性模型时必须判为无效",
         "检查正文每一段是否由 claims 完整覆盖；正文出现 claims 未记录的推测、保留意见或补充事实时必须判为无效",
+        "检查公式、上下标、上标、希腊字母、不等式、统计符号和科学计数法是否使用 LaTeX；行内公式必须使用 $...$，独立公式必须使用 $$...$$，代码、网址和逐字证据除外",
         "按用户问句的实际颗粒度审计，不得自行扩张要求；人物简介给出可核验的当前公司或机构、主要研究方向和一项有代表性的贡献即可满足基础完整性，不强制大学任职、精确职位或多篇论文",
         "不要因为风格偏好制造错误；只有会误导用户、妨碍理解或违反明确格式要求的问题才列出",
         "只输出 JSON 对象，字段为 valid、issues、unsupportedClaims"
