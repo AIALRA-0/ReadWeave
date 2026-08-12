@@ -165,7 +165,27 @@ function checkEtapiToken(req: Request, res: Response, next: NextFunction) {
 function reject(req: Request, res: Response, message: string) {
     getLog().info(`${req.method} ${req.path} rejected with 401 ${message}`);
 
-    res.setHeader("Content-Type", "text/plain").status(401).send(message);
+    const sendRejection = () => {
+        // Clearing without destroying is insufficient when express-session has
+        // rolling cookies enabled: its response hook would append the stale
+        // cookie again after the deletion header.
+        res.clearCookie("trilium.sid", { path: "/" });
+        res.setHeader("X-Trilium-Auth-State", "logged-out");
+        res.setHeader("Content-Type", "text/plain").status(401).send(message);
+    };
+
+    if (typeof req.session?.destroy === "function") {
+        req.session.destroy((error) => {
+            if (error) {
+                getLog().error(error);
+            }
+            sendRejection();
+        });
+    } else {
+        // Direct middleware tests and early initialization requests may not
+        // carry a complete express-session object.
+        sendRejection();
+    }
 }
 
 async function checkCredentials(req: Request, res: Response, next: NextFunction) {

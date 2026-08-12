@@ -7,6 +7,7 @@ import {
     isReadWeaveGenerationDisabled,
     isReadWeaveReviewSaveAllowed,
     mergeReadWeaveGenerationJobSnapshot,
+    normalizeReadWeaveReadableMath,
     normalizeReadWeaveTermIdentityForReview,
     READWEAVE_CANDIDATE_LIMIT,
     READWEAVE_CANDIDATE_MIN_CONFIDENCE,
@@ -88,6 +89,18 @@ describe("ReadWeave panel state", () => {
         expect(readWeaveCompactStatusText("联网失败（timeout.）")).toBe("联网失败（timeout）");
         expect(readWeaveCompactStatusText("模型返回“failed.”")).toBe("模型返回“failed”");
         expect(readWeaveCompactStatusText("正在生成……")).toBe("正在生成……");
+    });
+
+    it("normalizes legacy math for display without touching LaTeX, URLs or inline code", () => {
+        const input = "1 nm = 10^-9 m；16×10^-9 m；x>=3；已有 $C_{pk}$；https://example.test/10^9；`x>=3`";
+        const expected = "1 nm = $10^{-9}$ m；$16 \\times 10^{-9}$ m；$x \\geq 3$；已有 $C_{pk}$；https://example.test/10^9；`x>=3`";
+        expect(normalizeReadWeaveReadableMath(input)).toBe(expected);
+        expect(normalizeReadWeaveReadableMath(expected)).toBe(expected);
+    });
+
+    it("leaves block formulas, prices, prose identifiers and incomplete math delimiters intact", () => {
+        const input = "块公式 $$E = mc^2$$；价格 $5；型号 x86；版本 v1.2.3；文件 A_B；普通句子";
+        expect(normalizeReadWeaveReadableMath(input)).toBe(input);
     });
 
     it("does not let an older asynchronous response replace a newer running job", () => {

@@ -162,7 +162,10 @@ async function fetchJson<T>(
             ...init,
             headers: {
                 "Accept": "application/json",
-                "User-Agent": "ReadWeave/1.0 (metadata verification)",
+                // Wikimedia and several scholarly APIs reject anonymous or
+                // non-contactable bot identifiers. Keep a stable project URL
+                // here so free-source verification remains standards-compliant.
+                "User-Agent": "ReadWeave/0.104.0 (https://github.com/AIALRA-0/ReadWeave)",
                 ...init.headers
             },
             signal: AbortSignal.timeout(timeoutMs)

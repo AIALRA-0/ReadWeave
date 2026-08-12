@@ -1,4 +1,5 @@
 import { t } from "./i18n.js";
+import { recoverExpiredAuthentication } from "./authentication_recovery.js";
 import utils, { isShare } from "./utils.js";
 import ValidationError from "./validation_error.js";
 
@@ -203,6 +204,16 @@ function ajax(url: string, method: string, data: unknown, headers: Headers, opts
                 if (jqXhr.status === 0) {
                     // don't report requests that are rejected by the browser, usually when the user is refreshing or going to a different page.
                     rej("rejected by browser");
+                    return;
+                }
+
+                // A protected API returning 401 means the browser is still
+                // running an authenticated client for a session the server no
+                // longer accepts. Recover once instead of reporting every
+                // startup request independently and leaving the page half-built.
+                if (jqXhr.status === 401 && !isShare && window.glob.loggedIn !== false) {
+                    recoverExpiredAuthentication();
+                    rej(jqXhr.responseText);
                     return;
                 }
 

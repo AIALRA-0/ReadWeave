@@ -84,6 +84,27 @@ describe("ReadWeave free-source search", () => {
             ]));
     });
 
+    it("identifies free-source requests with a contactable project URL", async () => {
+        const userAgents: string[] = [];
+        const fetcher = vi.fn(async (input: string | URL | globalThis.Request, init?: RequestInit) => {
+            userAgents.push(new Headers(init?.headers).get("user-agent") ?? "");
+            if (input.toString().includes("wikipedia.org")) {
+                return Response.json({ query: { pages: {} } });
+            }
+            throw new Error(`Unexpected URL ${input.toString()}`);
+        }) as unknown as typeof fetch;
+
+        await cls.init(() => searchReadWeaveEvidence({
+            query: "普通技术概念是什么",
+            kind: "question",
+            force: true,
+            allowPaid: false
+        }, { fetcher, bypassCache: true }));
+
+        expect(userAgents).toHaveLength(1);
+        expect(userAgents[0]).toBe("ReadWeave/0.104.0 (https://github.com/AIALRA-0/ReadWeave)");
+    });
+
     it("uses the official dblp naming FAQ instead of guessing an expansion", async () => {
         const fetcher = vi.fn(async (input: string | URL | globalThis.Request) => {
             const url = input.toString();

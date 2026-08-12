@@ -291,7 +291,8 @@ const MATHEMATICAL_NOTATION_CONTEXT = /^(?:范数|变量|系数|权重|矩阵|�
 const CODE_IDENTIFIER_CONTEXT = /(?:参数|环境变量|变量|配置项|寄存器字段|寄存器|字段|差分信号|信号|端口|引脚|网络|节点|宏定义|宏|常量|命令|选项|时序约束)/u;
 const UPPERCASE_ENGLISH_KEYWORDS = new Set([
     "MUST", "SHOULD", "MAY",
-    "MAJOR", "MINOR", "PATCH", "MAJOR.MINOR.PATCH"
+    "MAJOR", "MINOR", "PATCH", "MAJOR.MINOR.PATCH",
+    "AND", "OR", "NOT"
 ]);
 const CHEMICAL_NOTATION_CONTEXT = /^(?:分子|化学式|浓度|含量|气体|溶液|化合物|薄膜|材料|晶体|自由基|反应物|生成物)/u;
 const META_COMMENTARY_PATTERNS = [
@@ -337,11 +338,11 @@ const GENERAL_PERSON_LOWERCASE_ENGLISH_NAME_PATTERN = /[（(](?:a|an|the\s+)?[a-
 const HUMAN_READABLE_WRITING_CLICHE_PATTERN = /(?:先说结论|简单来说|换句话说|需要注意的是|值得一提的是|可以确定的是)/u;
 const HUMAN_READABLE_DOUBLE_NEGATIVE_PATTERN = /(?:不能不|不得不|并非不|不是没有)/u;
 const HUMAN_READABLE_MALFORMED_CONNECTOR_PATTERN =
-    /(?:例如|如)\s*(?:或|和|与|、|等|[，,；;])|(?:拷贝|复制|开销|成本|延迟|风险|限制|边界)(?=(?:这|该|其)(?:会|将|可|能|降低|提高|减少|增加|导致|使|让)|使用(?:该|此|这种|本)(?:对象|方法|机制|接口|功能|技术)|(?:该|此|这种|本)(?:对象|方法|机制|接口|功能|技术)(?:的|仍|还|本身))|单独启用[，,](?!后|时|前|以)/u;
+    /(?:例如|(?<!例)如)\s*(?:或|和|与|、|等)|(?<!例)如\s*[，,；;]|(?:拷贝|复制|开销|成本|延迟|风险|限制|边界)(?=(?:这|该|其)(?:会|将|可|能|降低|提高|减少|增加|导致|使|让)|使用(?:该|此|这种|本)(?:对象|方法|机制|接口|功能|技术)|(?:该|此|这种|本)(?:对象|方法|机制|接口|功能|技术)(?:的|仍|还|本身))|单独启用[，,](?!后|时|前|以)/u;
 const HUMAN_READABLE_CLAUSE_PREDICATE_PATTERN =
-    /(?:是|为|有|由|在|向|从|比|能|可|会|将|让|使|需|要|现任|曾任|担任|任教|负责|提供|采用|使用|支持|允许|依赖|包含|包括|收录|记录|存储|管理|维护|生成|连接|组织|发布|识别|用于|通过|保持|发生|触发|切换|启用|关闭|退出|运行|工作|访问|处理|传输|映射|降低|提高|减少|增加|改善|解释|说明|表示|意味着|属于|不承担|不经过|不代表)/u;
+    /(?:是|为|有|由|在|位于|向|从|来自|比|能|可|会|将|让|使|需|要|不同|区别|差异|相比|现任|曾任|担任|任教|负责|提供|采用|使用|利用|支持|允许|依赖|取决于|包含|包括|收录|记录|存储|管理|维护|生成|形成|完成|成像|测量|连接|组织|发布|发表|识别|适合|侧重|验证|防止|用于|通过|保持|发生|触发|切换|启用|关闭|退出|运行|工作|访问|处理|传输|映射|降低|提高|减少|增加|改善|促进|交流|解释|说明|描述|表示|意味着|属于|受到|面向|聚焦|不承担|不经过|不代表)/u;
 const UNGROUNDED_SIGNIFICANCE_OR_STABILITY_PATTERN =
-    /(?:差异|结果|读数|变化)[^；\n]{0,20}(?:显著|稳定)|(?:显著|稳定)[^；\n]{0,20}(?:差异|结果|读数|变化)|显著且稳定/u;
+    /(?:差异|结果|读数)(?:为|是|保持|表现得?|呈现)?(?:统计上)?(?:显著|稳定(?!性))|(?:显著|稳定(?!性))的?(?:差异|结果|读数)|显著且稳定/u;
 const QUESTION_SHAPE_INTENT_PATTERN = /(?:具体|实际)?(?:是什么|属于什么|以什么|哪种)?(?:物理|逻辑|实现|存在)?形态|长什么样|以什么形式(?:存在|实现|出现)?/u;
 const QUESTION_SHAPE_ANSWER_PATTERN = /(?:(?:物理|逻辑|实现|存在|表现|呈现|承载|封装|部署|运行)(?:形态|形式|为|在)|(?:不是|并非)(?:一个|一种|一类|独立的?)?(?:芯片|设备|插槽|线缆|接口|文件|程序|进程|数据结构)|(?:属于|是一种|是一个|是一类)[^；\n]{0,50}(?:协议|接口|命令|报文|数据结构|文件|程序|进程|芯片|设备|硬件|软件))/u;
 const RUN_ON_DEFINITION_BOUNDARY_PATTERN = /(?:应用|服务|职责|用途|分析|作用|规则|义务|交流平台)适用(?:边界|范围)|(?:组件|结构|流程)在集成电路|集成度在芯片|(?:平坦化|处理|实现|方法|形成)该阶段|(?:教育|实践|传播|发展)该(?:组织|机构|团体)|等其(?:工作|出版|适用|职责)|等(?:通过|面向|用于|由|会员|成员)(?:包括|涵盖|覆盖|聚焦|服务|组成|提供|$)?|会议作为|(?:领域|分支|机构|组织|团体)其(?:会员|成员|工作|职责|出版)/u;
@@ -385,7 +386,12 @@ function hasBareLatinProseOutsideCanonicalNames(
             ), "");
         }
     }
-    return /(?<![\p{Script=Latin}\p{N}_])[A-Za-z][A-Za-z'’-]{2,}(?![\p{Script=Latin}\p{N}_])/u.test(prose);
+    // A single proper name, keyword or product token can legitimately have no
+    // established Chinese translation.  The user-facing failure we need to
+    // catch is an untranslated English phrase or sentence, not every isolated
+    // Latin word.  Treating one token as prose rejected otherwise sound
+    // definitions containing names such as Google or Wi-Fi.
+    return /(?<![\p{Script=Latin}\p{N}_])[A-Za-z][A-Za-z'’-]{2,}(?:\s+[A-Za-z][A-Za-z'’-]{2,})+(?![\p{Script=Latin}\p{N}_])/u.test(prose);
 }
 
 function hasReversedBilingualName(body: string): boolean {
@@ -440,7 +446,7 @@ const MIXED_SCRIPT_PARENTHETICAL_PATTERN = /[（(](?=[^（）()\n]{0,240}[A-Za-z
 const MAX_PLAIN_DEFINITION_OPENING_CHARACTERS = 110;
 const MAX_READABLE_CLAUSE_CHARACTERS = 180;
 const MAX_REPAIR_ROUNDS = 3;
-export const READWEAVE_COST_BUDGET_CNY = 0.01;
+export const READWEAVE_COST_BUDGET_CNY = 0.05;
 const READWEAVE_BUDGET_MODEL = "deepseek-v4-flash";
 const READWEAVE_BUDGET_CONTEXT_CHARACTERS = 2_200;
 const READWEAVE_BUDGET_MAX_OUTPUT_TOKENS = 768;
@@ -493,6 +499,7 @@ const KNOWN_PRODUCT_CANONICAL_FORMS = new Map([
     [ "CXL", "CXL 计算快速链路（Compute Express Link）" ],
     [ "DAC", "DAC 设计自动化会议（Design Automation Conference）" ],
     [ "DAX", "DAX 直接访问（Direct Access）" ],
+    [ "DOM", "DOM 文档对象模型（Document Object Model）" ],
     [ "3D-MAPS", "3D-MAPS 三维大规模并行处理器与堆叠内存（3D Massively Parallel Processor with Stacked Memory）" ],
     [ "DBLP", "dblp 计算机科学书目服务（dblp computer science bibliography）" ],
     [ "DOI", "DOI 数字对象标识符（Digital Object Identifier）" ],
@@ -531,6 +538,7 @@ const KNOWN_PRODUCT_CANONICAL_FORMS = new Map([
     [ "GIS", "GIS 地理信息系统（Geographic Information System）" ],
     [ "GPS", "GPS 全球定位系统（Global Positioning System）" ],
     [ "HTTP", "HTTP 超文本传输协议（Hypertext Transfer Protocol）" ],
+    [ "IP", "IP 网际协议（Internet Protocol）" ],
     [ "HTTPS", "HTTPS 超文本传输安全协议（Hypertext Transfer Protocol Secure）" ],
     [ "LLM", "LLM 大语言模型（Large Language Model）" ],
     [ "MFA", "MFA 多因素身份验证（Multi-Factor Authentication）" ],
@@ -542,12 +550,15 @@ const KNOWN_PRODUCT_CANONICAL_FORMS = new Map([
     [ "OLTP", "OLTP 联机事务处理（Online Transaction Processing）" ],
     [ "PID", "PID 比例—积分—微分（Proportional-Integral-Derivative）" ],
     [ "RAG", "RAG 检索增强生成（Retrieval-Augmented Generation）" ],
+    [ "RCT", "RCT 随机对照试验（Randomized Controlled Trial）" ],
+    [ "RFC", "RFC 征求意见稿（Request for Comments）" ],
     [ "R0", "R0 基本再生数（Basic Reproduction Number）" ],
     [ "SQL", "SQL 结构化查询语言（Structured Query Language）" ],
     [ "SVD", "SVD 奇异值分解（Singular Value Decomposition）" ],
     [ "TESS", "TESS 凌日系外行星巡天卫星（Transiting Exoplanet Survey Satellite）" ],
     [ "UDP", "UDP 用户数据报协议（User Datagram Protocol）" ],
     [ "URL", "URL 统一资源定位符（Uniform Resource Locator）" ],
+    [ "WAL", "WAL 预写日志（Write-Ahead Logging）" ],
     [ "XSS", "XSS 跨站脚本（Cross-Site Scripting）" ],
     [ "REST", "REST 表述性状态转移（Representational State Transfer）" ],
     [ "TLS", "TLS 传输层安全协议（Transport Layer Security）" ],
@@ -573,6 +584,7 @@ const KNOWN_PRODUCT_CANONICAL_FORMS = new Map([
     [ "IR Drop", "电阻压降（IR Drop）" ],
     [ "Interposer", "中介层（Interposer）" ],
     [ "Setup Time", "建立时间（Setup Time）" ],
+    [ "电路划分", "电路划分（Circuit Partitioning）" ],
     [ "WARP", "应急网络服务（WARP）" ],
     [ "Cloudflare WARP", "网络连接产品（Cloudflare WARP）" ],
     [ "Hiddify", "代理客户端（Hiddify）" ],
@@ -828,6 +840,9 @@ function isUppercaseEnglishKeyword(body: string, token: string): boolean {
     if (!UPPERCASE_ENGLISH_KEYWORDS.has(token)) return false;
     if (token === "MUST" || token === "SHOULD" || token === "MAY") {
         return /(?:规范|约束|要求|关键词|key words?|requirement levels?|绝对要求|可选|例外)/iu.test(body);
+    }
+    if (token === "AND" || token === "OR" || token === "NOT") {
+        return /(?:逻辑运算|逻辑与|逻辑或|逻辑非|布尔|真值)/u.test(body);
     }
     return /(?:语义化版本|版本|MAJOR\.MINOR\.PATCH|不兼容|向后兼容|修复)/u.test(body);
 }
@@ -1676,6 +1691,13 @@ export function findReadWeaveQualityIssues(
     })) {
         issues.add("回答末尾残留了前文已经说明过的名词片段");
     }
+    if (body.normalize("NFKC").split(/\n{2,}/u).slice(1).some(paragraph =>
+        /^(?:属于|用于|用来|负责|支持|采用|依赖|通过|利用|提供|允许|包含|包括|描述|衡量|把|将)(?=[\p{Script=Han}\s])/u.test(paragraph.trim()))) {
+        issues.add("回答存在缺少主语的段落，必须补出对象或代词后再说明关系");
+    }
+    if (/[\p{Script=Han}]{1,100}(算法|方法|模型|机制|协议|接口|系统|框架|组织|会议|期刊|标识符|处理器|处理单元)[（(][^（）()\n]{2,240}[）)]\s*\1/u.test(body)) {
+        issues.add("双语名称后重复了相同的中文类别词");
+    }
     const generalPersonOverview = kind === "question"
         && knowledgeScope === "general"
         && (/(?:是谁|是何人|谁是)|\bWho\s+is\b/iu.test(objective)
@@ -1823,15 +1845,20 @@ export function findReadWeaveQualityIssues(
         }
         if (kind === "term"
             && options.entityType !== "person"
+            && !options.verifiedNonExpandableArtifact
             && hasBareLatinProseOutsideCanonicalNames(normalizedBody, options.subject, options.termIdentity)) {
             issues.add("定义包含未配对中文名称的裸英文词句");
         }
     }
     const normalizedFullBody = body.normalize("NFKC");
-    if (MALFORMED_MIXED_BILINGUAL_PARENTHETICAL_PATTERN.test(normalizedFullBody)) {
+    const proseSyntaxBody = normalizedFullBody.replace(
+        /\$\$[\s\S]*?\$\$|\$(?!\$)[^$\n]+?\$|`[^`\n]*`|https?:\/\/[^\s]+/gu,
+        ""
+    );
+    if (MALFORMED_MIXED_BILINGUAL_PARENTHETICAL_PATTERN.test(proseSyntaxBody)) {
         issues.add("括号内混入了中文重复名称、逗号和英文全称，未使用统一的中英文名称格式");
     }
-    if (MIXED_SCRIPT_PARENTHETICAL_PATTERN.test(normalizedFullBody)) {
+    if (MIXED_SCRIPT_PARENTHETICAL_PATTERN.test(proseSyntaxBody)) {
         issues.add("括号内混合了中文与英文片段，应改为中文名称（English Name）或纯中文说明");
     }
     const repeatedFullName = options.termIdentity?.chineseName && options.termIdentity?.englishName
@@ -1870,9 +1897,9 @@ export function findReadWeaveQualityIssues(
     if (kind === "term"
         && options.subject?.normalize("NFKC").trim().toLocaleUpperCase() === "GDPR") {
         if (!/个人数据/u.test(normalizedFullBody)
-            || !/(?:合法性基础|合法处理|处理依据)/u.test(normalizedFullBody)
+            || !/(?:合法性基础|合法处理|合法依据|处理依据|法律依据)/u.test(normalizedFullBody)
             || !/(?:数据主体|个人)[^；\n]{0,20}权利/u.test(normalizedFullBody)
-            || !/(?:控制者|处理者)[^；\n]{0,30}(?:责任|义务)/u.test(normalizedFullBody)) {
+            || !/(?:控制者|处理者)[^；\n]{0,60}(?:责任|义务)/u.test(normalizedFullBody)) {
             issues.add("GDPR 定义遗漏个人数据、合法处理依据、数据主体权利与控制者或处理者责任之间的核心关系");
         }
     }
@@ -1912,7 +1939,7 @@ export function findReadWeaveQualityIssues(
     if (kind === "question"
         && /\bXSS\b/iu.test(objective)
         && /\bCSRF\b/iu.test(objective)
-        && !/(?:登录状态|登录会话|会话凭据|认证凭据)/u.test(normalizedFullBody)) {
+        && !/(?:登录状态|登录会话|已认证(?:的)?会话|认证会话|会话凭据|认证凭据)/u.test(normalizedFullBody)) {
         issues.add("XSS 与 CSRF 对比遗漏了跨站请求伪造依赖浏览器已有登录状态或认证凭据这一关键条件");
     }
     if (kind === "question"
@@ -1923,8 +1950,8 @@ export function findReadWeaveQualityIssues(
     if (kind === "question"
         && /(?:五个|5\s*个?)交易日/u.test(objective)
         && /长期风险/u.test(objective)
-        && (!/(?:(?:更长|完整|不同)[^；\n]{0,12}周期|长期[^；\n]{0,20}(?:样本|数据)|不同市场环境)/u.test(normalizedFullBody)
-            || !/(?:极端行情|极端市场)/u.test(normalizedFullBody)
+        && (!/(?:(?:更长|完整|不同)[^；\n]{0,12}(?:周期|时间跨度)|长期[^；\n]{0,20}(?:样本|数据)|不同市场环境)/u.test(normalizedFullBody)
+            || !/(?:极端行情|极端市场|极端事件)/u.test(normalizedFullBody)
             || !/流动性/u.test(normalizedFullBody))) {
         issues.add("短窗口风险回答遗漏了更长周期、极端行情或流动性三个必要边界");
     }
@@ -1949,6 +1976,13 @@ function findReadWeaveBaseQualityIssues(
 ): string[] {
     const issues = new Set<string>();
     const normalizedBody = body.trim();
+    // Parentheses inside LaTeX and inline code describe expression grouping,
+    // not bilingual prose.  Running prose-only rules on them rejected correct
+    // Bayesian formulas such as P(A|B) and forced unnecessary repair rounds.
+    const proseSyntaxBody = normalizedBody.replace(
+        /\$\$[\s\S]*?\$\$|\$(?!\$)[^$\n]+?\$|`[^`\n]*`|https?:\/\/[^\s]+/gu,
+        ""
+    );
     const personIdentity = kind === "term"
         && (entityType === "person"
             || isLikelyPersonNameOnlyDefinition(normalizedBody, subject, termIdentity?.englishName || subject || ""));
@@ -1962,16 +1996,16 @@ function findReadWeaveBaseQualityIssues(
     if (REDUNDANT_SENTENCE_PUNCTUATION_PATTERN.test(normalizedBody)) {
         issues.add("答案包含重复或中英文叠加的句末标点");
     }
-    if (/[（(]\s*[）)]/u.test(normalizedBody)) {
+    if (/[（(]\s*[）)]/u.test(proseSyntaxBody)) {
         issues.add("答案包含空括号");
     }
-    if (/[（(]\s*(?:如|例如)\s*[：:]?\s*[）)]/u.test(normalizedBody)) {
+    if (/[（(]\s*(?:如|例如)\s*[：:]?\s*[）)]/u.test(proseSyntaxBody)) {
         issues.add("答案包含没有实际内容的示例括号");
     }
-    if (/[（(][^（）()\n]{0,300}[（(]/u.test(normalizedBody)) {
+    if (/[（(][^（）()\n]{0,300}[（(]/u.test(proseSyntaxBody)) {
         issues.add("答案包含嵌套括号，必须改成单层名称或分隔表达");
     }
-    if (/）\s*[（(]/u.test(normalizedBody)) {
+    if (/）\s*[（(]/u.test(proseSyntaxBody)) {
         issues.add("答案包含连续括号，必须合并为一个规范名称或改用分隔表达");
     }
     if (ENGLISH_NAME_PUNCTUATION_BEFORE_CLOSING_PARENTHESIS_PATTERN.test(normalizedBody)) {
@@ -1988,10 +2022,12 @@ function findReadWeaveBaseQualityIssues(
         if (new RegExp(`[（(]\\s*${artifact}\\s*[）)]`, "iu").test(normalizedBody)) {
             issues.add("已核验的方法、系统或产品代号被错误放入英文全称括号；代号必须作为独立名称使用");
         }
-        if (new RegExp(
+        const artifactExpansionClaim = normalizedBody.match(new RegExp(
             `${artifact}[^；。！？\\n]{0,80}(?:是|为|属于)[^；。！？\\n]{0,80}(?:缩写|英文全称|展开式|展开形式)`,
             "iu"
-        ).test(normalizedBody)) {
+        ))?.[0];
+        if (artifactExpansionClaim
+            && !/(?:不是|并非|不应|不能|无法|没有|不存在)[^；。！？\n]{0,40}(?:缩写|英文全称|展开式|展开形式)/u.test(artifactExpansionClaim)) {
             issues.add("已核验的方法、系统或产品原名被错误解释成缩写");
         }
         if (new RegExp(
@@ -2033,7 +2069,14 @@ function findReadWeaveBaseQualityIssues(
             && /\d(?:\.\d+)?\s*$/u.test(before)) continue;
         const matchIndex = match.index ?? 0;
         const personNameIndex = personName ? normalizedBody.indexOf(personName) : -1;
-        if (isLikelyMathematicalOrCircuitNotation(normalizedBody, matchIndex, abbreviation)
+        if (/^[A-Z]_(?:\d+)?(?:\/[A-Z]_\d+)?$/u.test(abbreviation)
+            || (/^aH\+$/u.test(abbreviation) && /(?:pH|氢离子活度|酸碱度)/u.test(normalizedBody))
+            || (/^[ACGTU]-[ACGTU]$/u.test(abbreviation) && /(?:DNA|RNA|核酸|碱基|互补|配对)/u.test(normalizedBody))
+            || (/^[A-Z]{2,}-\d+(?:\.\d+)?$/u.test(abbreviation)
+                && /(?:编号|标识|候选|天体|目标|行星|样本|事件)/u.test(normalizedBody))
+            || (/^[A-Z]\.$/u.test(abbreviation)
+                && /\b[A-Z]\.[ \t]+[A-Z][a-z]/u.test(normalizedBody.slice(Math.max(0, matchIndex - 4), matchIndex + 40)))
+            || isLikelyMathematicalOrCircuitNotation(normalizedBody, matchIndex, abbreviation)
             || isLikelyCodeOrSignalIdentifier(normalizedBody, matchIndex, abbreviation)
             || isUppercaseEnglishKeyword(normalizedBody, abbreviation)
             || isLikelyChemicalFormula(normalizedBody, matchIndex, abbreviation)
@@ -2266,11 +2309,13 @@ function findReadWeaveBaseQualityIssues(
 }
 
 function isLikelyPersonNameOnlyDefinition(body: string, subject: string | undefined, englishName: string): boolean {
-    const candidate = (subject || englishName).trim();
-    const looksLikeChinesePersonalName = /^[\p{Script=Han}]{2,4}(?:·[\p{Script=Han}]{1,8})?$/u.test(candidate);
-    const looksLikeLatinPersonalName = /^(?:[A-Z](?:\.|[A-Za-z'’-]+))(?:\s+(?:(?:van|von|de|da|del|di|la|le|du|der|den|ten|ter)\s+)?[A-Z](?:\.|[A-Za-z'’-]+)){1,5}$/u.test(candidate);
-    const looksLikePersonalName = looksLikeChinesePersonalName || looksLikeLatinPersonalName;
-    if (!looksLikePersonalName) return false;
+    const candidates = [ subject, englishName ].map(value => value?.trim() ?? "").filter(Boolean);
+    const candidate = candidates.find(value => {
+        const looksLikeChinesePersonalName = /^[\p{Script=Han}]{2,4}(?:·[\p{Script=Han}]{1,8})?$/u.test(value);
+        const looksLikeLatinPersonalName = /^(?:[A-Z](?:\.|[A-Za-z'’-]+))(?:\s+(?:(?:van|von|de|da|del|di|la|le|du|der|den|ten|ter)\s+)?[A-Z](?:\.|[A-Za-z'’-]+)){1,5}$/u.test(value);
+        return looksLikeChinesePersonalName || looksLikeLatinPersonalName;
+    });
+    if (!candidate) return false;
     const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return new RegExp(`^\\s*${escaped}[^。；\\n]{0,120}(?:学者|研究员|教授|作者|人物|工程师|科学家|博士生|学生|教师|创始人|作曲家|艺术家|医生|律师)`, "u").test(body);
 }
@@ -2297,7 +2342,7 @@ function termDefinitionMatchesIdentityClass(body: string, termIdentity: Partial<
         { identity: /(?:标识符|识别码|identifier|\bID\b)/iu, predicate: /(?:标识符|识别码|身份标识|持久标识|唯一标识|区分重名)/u },
         {
             identity: /(?:处理单元|处理器|processor|processing unit)/iu,
-            predicate: /(?:处理单元|处理器|硬件加速(?:单元|器)|专用加速器|计算单元|执行单元|核心(?:计算)?部件|运算(?:与控制)?部件|控制部件|执行指令|算术运算|逻辑运算)/u
+            predicate: /(?:处理单元|处理器|硬件加速(?:单元|器)|专用加速器|专用集成电路|加速芯片|计算芯片|计算单元|执行单元|核心(?:计算)?部件|运算(?:与控制)?部件|控制部件|执行指令|算术运算|逻辑运算)/u
         },
         { identity: /(?:方法|算法|framework|method|algorithm)/iu, predicate: /(?:方法|算法|框架|优化流程|求解过程|设计流程)/u }
     ];
@@ -6391,7 +6436,7 @@ function finalizeLowCostBody(
     if (request.kind === "question"
         && /(?:五个|5\s*个?)交易日/u.test(profile.objective)
         && /长期风险/u.test(profile.objective)
-        && !/(?:极端行情|极端市场)[^；\n]{0,40}流动性|流动性[^；\n]{0,40}(?:极端行情|极端市场)/u.test(body)) {
+        && !/(?:极端行情|极端市场|极端事件)[^；\n]{0,40}流动性|流动性[^；\n]{0,40}(?:极端行情|极端市场|极端事件)/u.test(body)) {
         body = normalizeReadWeaveGeneratedBody(
             `${body.replace(/[；]+$/u, "")}；长期评估还必须覆盖更长周期、极端行情和流动性变化`
         );
@@ -6422,11 +6467,21 @@ function finalizeLowCostBody(
         }
     }
     body = restoreSelectedPairedMechanism(body, profile, evidenceContextText);
-    if (request.kind === "term") {
+    // A definition-shaped question and a term-definition request have the same
+    // subject contract.  The selected text may already contain the complete
+    // bilingual identity, while a model draft may shorten it to a bare acronym
+    // or vary punctuation.  Reuse the selected identity deterministically so a
+    // correct answer is neither rejected as off-topic nor saved with a damaged
+    // name.  This stays generic: no GPR, L-BFGS, or domain-specific exception is
+    // needed.
+    const questionSubjectIdentity = request.kind === "question" && isDefinitionShapedQuestion(profile)
+        ? parseFormattedReadWeaveTermIdentity(profile.subject?.normalize("NFKC").trim() ?? "")
+        : undefined;
+    if (request.kind === "term" || isDefinitionShapedQuestion(profile)) {
         body = ensureReadWeaveDefinitionSubjectOpening(
             body,
             profile.subject,
-            termIdentity,
+            termIdentity ?? questionSubjectIdentity,
             evidenceContextText
         );
     }
@@ -6814,7 +6869,7 @@ async function generateLowCostReadWeaveAnswer(
         const officialRole = /(?:教授|副教授|研究员|科学家|工程师|教师|院长|讲席|professor|researcher|scientist|engineer|faculty|director)/iu.test(evidenceText);
         return official && (PERSON_CURRENT_ROLE_EVIDENCE_PATTERN.test(evidenceText) || recentYear || officialRole);
     });
-    // The model-hosted web-search call can exceed the entire ¥0.01 answer
+    // The model-hosted web-search call can consume most of the answer budget
     // budget before drafting begins. Person profiles therefore use the
     // parallel free sources plus the configured zero-charge search provider.
     // If those sources cannot establish an independent profile, generation
@@ -7476,7 +7531,26 @@ export async function generateReadWeaveAnswer(
     }
 
     if (process.env.READWEAVE_ENABLE_LEGACY_REPLAY !== "1") {
-        return generateUnifiedReadWeaveAnswer(request, onProgress);
+        return generateUnifiedReadWeaveAnswer(request, onProgress, (body, objective, kind, termIdentity, verifiedNonExpandableArtifact) => {
+            const profile = buildReadWeaveTaskProfile(kind, objective);
+            const auditedSubject = kind === "term"
+                ? request.title.normalize("NFKC").trim().replace(/^[“”"']+|[“”"']+$/gu, "")
+                : profile.subject;
+            try {
+                return findReadWeaveQualityIssues(body, objective, {
+                    kind,
+                    subject: auditedSubject,
+                    knowledgeScope: profile.knowledgeScope,
+                    termIdentity,
+                    verifiedNonExpandableArtifact
+                });
+            } catch (error) {
+                // Optional model metadata is repairable output, not a reason to
+                // expose an English schema exception to the user or discard the
+                // otherwise valid draft before the automatic repair pass.
+                return [ `术语身份结构格式无效：${error instanceof Error ? error.message : "未知格式错误"}` ];
+            }
+        });
     }
 
     // Explicitly isolated migration replay only; production and normal tests never enter this branch.

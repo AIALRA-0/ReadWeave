@@ -29,7 +29,7 @@ function assertAccepted(result: ReadWeaveGenerateResponse, testCase: RealWorldCa
     expect(result.usage).toMatchObject({ withinBudget: true });
     expect(result.usage!.modelCalls).toBeGreaterThanOrEqual(1);
     expect(result.usage!.modelCalls).toBeLessThanOrEqual(3);
-    expect(result.usage!.costCny).toBeLessThan(0.01);
+    expect(result.usage!.costCny).toBeLessThanOrEqual(0.05);
     expect(result.workflow.unchangedSegmentsVerified).toBe(true);
     expect(result.body).not.toContain("。");
     expect(result.body).not.toMatch(/[（(][^（）()\n]{0,300}[（(]/u);

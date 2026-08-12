@@ -14,3 +14,17 @@ COPY dist/assets/ /usr/src/app/assets/
 COPY dist/public/ /usr/src/app/public/
 COPY dist/share-theme/ /usr/src/app/share-theme/
 COPY dist/pdfjs-viewer/ /usr/src/app/pdfjs-viewer/
+
+# Codex and hardened deployment hosts can create release artifacts with a
+# restrictive umask (files 0600, directories 0700). The upstream entrypoint
+# deliberately runs Trilium as UID 1000, so normalize only read/traverse bits
+# after COPY instead of relying on the host's artifact permissions.
+RUN chmod -R a+rX \
+    /usr/src/app/main.cjs \
+    /usr/src/app/docker_healthcheck.cjs \
+    /usr/src/app/meta.json \
+    /usr/src/app/ckeditor5-content.css \
+    /usr/src/app/assets \
+    /usr/src/app/public \
+    /usr/src/app/share-theme \
+    /usr/src/app/pdfjs-viewer

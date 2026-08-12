@@ -392,6 +392,14 @@ describe("ReadWeave AI quality harness", () => {
             "还有什么备选项？"
         )).toContain("回答末尾残留了前文已经说明过的名词片段");
         expect(findReadWeaveQualityIssues(
+            "L-BFGS 有限内存算法（Limited-Memory Algorithm）是一种优化方法\n\n属于拟牛顿法家族，通过历史梯度近似曲率信息",
+            "L-BFGS 是什么？"
+        )).toContain("回答存在缺少主语的段落，必须补出对象或代词后再说明关系");
+        expect(findReadWeaveQualityIssues(
+            "BFGS 拟牛顿算法（Broyden-Fletcher-Goldfarb-Shanno Algorithm）算法通过梯度信息更新搜索方向",
+            "BFGS 是什么？"
+        )).toContain("双语名称后重复了相同的中文类别词");
+        expect(findReadWeaveQualityIssues(
             "样品甲比样品乙高 3.8，差异显著且稳定；",
             "根据记录，两组读数有什么差异？"
         )).toContain("回答在没有统计检验或稳定性证据时声称结果显著或稳定");
@@ -655,7 +663,7 @@ describe("ReadWeave AI quality harness", () => {
             .toBe("加速器面向机器学习模型；");
     });
 
-    it("calculates the strict V4 Flash CNY budget from real usage fields", () => {
+    it("calculates the quality-first V4 Flash CNY ceiling from real usage fields", () => {
         expect(calculateReadWeaveUsageSummary("deepseek-v4-flash", {
             modelCalls: 1,
             inputTokens: 4_674,
@@ -670,10 +678,10 @@ describe("ReadWeave AI quality harness", () => {
         });
         expect(calculateReadWeaveUsageSummary("deepseek-v4-flash", {
             modelCalls: 1,
-            inputTokens: 8_000,
+            inputTokens: 50_000,
             cacheHitInputTokens: 0,
-            cacheMissInputTokens: 8_000,
-            outputTokens: 1_100
+            cacheMissInputTokens: 50_000,
+            outputTokens: 3_000
         }).withinBudget).toBe(false);
     });
 
@@ -747,5 +755,33 @@ describe("ReadWeave AI quality harness", () => {
         ], [
             { operation: "replace", segmentId: "seg-2", issue: "仅第二段有错", instruction: "修复第二段" }
         ])).toThrow("unrequested segment patch");
+    });
+
+    it("does not mistake a normal 例如 clause for a damaged connector", () => {
+        expect(findReadWeaveQualityIssues(
+            "辛普森悖论说明分组趋势与合并趋势可能相反；例如，两个治疗组的患者构成不同，合并权重会改变总体结果",
+            "为什么总体趋势可能与分组趋势相反？"
+        )).not.toContain("回答包含被删词后留下的连接词残片，或相邻语义单元缺少分隔符");
+    });
+
+    it("does not treat grouping parentheses inside LaTeX as nested prose parentheses", () => {
+        expect(findReadWeaveQualityIssues(
+            "阳性后的患病概率由贝叶斯公式计算；$P(D|+) = P(+|D)P(D) / (P(+|D)P(D) + P(+|\\neg D)P(\\neg D))$",
+            "检测阳性后的患病概率如何计算？"
+        )).not.toContain("答案包含嵌套括号，必须改成单层名称或分隔表达");
+    });
+
+    it("recognizes 位于 as a complete relation predicate", () => {
+        expect(findReadWeaveQualityIssues(
+            "中介层（Interposer）是半导体封装中的中间结构；位于多个晶粒与封装基板之间；它提供高密度横向互连和信号扇出",
+            "Interposer 是什么？"
+        )).not.toContain("回答包含只有并列对象而没有说明关系的残句");
+    });
+
+    it("recognizes 来自 and 描述 as complete relation predicates", () => {
+        expect(findReadWeaveQualityIssues(
+            "判断依据来自研究论文环节、电子设计自动化和芯片物理设计；这些词描述学术会议及其论文主题",
+            "这段话里的 DAC 指会议还是数模转换器？依据是什么？"
+        )).not.toContain("回答包含只有并列对象而没有说明关系的残句");
     });
 });

@@ -2,6 +2,7 @@ import { WebSocketMessage } from "@triliumnext/commons";
 
 import appContext from "../components/app_context.js";
 import type { EntityChange } from "../server_types.js";
+import { AUTHENTICATION_REQUIRED_EVENT } from "./authentication_recovery.js";
 import bundleService from "./bundle.js";
 import froca from "./froca.js";
 import frocaUpdater from "./froca_updater.js";
@@ -15,6 +16,7 @@ type MessageHandler = (message: WebSocketMessage) => void;
 let messageHandlers: MessageHandler[] = [];
 
 let ws: WebSocket;
+let reconnectEnabled = window.glob.loggedIn !== false;
 // In Electron desktop, messaging goes over Chromium IPC (no TCP socket,
 // no auth). The bridge is exposed by the preload script; when present we
 // skip the WebSocket entirely.
@@ -269,7 +271,20 @@ function connectWebSocket() {
     return ws;
 }
 
+function stopWebSocketForAuthentication(): void {
+    reconnectEnabled = false;
+    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+        ws.close(1000, "authentication required");
+    }
+}
+
+window.addEventListener(AUTHENTICATION_REQUIRED_EVENT, stopWebSocketForAuthentication);
+
 async function sendPing() {
+    if (!reconnectEnabled) {
+        return;
+    }
+
     if (ipcWs) {
         // IPC transport: no socket to disconnect, so we only need to nudge
         // the server for pending entity changes. No lost-connection toast
@@ -336,6 +351,9 @@ setTimeout(() => {
     }
 
     // Normal mode: use WebSocket
+    if (!reconnectEnabled) {
+        return;
+    }
     ws = connectWebSocket();
 
     lastPingTs = Date.now();

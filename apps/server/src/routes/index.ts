@@ -16,6 +16,14 @@ import { generateCsrfToken } from "./csrf_protection.js";
 type View = "desktop" | "mobile" | "print";
 
 export function bootstrap(req: Request, res: Response) {
+    // This payload decides whether the browser loads the login screen or the
+    // authenticated application. It must never be reused after a session is
+    // invalidated by logout, expiry, a server restart or session cleanup.
+    res.setHeader("Cache-Control", "private, no-store, no-cache, must-revalidate");
+    res.setHeader("Pragma", "no-cache");
+    res.setHeader("Expires", "0");
+    res.vary("Cookie");
+
     // csrf-csrf v4 binds CSRF tokens to the session ID via HMAC. With saveUninitialized: false,
     // a brand-new session is never persisted unless explicitly modified, so its cookie is never
     // sent to the browser — meaning every request gets a different ephemeral session ID, and

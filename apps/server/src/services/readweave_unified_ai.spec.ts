@@ -29,7 +29,13 @@ vi.mock("./readweave_settings.js", () => ({
     })
 }));
 
-import { formatReadWeaveBody, generateUnifiedReadWeaveAnswer } from "./readweave_unified_ai.js";
+import {
+    applyKnownTermCatalog,
+    calculateReadWeaveContextAnswer,
+    formatReadWeaveBody,
+    generateUnifiedReadWeaveAnswer
+} from "./readweave_unified_ai.js";
+import { findReadWeaveQualityIssues } from "./readweave_ai.js";
 
 function request(title: string, kind: ReadWeaveGenerateRequest["kind"] = "question"): ReadWeaveGenerateRequest {
     return {
@@ -48,7 +54,9 @@ function request(title: string, kind: ReadWeaveGenerateRequest["kind"] = "questi
 
 function installModel(
     searchQueries: string[] = [ "authoritative direct evidence" ],
-    generatedBody = "这是直接结论。它先说明对象本身，再解释必要机制与边界。"
+    generatedBody = "这是直接结论。它先说明对象本身，再解释必要机制与边界。",
+    normalizedQuestion = "规范化后的原问题？",
+    failVerifier = false
 ) {
     vi.stubGlobal("fetch", vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
         const payload = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
@@ -56,7 +64,7 @@ function installModel(
         let result: Record<string, unknown>;
         if (prompt.includes("统一问题分析器")) {
             result = {
-                normalizedQuestion: "规范化后的原问题？",
+                normalizedQuestion,
                 objective: "直接回答用户明确询问的命题",
                 answerRequirements: [ "给出直接结论", "解释必要机制与边界" ],
                 exclusions: [ "不复述文章已有句子" ],
@@ -64,6 +72,7 @@ function installModel(
                 requiresCurrentEvidence: true
             };
         } else if (prompt.includes("统一质量审计器")) {
+            if (failVerifier) throw new Error("temporary verifier outage");
             result = { valid: true, issues: [], unsupportedClaims: [] };
         } else {
             result = {
@@ -126,6 +135,223 @@ describe("ReadWeave unified evidence workflow", () => {
         const result = await generateUnifiedReadWeaveAnswer(request("该协议是什么形态？"));
 
         expect(result.body).toBe("该协议以逻辑协议形态存在，并使用既有互连的物理层完成设备发现、配置和中断处理");
+    });
+
+    it("normalizes a model-returned ASCII question mark without expanding the question", async () => {
+        installModel(
+            [ "authoritative direct evidence" ],
+            "该对象以逻辑协议形式存在",
+            "CXL.io 具体是什么形态?"
+        );
+
+        const result = await generateUnifiedReadWeaveAnswer(request("cxl.io  具体是什么形态?"));
+
+        expect(result.optimizedTitle).toBe("CXL.io 具体是什么形态？");
+    });
+
+    it("keeps the first known bilingual name and replaces later bare abbreviations with Chinese references", async () => {
+        installModel(
+            [ "authoritative direct evidence" ],
+            "NPU 神经网络处理单元（Neural Processing Unit）是一类专用硬件；NPU 负责执行神经网络计算"
+        );
+
+        const result = await generateUnifiedReadWeaveAnswer(request("NPU 是什么？"));
+
+        expect(result.body).toContain("NPU 神经网络处理单元（Neural Processing Unit）");
+        expect(result.body).toContain("神经网络处理单元负责执行神经网络计算");
+        expect(result.body.match(/\bNPU\b/gu)).toHaveLength(1);
+    });
+
+    it.each([
+        [
+            "为什么 PPA 优化通常不是三个指标同时无条件变好？",
+            "提高频率可能需要更强驱动和更多缓冲，从而增加功耗与面积；减小面积也可能造成拥塞并拉长关键路径",
+            [ "PPA 功耗、性能与面积（Power, Performance, and Area）", "彼此制约", "布线拥塞" ]
+        ],
+        [
+            "背面供电降低电压降后，为什么仍不能直接断言芯片性能一定提高？",
+            "背面供电缩短了部分供电路径并释放正面布线资源；材料只报告压降变化，没有给出工作频率、时序裕量或端到端性能测量",
+            [ "不等于芯片性能必然提高", "工作频率", "现有证据不足" ]
+        ],
+        [
+            "保持时间违例为什么不能简单通过降低时钟频率修复？",
+            "保持时间检查关注同一捕获时钟沿之后的短时间窗口；过快的数据路径会让新数据过早到达",
+            [ "同一捕获时钟沿", "不会改变", "增加数据路径延迟" ]
+        ]
+    ])("uses a reviewed local-evidence answer for unstable engineering boundaries", async (title, selected, expected) => {
+        installModel([ "authoritative direct evidence" ], "模型返回的不稳定草稿", title);
+        const input = request(title);
+        input.fragments = [ { id: "selected", role: "selected", text: selected } ];
+
+        const result = await generateUnifiedReadWeaveAnswer(input);
+
+        for (const phrase of expected) expect(result.body).toContain(phrase);
+        expect(result.body).not.toContain("模型返回的不稳定草稿");
+        expect(result.body).not.toContain("。");
+    });
+
+    it("falls back to the reviewed canonical name and selected fact for any known term", async () => {
+        installModel(
+            [ "authoritative direct evidence" ],
+            "",
+            "“GPU”是什么？"
+        );
+        const input = request("GPU", "term");
+        input.fragments = [ {
+            id: "selected",
+            role: "selected",
+            text: "GPU 通过大量并行执行单元处理图形与数据并行工作负载"
+        } ];
+
+        const result = await generateUnifiedReadWeaveAnswer(input);
+
+        expect(result.body).toContain("GPU 图形处理器（Graphics Processing Unit）");
+        expect(result.body).toContain("大量并行执行单元");
+        expect(result.body.match(/Graphics Processing Unit/gu)).toHaveLength(1);
+        expect(result.termIdentity).toEqual({
+            abbreviation: "GPU",
+            chineseName: "图形处理器",
+            englishName: "Graphics Processing Unit"
+        });
+    });
+
+    it("does not let a temporary verifier outage fail a known term", async () => {
+        installModel(
+            [ "authoritative direct evidence" ],
+            "GIS 地理信息系统（Geographic Information System）用于采集、管理、分析和展示带有空间位置的数据",
+            "“GIS”是什么？",
+            true
+        );
+        const input = request("GIS", "term");
+        input.fragments = [ {
+            id: "selected",
+            role: "selected",
+            text: "GIS 用于采集、管理、分析和展示带有空间位置的数据"
+        } ];
+
+        const result = await generateUnifiedReadWeaveAnswer(input);
+
+        expect(result.body).toContain("GIS 地理信息系统（Geographic Information System）");
+        expect(result.body).toContain("空间位置的数据");
+        expect(result.reviewIssues).toBeUndefined();
+    });
+
+    it("uses selected facts when verification of a multi-term comparison is temporarily unavailable", async () => {
+        const title = "CAD、CFD 与 FEA 在机械设计流程中分别做什么？";
+        installModel(
+            [ "authoritative direct evidence" ],
+            "模型草稿等待复核",
+            title,
+            true
+        );
+        const input = request(title);
+        input.fragments = [ {
+            id: "selected",
+            role: "selected",
+            text: "CAD 建立几何模型；CFD 分析流动和传热；FEA 计算应力与变形"
+        } ];
+
+        const result = await generateUnifiedReadWeaveAnswer(input);
+
+        expect(result.body).toContain("CAD 计算机辅助设计（Computer-Aided Design）");
+        expect(result.body).toContain("CFD 计算流体力学（Computational Fluid Dynamics）");
+        expect(result.body).toContain("FEA 有限元分析（Finite Element Analysis）");
+        expect(result.body).toContain("流动和传热");
+        expect(result.reviewIssues).toBeUndefined();
+    });
+
+    it.each([
+        [
+            "GPR 高斯过程回归（Gaussian Process Regression）",
+            "GPR 是一种用概率分布描述未知函数的回归方法；GPR 同时给出预测值与不确定性",
+            "GPR 高斯过程回归（Gaussian Process Regression）是一种用概率分布描述未知函数的回归方法"
+        ],
+        [
+            "L-BFGS 有限内存布罗伊登—弗莱彻—戈德法布—香农算法（Limited-Memory Broyden-Fletcher-Goldfarb-Shanno）",
+            "L-BFGS 是一种求解无约束优化问题的拟牛顿算法，它用有限数量的历史梯度与位置差分近似二阶信息，从而避免存储完整矩阵，L-BFGS 特别适合变量很多而内存有限的问题",
+            "L-BFGS 有限内存布罗伊登—弗莱彻—戈德法布—香农算法（Limited-Memory Broyden-Fletcher-Goldfarb-Shanno）是一种求解无约束优化问题的拟牛顿算法"
+        ]
+    ])("restores the selected bilingual identity for definition-shaped questions: %s", async (subject, draft, expectedOpening) => {
+        const title = `“${subject}”是什么？`;
+        installModel([ "authoritative direct evidence" ], draft, title);
+
+        const result = await generateUnifiedReadWeaveAnswer(request(title));
+
+        expect(result.audit?.questionContract.normalizedQuestion).toContain(subject.split(" ")[0]);
+        expect(result.body).toContain(expectedOpening);
+        expect(result.body.split(subject.split(" ")[0])).toHaveLength(2);
+        expect(result.body).not.toContain("。");
+        expect(result.reviewIssues).toBeUndefined();
+    });
+
+    it("normalizes an already parenthesized product without creating nested names", async () => {
+        installModel(
+            [ "authoritative direct evidence" ],
+            "代理客户端(Hiddify)需要单独启用；Hiddify 退出后再切换其他代理"
+        );
+
+        const result = await generateUnifiedReadWeaveAnswer(request("代理客户端如何切换？"));
+
+        expect(result.body).toContain("代理客户端（Hiddify）需要单独启用");
+        expect(result.body).toContain("代理客户端退出后再切换其他代理");
+        expect(result.body).not.toMatch(/[（(][^（）()\n]{0,100}[（(]/u);
+    });
+
+    it("restores an evidence-reviewed product name after generic acronym cleanup", async () => {
+        installModel(
+            [ "authoritative direct evidence" ],
+            "应急网络服务（WARP）用于主链路失效时维持连接；应急网络服务恢复后退出"
+        );
+
+        const result = await generateUnifiedReadWeaveAnswer(request("还有什么备用网络选项？"));
+
+        expect(result.body).toContain("应急网络服务（WARP）用于主链路失效时维持连接");
+        expect(result.body).toContain("应急网络服务恢复后退出");
+        expect(result.body.match(/\bWARP\b/gu)).toHaveLength(1);
+    });
+
+    it("normalizes UUID without mistaking identifier stability for statistical stability", async () => {
+        installModel(
+            [ "authoritative direct evidence" ],
+            "UUID 在对象生命周期内保持不变，而显示名称可能被修改；UUID 能避免重名造成的引用歧义",
+            "跨文章引用为什么应该按 UUID 而不是显示名称索引？"
+        );
+
+        const result = await generateUnifiedReadWeaveAnswer(
+            request("跨文章引用为什么应该按 UUID 而不是显示名称索引？"),
+            undefined,
+            (body) => findReadWeaveQualityIssues(body, "跨文章引用为什么应该按 UUID 而不是显示名称索引？")
+        );
+
+        expect(result.body).toContain("UUID 通用唯一标识符（Universally Unique Identifier）");
+        expect(result.body).not.toContain("统计");
+    });
+
+    it("does not pull unrelated document fragments into a selected-range answer", async () => {
+        const input = request("根据记录，两组读数有什么差异？");
+        input.fragments.push(...Array.from({ length: 20 }, (_, index) => ({
+            id: `noise-${index}`,
+            role: "document" as const,
+            text: `第 ${index + 1} 节只讨论无关的海洋环流与航海史料`
+        })));
+
+        const result = await generateUnifiedReadWeaveAnswer(input);
+
+        expect(result.context.fragmentIds).toEqual([ "selected", "nearby" ]);
+        expect(result.context.fragmentIds).not.toEqual(expect.arrayContaining([ "noise-0" ]));
+    });
+
+    it("uses the longest observed duration when calculating a threshold margin", async () => {
+        installModel(
+            [ "authoritative direct evidence" ],
+            "连接阈值为 9 秒，握手需要 5 至 6 秒，因此 9 秒阈值相比最长握手时间有 3 至 4 秒余量",
+            "9 秒阈值相比最长握手时间有多少余量？"
+        );
+
+        const result = await generateUnifiedReadWeaveAnswer(request("9 秒阈值相比最长握手时间有多少余量？"));
+
+        expect(result.body).toContain("$9 - 6 = 3$ 秒余量");
+        expect(result.body).not.toContain("3 至 4 秒余量");
     });
 
     it("runs all free evidence queries in parallel but permits only one paid fallback", async () => {
@@ -229,6 +455,26 @@ describe("ReadWeave unified evidence workflow", () => {
 
     it.each([
         {
+            title: "DAX 是什么？",
+            generated: "DAX 是一种高性能内存硬件",
+            mustContain: [
+                "DAX 直接访问（Direct Access）是操作系统内核提供的一种数据访问机制",
+                "不是一种内存硬件",
+                "绕过传统页面缓存",
+                "加载与存储指令"
+            ],
+            mustNotContain: [ "高性能内存硬件" ]
+        },
+        {
+            title: "NPU 是什么？",
+            generated: "NPU 是处理 AI 的芯片，也会和 CPU、GPU 配合",
+            mustContain: [
+                "NPU 神经网络处理单元（Neural Processing Unit）是一类专门加速神经网络计算的硬件处理单元",
+                "矩阵乘法、卷积和张量运算"
+            ],
+            mustNotContain: [ "AI", "CPU", "GPU" ]
+        },
+        {
             title: "HTTPS 如何保护通信？",
             generated: "HTTPS 使用 TLS/SSL 和 RSA 协商会话密钥，再用 MAC 算法检查完整性",
             mustContain: [
@@ -251,8 +497,30 @@ describe("ReadWeave unified evidence workflow", () => {
         {
             title: "Sung Kyu Lim 是谁？",
             generated: "Sung Kyu Lim 是某大学教授；他的研究聚焦 2.5D 和 3D 集成电路；他是 IEEE Fellow；他于 1994、1997、2000 年分别获得学士、硕士和博士学位",
-            mustContain: [ "南加州大学（University of Southern California）", "研究聚焦 EDA 电子设计自动化（Electronic Design Automation）", "领域级代表性贡献" ],
+            mustContain: [ "南加州大学（University of Southern California）", "研究属于 EDA 电子设计自动化（Electronic Design Automation）", "领域级工作" ],
             mustNotContain: [ "2.5D", "IEEE Fellow", "1994", "1997", "2000", "学士", "硕士", "博士" ]
+        },
+        {
+            title: "SRAM 与 DRAM 的存储方式和典型权衡有什么区别？",
+            generated: "SRAM 需要 6 个晶体管，DRAM 只需要 1 个晶体管，前者访问时间为 10 ns",
+            mustContain: [
+                "SRAM 静态随机存取存储器（Static Random-Access Memory）",
+                "DRAM 动态随机存取存储器（Dynamic Random-Access Memory）",
+                "双稳态存储单元",
+                "必须周期刷新"
+            ],
+            mustNotContain: [ "6 个晶体管", "10 ns" ]
+        },
+        {
+            title: "数据库声称支持 ACID，能否据此断言任何硬件故障都不会丢数据？",
+            generated: "ACID 能保证所有硬件故障都不丢数据",
+            mustContain: [
+                "不能",
+                "ACID 原子性、一致性、隔离性与持久性（Atomicity, Consistency, Isolation, and Durability）",
+                "日志与刷盘语义",
+                "备份频率和恢复目标"
+            ],
+            mustNotContain: [ "保证所有硬件故障都不丢数据" ]
         }
     ])("uses evidence-reviewed safety answers for $title", async scenario => {
         vi.stubGlobal("fetch", vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
@@ -285,7 +553,7 @@ describe("ReadWeave unified evidence workflow", () => {
         for (const expected of scenario.mustContain) expect(result.body).toContain(expected);
         for (const forbidden of scenario.mustNotContain) expect(result.body).not.toContain(forbidden);
         if (scenario.title === "Sung Kyu Lim 是谁？") {
-            expect(result.body).toContain("院长讲席教授（Dean's Professor）\n\n他的研究聚焦");
+            expect(result.body).toContain("院长讲席教授（Dean's Professor）\n\n他的研究属于");
             expect(result.body).not.toContain("Professor）他的研究");
         }
         expect(result.body).not.toContain("。");
@@ -322,6 +590,103 @@ describe("ReadWeave unified evidence workflow", () => {
 });
 
 describe("ReadWeave natural paragraph formatting", () => {
+    it.each([
+        [
+            "优化前后延迟降低了多少纳秒，降幅是多少？",
+            "优化前端到端延迟为 80 ns，优化后为 60 ns，测量口径相同",
+            [ "20 ns", "25%", "$80 - 60 = 20$" ]
+        ],
+        [
+            "新方案吞吐量是旧方案的多少倍，提高了百分之多少？",
+            "旧方案吞吐量为 200 GB/s，新方案为 300 GB/s，二者采用相同数据口径",
+            [ "1.5 倍", "50%", "$300 / 200 = 1.5$" ]
+        ],
+        [
+            "面积从 40 mm² 增加到 46 mm²，增加量与增幅分别是多少？",
+            "基线面积为 40 mm²，修改后面积为 46 mm²",
+            [ "6 mm²", "15%", "$46 - 40 = 6$" ]
+        ],
+        [
+            "消费者价格指数从 120 上升到 126，对应的涨幅是多少？",
+            "前期 CPI 为 120，本期 CPI 为 126，统计口径相同",
+            [ "6 个指数点", "5%" ]
+        ],
+        [
+            "治疗组和对照组的不良事件风险相差多少个百分点，风险比是多少？",
+            "治疗组 200 人中有 8 人发生不良事件；对照组 200 人中有 16 人发生不良事件",
+            [ "低 4 个百分点", "风险比为 0.5", "$8 / 200 = 4\\%$" ]
+        ],
+        [
+            "某病患病率为 1%，检测灵敏度为 90%，特异度为 95%；检测结果为阳性时真正患病的概率是多少？",
+            "患病率为 1%；灵敏度为 90%；特异度为 95%",
+            [ "约为 15.38%", "假阳性", "$(1\\% \\times 90\\%)" ]
+        ],
+        [
+            "一项投资从 100 万元增长到两年后的 121 万元，复合年增长率是多少？",
+            "期初为 100 万元，两年后为 121 万元",
+            [ "复合年增长率为 10%", "$(121 / 100)^{1/2}" ]
+        ],
+        [
+            "新闻称营收从 8000 万元增至 1 亿元，能否据此计算利润增长率？",
+            "报道只给出两年的营业收入，没有披露成本、费用、税项或两年的净利润",
+            [ "营收增长 25%", "不能计算利润增长率", "成本、费用和税项" ]
+        ]
+    ])("computes selected-data answers deterministically", (question, context, expected) => {
+        const answer = calculateReadWeaveContextAnswer(question, context);
+        expect(answer).toBeTruthy();
+        for (const item of expected) expect(answer).toContain(item);
+        expect(answer).not.toContain("。");
+    });
+
+    it.each([
+        [
+            "EDA 电子设计自动化（Electronic Design Automation）是工程领域",
+            "EDA 电子设计自动化（Electronic Design Automation）是工程领域"
+        ],
+        [
+            "CPU（Central Processing Unit）是执行通用程序指令的处理器",
+            "CPU 中央处理器（Central Processing Unit）是执行通用程序指令的处理器"
+        ],
+        [
+            "中央处理器（CPU）是执行通用程序指令的处理器",
+            "CPU 中央处理器（Central Processing Unit）是执行通用程序指令的处理器"
+        ],
+        [
+            "TLS（Transport Layer Security）（传输层安全协议）用于保护通信",
+            "TLS 传输层安全协议（Transport Layer Security）用于保护通信"
+        ],
+        [
+            "dB（Decibel）（分贝）以对数尺度表示比值",
+            "dB 分贝（Decibel）以对数尺度表示比值"
+        ]
+    ])("canonicalizes model-made bilingual name variants without duplication", (input, expected) => {
+        const normalized = applyKnownTermCatalog(formatReadWeaveBody(input));
+        expect(normalized).toBe(expected);
+        expect(applyKnownTermCatalog(normalized)).toBe(normalized);
+    });
+
+    it("does not mistake another term's parentheses for a later acronym expansion", () => {
+        const normalized = formatReadWeaveBody(applyKnownTermCatalog(
+            "SRAM 静态随机存取存储器（Static Random-Access Memory）与 DRAM 动态随机存取存储器（Dynamic Random-Access Memory）先比较；随后 SRAM 用于缓存，DRAM 用于主存"
+        ));
+
+        expect(normalized).toContain("随后静态随机存取存储器用于缓存，动态随机存取存储器用于主存");
+        expect(normalized.match(/\bSRAM\b/gu)).toHaveLength(1);
+        expect(normalized.match(/\bDRAM\b/gu)).toHaveLength(1);
+    });
+
+    it("splits long connected clauses into readable semantic paragraphs", () => {
+        const normalized = formatReadWeaveBody([
+            "不能仅凭事务属性断言任何硬件故障都不会丢数据，因为持久性只在系统声明的故障模型内成立，并不覆盖所有物理损坏或多个故障同时发生的情况",
+            "持久性通常依赖预写日志、刷盘和复制等机制，确保事务提交后遇到进程崩溃或断电时仍可恢复，并且恢复流程本身也需要经过验证",
+            "但磁盘物理损坏、内存错误或多个副本同时丢失仍可能超出这些机制的保护范围，单一机制不能提供绝对保证",
+            "因此还需要结合介质可靠性、复制策略、独立备份和恢复演练控制剩余风险，并明确每一层保护能够覆盖的故障边界"
+        ].join("；"));
+
+        expect(normalized.split(/\n{2,}/u).length).toBeGreaterThan(1);
+        expect(normalized.split(/\n{2,}/u).every(paragraph => paragraph.length <= 320)).toBe(true);
+    });
+
     const readabilityCases = [
         [ "NPU 是什么？", "NPU 神经网络处理单元（Neural Processing Unit）是专门加速神经网络计算的处理器。" ],
         [ "DAX 是什么？", "DAX 直接访问（Direct Access）让程序绕过传统块设备缓存路径，直接访问持久内存。" ],
@@ -389,6 +754,16 @@ describe("ReadWeave natural paragraph formatting", () => {
     it("normalizes common scientific notation and inequalities to LaTeX without rewriting existing formulas", () => {
         expect(formatReadWeaveBody("1 纳米等于 10^-9 米；16 nm 等于 16×10^-9 米；当 x>=3 时继续；已有 $C_{pk}$ 保持不变"))
             .toBe("1 纳米等于 $10^{-9}$ 米；16 nm 等于 $16 \\times 10^{-9}$ 米；当 $x \\geq 3$ 时继续；已有 $C_{pk}$ 保持不变");
+    });
+
+    it("preserves the ASCII colon in network endpoints while localizing prose punctuation", () => {
+        expect(formatReadWeaveBody("代理端口为 127.0.0.1:7892,状态:可用。"))
+            .toBe("代理端口为 127.0.0.1:7892，状态：可用");
+    });
+
+    it("moves mixed-language examples out of naming parentheses", () => {
+        expect(formatReadWeaveBody("持久性依赖刷盘策略（如 fsync 强制落盘）和可靠存储。"))
+            .toBe("持久性依赖刷盘策略，例如 fsync 强制落盘和可靠存储");
     });
 
     it("covers clearly different answer lengths instead of one repeated fixture shape", () => {

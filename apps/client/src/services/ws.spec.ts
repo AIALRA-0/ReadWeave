@@ -286,13 +286,16 @@ describe("logError / logInfo / throwError and outgoing transport", () => {
 let lastSocket: FakeSocket;
 
 class FakeSocket {
+    static CONNECTING = 0;
     static OPEN = 1;
     static CLOSED = 3;
     static CLOSING = 2;
+    CONNECTING = 0;
     OPEN = 1;
     CLOSED = 3;
     CLOSING = 2;
     readyState = 1;
+    closeCalls: Array<{ code?: number; reason?: string }> = [];
     onopen: (() => void) | null = null;
     onmessage: ((e: MessageEvent<string>) => void) | null = null;
     sent: string[] = [];
@@ -303,6 +306,10 @@ class FakeSocket {
     }
     send(data: string) {
         this.sent.push(data);
+    }
+    close(code?: number, reason?: string) {
+        this.closeCalls.push({ code, reason });
+        this.readyState = FakeSocket.CLOSED;
     }
 }
 
@@ -404,6 +411,34 @@ describe("WebSocket transport", () => {
         await loadWsFresh();
         vi.advanceTimersByTime(0);
         expect(lastSocket).toBeUndefined();
+    });
+
+    it("does not connect or retry while bootstrap says the user is logged out", async () => {
+        lastSocket = undefined as any;
+        (window as any).glob = { ...baseGlob, dbInitialized: true, loggedIn: false };
+
+        await loadWsFresh();
+        vi.advanceTimersByTime(60_000);
+
+        expect(lastSocket).toBeUndefined();
+        expect(toast.showPersistent).not.toHaveBeenCalledWith(
+            expect.objectContaining({ id: "lost-websocket-connection" })
+        );
+    });
+
+    it("closes an active socket and disables reconnect after authentication expires", async () => {
+        (window as any).glob = { ...baseGlob, dbInitialized: true, loggedIn: true };
+        await loadWsFresh();
+        vi.advanceTimersByTime(0);
+        const authenticatedSocket = lastSocket;
+
+        window.dispatchEvent(new CustomEvent("trilium:authentication-required"));
+        expect(authenticatedSocket.closeCalls).toEqual([
+            { code: 1000, reason: "authentication required" }
+        ]);
+
+        vi.advanceTimersByTime(60_000);
+        expect(lastSocket).toBe(authenticatedSocket);
     });
 
     it("listens for worker custom events in standalone mode (no socket)", async () => {

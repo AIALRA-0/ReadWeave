@@ -44,7 +44,7 @@ class FrocaImpl implements Froca {
     }
 
     async loadInitialTree() {
-        if (!glob.dbInitialized) return;
+        if (!glob.dbInitialized || glob.loggedIn === false) return;
 
         const resp = await server.get<SubtreeResponse>("tree");
         // clear the cache only directly before adding new content which is important for e.g., switching to protected session

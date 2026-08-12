@@ -9,7 +9,9 @@ class Options {
     private arr!: Record<string, OptionValue>;
 
     constructor() {
-        if (!isShare) {
+        // The login bundle imports shared UI components that eventually reach
+        // this singleton. Do not start protected startup traffic until login.
+        if (!isShare && window.glob.loggedIn !== false) {
             this.initializedPromise = server.get<Record<string, OptionValue>>("options").then((data) => this.load(data));
         } else {
             this.initializedPromise = Promise.resolve();

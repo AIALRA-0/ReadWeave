@@ -23,6 +23,9 @@ vi.mock("./i18n.js", () => ({
     t: (key: string, opts?: Record<string, unknown>) => (opts ? `${key}:${JSON.stringify(opts)}` : key)
 }));
 
+const authenticationRecoveryMock = vi.hoisted(() => ({ recoverExpiredAuthentication: vi.fn() }));
+vi.mock("./authentication_recovery.js", () => authenticationRecoveryMock);
+
 // Avoid pulling in app_context (toast → app_context → options → server) on the
 // dynamic import inside reportError.
 const toastMock = {
@@ -204,6 +207,28 @@ describe("ajax error handling", () => {
         };
         await expect(server.postWithSilentInternalServerError("url", {})).rejects.toBeDefined();
         expect((window as any).logError).not.toHaveBeenCalled();
+    });
+
+    it("recovers once from an unauthenticated API response without a generic error toast", async () => {
+        (window as any).$.ajax = (opts: AjaxOptions) => {
+            opts.error({ status: 401, responseText: "Logged in session not found" });
+        };
+
+        await expect(server.get("tree")).rejects.toBe("Logged in session not found");
+        expect(authenticationRecoveryMock.recoverExpiredAuthentication).toHaveBeenCalledTimes(1);
+        expect(toastMock.showErrorTitleAndMessage).not.toHaveBeenCalled();
+        expect((window as any).logError).not.toHaveBeenCalled();
+    });
+
+    it("does not restart authentication recovery for a client already on the login screen", async () => {
+        (window as any).glob.loggedIn = false;
+        (window as any).$.ajax = (opts: AjaxOptions) => {
+            opts.error({ status: 401, responseText: "Logged in session not found" });
+        };
+
+        await expect(server.get("options")).rejects.toBeDefined();
+        expect(authenticationRecoveryMock.recoverExpiredAuthentication).not.toHaveBeenCalled();
+        (window as any).glob.loggedIn = true;
     });
 
     it("reports validation errors (400) and still rejects when reportError throws", async () => {

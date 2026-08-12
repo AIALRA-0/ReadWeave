@@ -123,6 +123,9 @@ export default defineConfig(() => ({
     },
     test: {
         environment: "happy-dom",
+        css: {
+            include: [ /ReadWeavePanel\.css/ ]
+        },
         setupFiles: [
             "./src/test/setup.ts"
         ],

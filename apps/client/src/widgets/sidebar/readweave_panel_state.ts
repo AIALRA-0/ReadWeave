@@ -84,6 +84,32 @@ export function readWeaveCompactStatusText(value: string): string {
 }
 
 /**
+ * Render simple legacy math as LaTeX without rewriting stored answers. Existing
+ * LaTeX, URLs and inline code are opaque so repeated rendering is idempotent.
+ */
+export function normalizeReadWeaveReadableMath(value: string): string {
+    return value.split(/(\$\$[\s\S]*?\$\$|\$(?!\$)[^$\n]+?\$|https?:\/\/[^\s]+|`[^`\n]*`)/u).map((part, index) => {
+        if (index % 2 === 1) return part;
+        return part
+            .replace(
+                /(?<![\p{L}\p{N}$])(\d+(?:\.\d+)?)\s*[×x]\s*10\s*\^\s*([+-]?\d+)(?![\p{L}\p{N}])/gu,
+                (_match, coefficient: string, exponent: string) => `$${coefficient} \\times 10^{${exponent}}$`
+            )
+            .replace(
+                /(?<![\p{L}\p{N}$])10\s*\^\s*([+-]?\d+)(?![\p{L}\p{N}])/gu,
+                (_match, exponent: string) => `$10^{${exponent}}$`
+            )
+            .replace(
+                /(?<![\p{L}\p{N}$])([A-Za-z])\s*(>=|<=|!=)\s*(-?\d+(?:\.\d+)?)(?![\p{L}\p{N}])/gu,
+                (_match, variable: string, operator: string, operand: string) => {
+                    const latexOperator = operator === ">=" ? "\\geq" : operator === "<=" ? "\\leq" : "\\neq";
+                    return `$${variable} ${latexOperator} ${operand}$`;
+                }
+            );
+    }).join("");
+}
+
+/**
  * Merge one asynchronously returned job without allowing an older response
  * (for example a delayed "viewed" acknowledgement) to replace a newer local
  * queued/running state.

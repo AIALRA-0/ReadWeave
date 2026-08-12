@@ -84,7 +84,11 @@ async function createTextNote(app: App, title: string, body: string) {
     // becomes active. Wait for the title first so we never fill the stale editor.
     await expect(app.currentNoteSplitTitle).toHaveValue(title, { timeout: 15_000 });
     const editor = app.currentNoteSplit.locator(".note-detail-editable-text-editor");
-    await expect(editor.locator("p").first()).toBeVisible({ timeout: 15_000 });
+    // A newly created empty CKEditor is already ready for input before it has
+    // materialized its first paragraph. Waiting for a child <p> makes the test
+    // depend on an implementation detail and intermittently times out on cold
+    // starts even though the editable root is active and usable.
+    await expect(editor).toBeVisible({ timeout: 30_000 });
     const firstBodyLine = body.split("\n", 1)[0];
     await expect(async () => {
         await editor.focus();
@@ -104,7 +108,13 @@ function uniqueTitle(prefix: string): string {
 }
 
 async function gotoReadWeave(app: App, page: Page) {
-    await app.goto({ preserveTabs: true });
+    // A cold production bundle can finish network loading just before the note
+    // tree mounts. App.goto's shared five-second assertion is intentionally
+    // strict, so retry the complete navigation instead of sleeping or letting
+    // the first test fail while later tests benefit from the warmed client.
+    await expect(async () => {
+        await app.goto({ preserveTabs: true });
+    }).toPass({ timeout: 45_000 });
     // The shared upstream fixture can refer to a tab that no longer exists. Trilium reports
     // that once during startup; wait for the transient toast before clicking the tab beneath it.
     await expect(page.locator("#toast-container .toast:visible")).toHaveCount(0, { timeout: 15_000 });
@@ -527,6 +537,7 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
 });
 
 test("ReadWeave keeps launcher and right-panel headers separated across desktop viewport sizes", async ({ page, context }) => {
+    test.setTimeout(90_000);
     const app = new App(page, context);
     await gotoReadWeave(app, page);
     await createTextNote(app, uniqueTitle("ReadWeave E2E · Responsive layout"), "用于验证不同窗口尺寸下的侧栏布局。");
@@ -742,11 +753,9 @@ test("ReadWeave keeps immediate exact-range generation state across slow save, s
     const source = "慢网络下的精确锚点必须立即显示虚线与黄色生成状态，并且不能被后台刷新擦除。";
     const editor = await createTextNote(app, uniqueTitle("ReadWeave E2E · Optimistic generation"), source);
     const paragraph = editor.locator("p", { hasText: source });
-    const panel = await openSelectionEditor(page, app, paragraph, "精确锚点", "Ask");
-    const anchor = paragraph.locator("[data-readweave-range-anchor-id]", { hasText: "精确锚点" });
-    const question = panel.getByRole("textbox", { name: "Question", exact: true });
-    const generate = panel.getByTestId("readweave-generate");
-    await question.fill("慢网络下精确锚点的生成状态应如何反馈？");
+    await selectTextRange(page, paragraph, "精确锚点");
+    const liveSelection = app.sidebar.locator("#readweave-panel .readweave-selection");
+    await expect(liveSelection).toContainText("精确锚点");
 
     let releaseSave!: () => void;
     const saveGate = new Promise<void>(resolve => { releaseSave = resolve; });
@@ -781,6 +790,16 @@ test("ReadWeave keeps immediate exact-range generation state across slow save, s
         const response = await route.fetch();
         await route.fulfill({ response });
     });
+
+    // Install the slow-save route before finalizing the pending selection.
+    // Finalization mutates the CKEditor model and its scheduled autosave may
+    // otherwise finish before this test begins observing network requests.
+    await page.locator(".readweave-selection-actions").getByRole("button", { name: "Ask", exact: true }).click();
+    const panel = app.sidebar.locator("#readweave-panel");
+    const anchor = paragraph.locator("[data-readweave-range-anchor-id]", { hasText: "精确锚点" });
+    const question = panel.getByRole("textbox", { name: "Question", exact: true });
+    const generate = panel.getByTestId("readweave-generate");
+    await question.fill("慢网络下精确锚点的生成状态应如何反馈？");
 
     try {
         await generate.click();
@@ -1267,7 +1286,10 @@ test("ReadWeave keeps a new question unread on a saved term fragment until the u
     await questionPanel.getByRole("textbox", { name: "Question", exact: true }).fill("ORCID 有什么作用？");
     await questionPanel.getByRole("button", { name: "Generate answer", exact: true }).click();
     await expect(termAnchor).toHaveClass(/readweave-anchor-draft/);
-    await expect(termAnchor).toHaveClass(/readweave-anchor-status-running/);
+    // A mocked background job can finish before Playwright's first polling
+    // frame. Both states are valid here: yellow while work is in progress, or
+    // green immediately after an already-completed unread result.
+    await expect(termAnchor).toHaveClass(/readweave-anchor-status-(?:running|unread)/);
     await expect(questionPanel.getByTestId("readweave-answer")).toContainText(/\S/u);
     await expect(termAnchor).toHaveClass(/readweave-anchor-draft/);
     await expect(termAnchor).toHaveClass(/readweave-anchor-status-unread/);
@@ -1449,9 +1471,9 @@ test("ReadWeave handles diverse source articles and keeps cross-article term ref
     await panel.getByTestId("readweave-optimize-question").check();
     await panel.getByRole("button", { name: "Generate answer", exact: true }).click();
     await expect(question).toHaveValue("世界记忆计划是什么，它的三个目标各自有什么用途，彼此是什么关系？");
-    const structuredAnswer = await answer.inputValue();
+    const structuredAnswer = await answer.innerText();
     expect(structuredAnswer).not.toContain("。");
-    const structuredParagraphs = structuredAnswer.split(/\n\n/);
+    const structuredParagraphs = (await answer.locator("p").allInnerTexts()).map(paragraph => paragraph.trim()).filter(Boolean);
     expect(structuredParagraphs.length).toBeGreaterThanOrEqual(2);
     expect(structuredParagraphs.length).toBeLessThanOrEqual(5);
     expect(structuredParagraphs.every(paragraph => paragraph.length <= 320)).toBe(true);

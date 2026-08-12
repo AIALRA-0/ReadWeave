@@ -7,7 +7,10 @@ import type { ActionKeyboardShortcut } from "@triliumnext/commons";
 
 const keyboardActionRepo: Record<string, ActionKeyboardShortcut> = {};
 
-const keyboardActionsLoaded = server.get<ActionKeyboardShortcut[]>("keyboard-actions").then((actions) => {
+const keyboardActionsRequest = window.glob.loggedIn === false
+    ? Promise.resolve([] as ActionKeyboardShortcut[])
+    : server.get<ActionKeyboardShortcut[]>("keyboard-actions");
+const keyboardActionsLoaded = keyboardActionsRequest.then((actions) => {
     actions = actions.filter((a) => !!a.actionName); // filter out separators
 
     for (const action of actions) {

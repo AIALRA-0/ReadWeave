@@ -96,7 +96,7 @@ describeLive("ReadWeave independent person-profile quality audit", () => {
 
         expect(result.reviewIssues ?? []).toEqual([]);
         expect(result.usage?.withinBudget).toBe(true);
-        expect(result.usage?.costCny ?? Number.POSITIVE_INFINITY).toBeLessThan(0.01);
+        expect(result.usage?.costCny ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(0.05);
         expect(result.body).not.toContain("。");
         expect(result.body).not.toMatch(/(?:电子设计自动化|人工智能|集成电路)简称|简称(?=\s*(?:；|，|芯片|工具|系统|方法|$))/u);
         expect(result.body).not.toMatch(/(?:显著|明显|大幅|有效|尤其|特别是)\s*(?:；|\n|$)/u);

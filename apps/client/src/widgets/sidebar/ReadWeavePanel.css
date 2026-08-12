@@ -274,7 +274,7 @@
 
 .readweave-evidence-sources ol {
     margin: 0.5rem 0 0;
-    padding-left: 1.4rem;
+    padding-inline-start: 1.4rem;
 }
 
 .readweave-evidence-claims {

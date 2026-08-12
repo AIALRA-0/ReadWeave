@@ -37,6 +37,8 @@ describe("Auth", () => {
             const response = await supertest(app).get("/bootstrap").expect(200);
             expect(response.body.loggedIn).toBe(false);
             expect(response.body.login?.totpEnabled).toBe(true);
+            expect(response.headers["cache-control"]).toContain("no-store");
+            expect(response.headers.vary).toContain("Cookie");
         });
 
         it("bootstrap login payload doesn't ask for TOTP when disabled", async () => {
@@ -81,12 +83,17 @@ describe("Auth", () => {
                 headers: {} as Record<string, string>,
                 body: undefined as unknown,
                 redirectedTo: undefined as string | undefined,
+                clearedCookies: [] as Array<{ name: string; options: unknown }>,
                 setHeader(k: string, v: string) {
                     res.headers[k] = v;
                     return res;
                 },
                 status(c: number) {
                     res.statusCode = c;
+                    return res;
+                },
+                clearCookie(name: string, options: unknown) {
+                    res.clearedCookies.push({ name, options });
                     return res;
                 },
                 json(o: unknown) {
@@ -279,9 +286,13 @@ describe("Auth", () => {
             expect(next2).toHaveBeenCalled();
 
             // not logged in -> reject
+            const destroy = vi.fn((callback: (error?: Error) => void) => callback());
             const res = makeRes();
-            auth.checkApiAuth(makeReq({ session: { loggedIn: false } }), res as never, vi.fn());
+            auth.checkApiAuth(makeReq({ session: { loggedIn: false, destroy } }), res as never, vi.fn());
             expect(res.statusCode).toBe(401);
+            expect(res.headers["X-Trilium-Auth-State"]).toBe("logged-out");
+            expect(res.clearedCookies).toContainEqual({ name: "trilium.sid", options: { path: "/" } });
+            expect(destroy).toHaveBeenCalledTimes(1);
 
             // logged in -> next
             const next3 = vi.fn();

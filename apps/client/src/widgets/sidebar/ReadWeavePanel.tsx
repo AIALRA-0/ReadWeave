@@ -55,6 +55,7 @@ import {
     isReadWeaveGenerationDisabled,
     isReadWeaveReviewSaveAllowed,
     mergeReadWeaveGenerationJobSnapshot,
+    normalizeReadWeaveReadableMath,
     normalizeReadWeaveTermIdentityForReview,
     readWeaveCompactStatusText,
     readWeaveGenerationProgressForDisplay,
@@ -1808,21 +1809,6 @@ function GenerationMonitor({ job, pinned, onTogglePinned }: { job: ReadWeaveGene
     );
 }
 
-function normalizeReadableMathMarkup(value: string): string {
-    return value.split(/(\$\$[\s\S]*?\$\$|\$(?!\$)[^$\n]+?\$)/u).map((part, index) => {
-        if (index % 2 === 1) return part;
-        return part
-            .replace(
-                /(?<![\p{L}\p{N}$])(\d+(?:\.\d+)?)\s*[×x]\s*10\s*\^\s*([+-]?\d+)(?![\p{L}\p{N}])/gu,
-                (_match, coefficient: string, exponent: string) => `$${coefficient} \\times 10^{${exponent}}$`
-            )
-            .replace(
-                /(?<![\p{L}\p{N}$])10\s*\^\s*([+-]?\d+)(?![\p{L}\p{N}])/gu,
-                (_match, exponent: string) => `$10^{${exponent}}$`
-            );
-    }).join("");
-}
-
 function ReadableBody({
     body,
     className,
@@ -1837,7 +1823,7 @@ function ReadableBody({
     testId?: string;
 }) {
     const contentRef = useRef<HTMLDivElement>(null);
-    const displayBody = normalizeReadableMathMarkup(body);
+    const displayBody = normalizeReadWeaveReadableMath(body);
     const paragraphs = displayBody.split(/\n{2,}/u).map(paragraph => paragraph.trim()).filter(Boolean);
 
     useLayoutEffect(() => {

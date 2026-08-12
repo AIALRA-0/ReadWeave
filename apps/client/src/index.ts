@@ -1,4 +1,5 @@
 import { createFontStylesheetLink } from "./services/font";
+import { loadFreshBootstrap } from "./services/authentication_recovery";
 import { buildThemeStylesheetRefs, createStylesheetLink, getThemeStyle, initThemeChangeNotifier, StylesheetRef } from "./services/theme";
 
 async function bootstrap() {
@@ -34,8 +35,7 @@ async function initJQuery() {
 }
 
 async function setupGlob() {
-    const response = await fetch(`./bootstrap${window.location.search}`);
-    const json = await response.json();
+    const json = await loadFreshBootstrap<typeof window.glob>();
 
     window.global = globalThis; /* fixes https://github.com/webpack/webpack/issues/10035 */
     window.glob = {
@@ -89,8 +89,11 @@ function loadStylesheets() {
 
     const stylesheetsPath = `${assetPath}/stylesheets`;
     appendStylesheet({ href: `${stylesheetsPath}/ckeditor-theme.css` });
-    // Marked so it can be swapped when font options change without reloading.
-    document.head.appendChild(createFontStylesheetLink());
+    // /api/fonts is protected. The login screen must not start an authenticated
+    // request loop before the user has signed in.
+    if (window.glob.loggedIn !== false) {
+        document.head.appendChild(createFontStylesheetLink());
+    }
     // The light theme is always loaded as the baseline and acts as the anchor for live theme swapping.
     appendStylesheet({ href: `${stylesheetsPath}/theme-light.css` }, { base: true });
     for (const ref of buildThemeStylesheetRefs(theme, customThemeCssUrl, themeBase)) {
