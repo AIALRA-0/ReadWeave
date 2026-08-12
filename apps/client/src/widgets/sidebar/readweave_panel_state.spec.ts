@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
     calloutAfterKindChange,
     createReadWeaveReviewIssueBaseline,
+    hasActiveReadWeaveGenerationJobs,
     isReadWeaveGenerationDisabled,
     isReadWeaveReviewSaveAllowed,
     mergeReadWeaveGenerationJobSnapshot,
@@ -73,6 +74,21 @@ describe("ReadWeave panel state", () => {
         expect(isReadWeaveGenerationDisabled({ ...base, jobStatus: "queued" })).toBe(true);
         expect(isReadWeaveGenerationDisabled({ ...base, jobStatus: "running" })).toBe(true);
         expect(isReadWeaveGenerationDisabled({ ...base, hasTitle: false })).toBe(true);
+    });
+
+    it("polls the full generation history only while a job is active", () => {
+        expect(hasActiveReadWeaveGenerationJobs([])).toBe(false);
+        expect(hasActiveReadWeaveGenerationJobs([
+            generationJob({ status: "complete" }),
+            generationJob({ jobId: "job-2", status: "failed" })
+        ])).toBe(false);
+        expect(hasActiveReadWeaveGenerationJobs([
+            generationJob({ status: "complete" }),
+            generationJob({ jobId: "job-2", status: "queued" })
+        ])).toBe(true);
+        expect(hasActiveReadWeaveGenerationJobs([
+            generationJob({ status: "running" })
+        ])).toBe(true);
     });
 
     it("keeps exact-range emphasis only while a status indicator is present", () => {

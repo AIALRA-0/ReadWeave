@@ -116,7 +116,11 @@ describe("ReadWeave persisted generation jobs", () => {
             kind: "question",
             calloutType: "note"
         });
-        expect(listReadWeaveGenerationJobs(request.articleId)).toHaveLength(1);
+        const listedJobs = listReadWeaveGenerationJobs(request.articleId);
+        expect(listedJobs).toHaveLength(1);
+        expect(listedJobs[0].progress).toEqual([]);
+        expect(listedJobs[0].result?.body).toBe(completed.result?.body);
+        expect(getReadWeaveGenerationJob(started.jobId).progress.length).toBeGreaterThanOrEqual(3);
 
         const firstPage = getReadWeaveGenerationEvents(started.jobId, 0);
         expect(firstPage.events.length).toBeGreaterThanOrEqual(3);

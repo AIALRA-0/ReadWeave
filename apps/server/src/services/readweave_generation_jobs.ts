@@ -546,7 +546,11 @@ export function listReadWeaveGenerationJobs(articleId: string): ReadWeaveGenerat
         LIMIT 200
     `, [ articleId ]);
     rows.filter(row => row.status === "queued").forEach(row => runJob(row.jobId));
-    return rows.map(row => publicJob(rowFor(row.jobId)));
+    // The article-level list is loaded on every note navigation and periodically
+    // while any background job is active. Progress events are available from the
+    // incremental per-job endpoint, so including every persisted event here makes
+    // old articles increasingly expensive to open without adding UI state.
+    return rows.map(row => publicJob(row, false));
 }
 
 export function getReadWeaveGenerationEvents(jobId: string, afterSequence = 0) {

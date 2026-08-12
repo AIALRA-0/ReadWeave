@@ -67,6 +67,17 @@ export function isReadWeaveGenerationDisabled(input: {
 }
 
 /**
+ * The article-level jobs endpoint includes persisted answers and progress logs,
+ * so polling it while every job is terminal wastes bandwidth.  Keep polling
+ * only while a background job can still change without another user action.
+ */
+export function hasActiveReadWeaveGenerationJobs(
+    jobs: Pick<ReadWeaveGenerationJob, "status">[]
+): boolean {
+    return jobs.some(job => job.status === "queued" || job.status === "running");
+}
+
+/**
  * Only a job with a visible status indicator keeps its source range emphasized.
  * A completed, already-viewed draft remains recoverable in the side panel, but
  * its underline goes back to the normal hover/lock interaction.

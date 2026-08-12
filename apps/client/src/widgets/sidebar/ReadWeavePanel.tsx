@@ -1,23 +1,23 @@
 import "./ReadWeavePanel.css";
 
 import { type CKTextEditor, updateReadWeaveAnchorIdOnRange } from "@triliumnext/ckeditor5";
-import { KATEX_MACROS } from "@triliumnext/commons";
-import type {
-    ReadWeaveAnchorSummary,
-    ReadWeaveAnchorType,
-    ReadWeaveCalloutType,
-    ReadWeaveCandidate,
-    ReadWeaveContextFragment,
-    ReadWeaveDeleteResult,
-    ReadWeaveEditMode,
-    ReadWeaveGenerateResponse,
-    ReadWeaveGenerationJob,
-    ReadWeaveGenerationProgress,
-    ReadWeaveImpact,
-    ReadWeaveObject,
-    ReadWeaveObjectKind,
-    ReadWeaveResolvedEntry,
-    ReadWeaveTermIdentity
+import {
+    KATEX_MACROS,
+    type ReadWeaveAnchorSummary,
+    type ReadWeaveAnchorType,
+    type ReadWeaveCalloutType,
+    type ReadWeaveCandidate,
+    type ReadWeaveContextFragment,
+    type ReadWeaveDeleteResult,
+    type ReadWeaveEditMode,
+    type ReadWeaveGenerateResponse,
+    type ReadWeaveGenerationJob,
+    type ReadWeaveGenerationProgress,
+    type ReadWeaveImpact,
+    type ReadWeaveObject,
+    type ReadWeaveObjectKind,
+    type ReadWeaveResolvedEntry,
+    type ReadWeaveTermIdentity
 } from "@triliumnext/commons";
 import type { JSX } from "preact";
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
@@ -52,6 +52,7 @@ import {
     calloutAfterKindChange,
     createReadWeaveReviewIssueBaseline,
     defaultReadWeaveCallout,
+    hasActiveReadWeaveGenerationJobs,
     isReadWeaveGenerationDisabled,
     isReadWeaveReviewSaveAllowed,
     mergeReadWeaveGenerationJobSnapshot,
@@ -263,6 +264,7 @@ export default function ReadWeavePanel() {
     const draftEditedAfterFailedReview = reviewIssues.length > 0 && reviewSaveAllowed;
     const saveReady = !!selection && !selection.pending && !definitionExists && !!currentTitle && !!body.trim() && !!currentSourceExcerpt && reviewSaveAllowed;
     const generationBusy = displayedJob?.status === "queued" || displayedJob?.status === "running";
+    const hasActiveGenerationJobs = hasActiveReadWeaveGenerationJobs(generationJobs);
     const editorLocked = busy || generationBusy;
     const generationDisabled = selection?.pending
         ? busy || !noteId || !selection.excerpt.trim()
@@ -608,12 +610,12 @@ export default function ReadWeavePanel() {
     }, [noteId, articleNoteId]);
 
     useEffect(() => {
-        if (!articleNoteId) return;
+        if (!articleNoteId || !hasActiveGenerationJobs) return;
         const interval = window.setInterval(() => {
             refreshGenerationJobs(articleNoteId).catch(() => undefined);
         }, 2_000);
         return () => window.clearInterval(interval);
-    }, [articleNoteId]);
+    }, [articleNoteId, hasActiveGenerationJobs]);
 
     useEffect(() => {
         if (!selection || selection.pending || generationJobId) return;
