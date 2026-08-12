@@ -15,6 +15,7 @@ import {
     generateReadWeaveAnswer,
     mergeReadWeaveTermIdentity
 } from "./readweave_ai.js";
+import { NonRetryableReadWeaveError } from "./readweave_errors.js";
 import { editReadWeaveLink, saveReadWeaveEntry } from "./readweave_repository.js";
 import sql from "./sql.js";
 
@@ -403,6 +404,13 @@ function runJob(jobId: string) {
                 };
             } catch (error) {
                 latestError = error;
+                // A second identical run cannot turn bibliographic metadata
+                // into technical evidence, lower a completed run's cost or
+                // resolve ambiguity that is explicitly present in the note.
+                // Surface the actionable cause instead of spending up to five
+                // complete workflows and finally replacing it with a generic
+                // retry-exhausted message.
+                if (error instanceof NonRetryableReadWeaveError) throw error;
                 if (attempt >= MAX_BACKGROUND_GENERATION_ATTEMPTS) break;
                 const diagnostic = error instanceof Error ? error.message.trim() : "";
                 appendProgress(jobId, {

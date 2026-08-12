@@ -29,13 +29,13 @@ vi.mock("./readweave_settings.js", () => ({
     })
 }));
 
+import { findReadWeaveQualityIssues } from "./readweave_ai.js";
 import {
     applyKnownTermCatalog,
     calculateReadWeaveContextAnswer,
     formatReadWeaveBody,
     generateUnifiedReadWeaveAnswer
 } from "./readweave_unified_ai.js";
-import { findReadWeaveQualityIssues } from "./readweave_ai.js";
 
 function request(title: string, kind: ReadWeaveGenerateRequest["kind"] = "question"): ReadWeaveGenerateRequest {
     return {
@@ -413,6 +413,117 @@ describe("ReadWeave unified evidence workflow", () => {
 
         await expect(generateUnifiedReadWeaveAnswer(request("这个对象是谁？")))
             .rejects.toThrow("未达到高置信度");
+    });
+
+    it("does not treat title-and-DOI metadata as technical evidence", async () => {
+        const metadataOnlyResult = {
+            used: true,
+            query: "Gaussian process regression definition",
+            sources: [ {
+                provider: "Crossref",
+                title: "Inference and computation for Gaussian process regression model",
+                url: "https://doi.org/10.1201/example",
+                snippet: "Chapman and Hall/CRC; DOI 10.1201/example",
+                publishedAt: "2026",
+                score: 100
+            } ],
+            providers: [ "Crossref" ],
+            memo: "",
+            warnings: [],
+            elapsedMs: 1,
+            cacheHit: false,
+            searchCostCny: 0
+        };
+        searchMock.mockResolvedValueOnce(metadataOnlyResult).mockResolvedValueOnce(metadataOnlyResult);
+        vi.stubGlobal("fetch", vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+            const payload = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+            const prompt = payload.messages.map(message => message.content).join("\n");
+            const result = prompt.includes("统一问题分析器")
+                ? {
+                    normalizedQuestion: "GPR 是什么？",
+                    objective: "解释高斯过程回归的基本原理",
+                    answerRequirements: [ "说明高斯过程和核函数" ],
+                    exclusions: [],
+                    searchQueries: [ "Gaussian process regression definition" ],
+                    requiresCurrentEvidence: false
+                }
+                : prompt.includes("统一质量审计器")
+                    ? { valid: true, issues: [], unsupportedClaims: [] }
+                    : {
+                        body: "高斯过程由均值函数和核函数完全刻画",
+                        claims: [ {
+                            claimId: "C1",
+                            text: "高斯过程由均值函数和核函数完全刻画",
+                            sourceIds: [ "S1" ],
+                            confidence: "high"
+                        } ],
+                        unresolvedClaims: []
+                    };
+            return Response.json({
+                model: "deepseek-v4-flash",
+                choices: [ { message: { content: JSON.stringify(result) } } ],
+                usage: { prompt_tokens: 300, completion_tokens: 80, total_tokens: 380 }
+            });
+        }));
+
+        await expect(generateUnifiedReadWeaveAnswer(request("GPR 是什么？")))
+            .rejects.toThrow("只有题名、DOI 或短标题");
+    });
+
+    it("allows title-and-DOI metadata to support an exact bibliographic answer", async () => {
+        const metadataOnlyResult = {
+            used: true,
+            query: "Inference and computation for Gaussian process regression model DOI",
+            sources: [ {
+                provider: "Crossref",
+                title: "Inference and computation for Gaussian process regression model",
+                url: "https://doi.org/10.1201/example",
+                snippet: "Chapman and Hall/CRC; DOI 10.1201/example",
+                publishedAt: "2026",
+                score: 100
+            } ],
+            providers: [ "Crossref" ],
+            memo: "",
+            warnings: [],
+            elapsedMs: 1,
+            cacheHit: false,
+            searchCostCny: 0
+        };
+        searchMock.mockResolvedValueOnce(metadataOnlyResult).mockResolvedValueOnce(metadataOnlyResult);
+        vi.stubGlobal("fetch", vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+            const payload = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+            const prompt = payload.messages.map(message => message.content).join("\n");
+            const result = prompt.includes("统一问题分析器")
+                ? {
+                    normalizedQuestion: "这篇论文的 DOI 是什么？",
+                    objective: "给出指定论文的题名和 DOI",
+                    answerRequirements: [ "准确给出题名和 DOI" ],
+                    exclusions: [],
+                    searchQueries: [ "Inference and computation for Gaussian process regression model DOI" ],
+                    requiresCurrentEvidence: false
+                }
+                : prompt.includes("统一质量审计器")
+                    ? { valid: true, issues: [], unsupportedClaims: [] }
+                    : {
+                        body: "论文《Inference and computation for Gaussian process regression model》的 DOI 是 10.1201/example",
+                        claims: [ {
+                            claimId: "C1",
+                            text: "论文《Inference and computation for Gaussian process regression model》的 DOI 是 10.1201/example",
+                            sourceIds: [ "S1" ],
+                            confidence: "high"
+                        } ],
+                        unresolvedClaims: []
+                    };
+            return Response.json({
+                model: "deepseek-v4-flash",
+                choices: [ { message: { content: JSON.stringify(result) } } ],
+                usage: { prompt_tokens: 300, completion_tokens: 80, total_tokens: 380 }
+            });
+        }));
+
+        const result = await generateUnifiedReadWeaveAnswer(request("这篇论文的 DOI 是什么？"));
+        expect(result.body).toContain("10.1201/example");
+        expect(result.audit?.citationsVerified).toBe(true);
     });
 
     it("enforces explicit scope exclusions even when the model verifier approves", async () => {

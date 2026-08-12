@@ -2,6 +2,8 @@ import type { ReadWeaveGenerateRequest, ReadWeaveGenerateResponse } from "@trili
 import { cls, hidden_subtree as hiddenSubtreeService, note_service as noteService, protected_session as protectedSessionModule } from "@triliumnext/core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { NonRetryableReadWeaveError } from "./readweave_errors.js";
+
 const generateMock = vi.hoisted(() => vi.fn());
 const protectedSession = protectedSessionModule.default;
 
@@ -168,6 +170,19 @@ describe("ReadWeave persisted generation jobs", () => {
         expect(completed.progress.some(event => event.message.includes("正在自动恢复第 2 次"))).toBe(true);
         expect(completed.progress.find(event => event.message.includes("正在自动恢复第 2 次"))?.issues)
             .toEqual([ "内部检查协议未能形成有效修复计划" ]);
+    });
+
+    it("does not rerun a complete workflow when the available source is only bibliographic metadata", async () => {
+        generateMock.mockRejectedValue(new NonRetryableReadWeaveError(
+            "ReadWeave 统一质量门未通过：事实引用的来源只有题名、DOI 或短标题，不能支撑该技术内容"
+        ));
+
+        const started = startReadWeaveGenerationJob(request);
+        const failed = await waitForStatus(started.jobId, "failed");
+
+        expect(generateMock).toHaveBeenCalledTimes(1);
+        expect(failed.error).toContain("只有题名、DOI 或短标题");
+        expect(failed.progress.some(event => event.message.includes("自动恢复第 2 次"))).toBe(false);
     });
 
     it("allows regeneration without feedback while retaining the previous result and resetting progress", async () => {
