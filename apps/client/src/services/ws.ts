@@ -2,7 +2,7 @@ import { WebSocketMessage } from "@triliumnext/commons";
 
 import appContext from "../components/app_context.js";
 import type { EntityChange } from "../server_types.js";
-import { AUTHENTICATION_REQUIRED_EVENT } from "./authentication_recovery.js";
+import { AUTHENTICATION_REQUIRED_EVENT, loadFreshBootstrap, recoverExpiredAuthentication } from "./authentication_recovery.js";
 import bundleService from "./bundle.js";
 import froca from "./froca.js";
 import frocaUpdater from "./froca_updater.js";
@@ -17,6 +17,7 @@ let messageHandlers: MessageHandler[] = [];
 
 let ws: WebSocket;
 let reconnectEnabled = window.glob.loggedIn !== false;
+let authenticationProbeInFlight = false;
 // In Electron desktop, messaging goes over Chromium IPC (no TCP socket,
 // no auth). The bridge is exposed by the preload script; when present we
 // skip the WebSocket entirely.
@@ -266,9 +267,32 @@ function connectWebSocket() {
     const ws = new WebSocket(webSocketUri);
     ws.onopen = () => console.debug(utils.now(), `Connected to server ${webSocketUri} with WebSocket`);
     ws.onmessage = handleWebSocketMessage;
+    ws.onerror = () => {
+        void probeAuthenticationAfterSocketError();
+    };
     // we're not handling ws.onclose here because reconnection is done in sendPing()
 
     return ws;
+}
+
+async function probeAuthenticationAfterSocketError(): Promise<void> {
+    if (!reconnectEnabled || authenticationProbeInFlight) {
+        return;
+    }
+
+    authenticationProbeInFlight = true;
+    try {
+        const bootstrap = await loadFreshBootstrap<{ loggedIn?: boolean }>();
+        if (bootstrap.loggedIn === false) {
+            recoverExpiredAuthentication();
+        }
+    } catch {
+        // A failed probe can mean the server or network is temporarily down.
+        // Keep the normal reconnect path for that case; loadFreshBootstrap
+        // performs authentication recovery itself when it receives HTTP 401.
+    } finally {
+        authenticationProbeInFlight = false;
+    }
 }
 
 function stopWebSocketForAuthentication(): void {

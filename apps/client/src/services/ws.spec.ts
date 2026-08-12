@@ -1,6 +1,6 @@
+import type { WebSocketMessage } from "@triliumnext/commons";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { WebSocketMessage } from "@triliumnext/commons";
 import { buildNote } from "../test/easy-froca";
 
 // Mutable spies the mocked dependencies delegate to, so we can assert on them
@@ -19,12 +19,21 @@ const utilsCtrl = vi.hoisted(() => ({
     timeLimit: vi.fn(async (p: Promise<unknown>, _ms?: number) => p)
 }));
 const optionsCtrl = vi.hoisted(() => ({ is: vi.fn(() => false) }));
+const authenticationRecoveryCtrl = vi.hoisted(() => ({
+    loadFreshBootstrap: vi.fn(async () => ({ loggedIn: true })),
+    recoverExpiredAuthentication: vi.fn(() => true)
+}));
 
 vi.mock("./toast.js", () => ({ default: toast }));
 vi.mock("./bundle.js", () => ({ default: bundle }));
 vi.mock("../components/app_context.js", () => ({ default: appCtx }));
 vi.mock("./froca_updater.js", () => ({ default: frocaUpdater }));
 vi.mock("./options.js", () => ({ default: optionsCtrl }));
+vi.mock("./authentication_recovery.js", () => ({
+    AUTHENTICATION_REQUIRED_EVENT: "trilium:authentication-required",
+    loadFreshBootstrap: () => authenticationRecoveryCtrl.loadFreshBootstrap(),
+    recoverExpiredAuthentication: () => authenticationRecoveryCtrl.recoverExpiredAuthentication()
+}));
 vi.mock("./utils.js", async (orig) => {
     const actual = (await orig()) as Record<string, unknown>;
     return {
@@ -50,6 +59,8 @@ const baseGlob = { isMainWindow: true } as any;
 beforeEach(() => {
     vi.clearAllMocks();
     optionsCtrl.is.mockReturnValue(false);
+    authenticationRecoveryCtrl.loadFreshBootstrap.mockResolvedValue({ loggedIn: true });
+    authenticationRecoveryCtrl.recoverExpiredAuthentication.mockReturnValue(true);
     utilsCtrl.timeLimit.mockImplementation(async (p: Promise<unknown>) => p);
     frocaUpdater.processEntityChanges.mockImplementation(async () => {});
     (window as any).glob = { ...baseGlob };
@@ -298,6 +309,7 @@ class FakeSocket {
     closeCalls: Array<{ code?: number; reason?: string }> = [];
     onopen: (() => void) | null = null;
     onmessage: ((e: MessageEvent<string>) => void) | null = null;
+    onerror: (() => void) | null = null;
     sent: string[] = [];
     url: string;
     constructor(url: string) {
@@ -395,6 +407,27 @@ describe("WebSocket transport", () => {
         vi.advanceTimersByTime(1000);
         // a brand-new socket was created by connectWebSocket()
         expect(lastSocket).not.toBe(first);
+    });
+
+    it("stops reconnecting when a failed socket probe confirms the user is logged out", async () => {
+        (window as any).glob = { ...baseGlob, dbInitialized: true, loggedIn: true };
+        authenticationRecoveryCtrl.loadFreshBootstrap.mockResolvedValueOnce({ loggedIn: false });
+        authenticationRecoveryCtrl.recoverExpiredAuthentication.mockImplementationOnce(() => {
+            window.dispatchEvent(new CustomEvent("trilium:authentication-required"));
+            return true;
+        });
+
+        await loadWsFresh();
+        vi.advanceTimersByTime(0);
+        const rejectedSocket = lastSocket;
+        rejectedSocket.onerror?.();
+        await vi.waitFor(() => expect(authenticationRecoveryCtrl.recoverExpiredAuthentication).toHaveBeenCalledTimes(1));
+
+        expect(rejectedSocket.closeCalls).toEqual([
+            { code: 1000, reason: "authentication required" }
+        ]);
+        vi.advanceTimersByTime(60_000);
+        expect(lastSocket).toBe(rejectedSocket);
     });
 
     it("does not bootstrap a socket in print mode", async () => {
