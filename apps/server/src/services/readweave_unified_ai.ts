@@ -2263,6 +2263,92 @@ function crossrefMetadataSupportsBibliographicClaim(source: ReadWeaveEvidenceSou
     return citesExactDoi || citesExactTitle && describesBibliography;
 }
 
+function normalizeBibliographicTitle(value: string): string {
+    return value.normalize("NFKC").toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function requestedBibliographicTitles(request: ReadWeaveGenerateRequest): string[] {
+    const candidates: string[] = [];
+    const addExplicitTitles = (value: string) => {
+        for (const match of value.matchAll(/[《“"]([^》”"\n]{8,300})[》”"]/gu)) candidates.push(match[1]);
+        for (const match of value.matchAll(/(?:原文题名|论文题名|文章题名|论文标题|文章标题|title)\s*[：:]\s*([^。；;\n]{8,300})/giu)) candidates.push(match[1]);
+    };
+    addExplicitTitles(request.title);
+    for (const fragment of request.fragments) addExplicitTitles(fragment.text);
+
+    const selected = request.fragments.find(fragment => fragment.role === "selected" && fragment.text.trim())?.text.trim();
+    if (selected
+        && selected.length >= 8
+        && selected.length <= 300
+        && selected.split(/\r?\n/u).length <= 2
+        && !/[。！？]\s*$/u.test(selected)) {
+        candidates.push(selected);
+    }
+
+    return Array.from(new Set(candidates.map(value => cleanText(value, 300)).filter(Boolean)));
+}
+
+function bibliographicTitlesMatch(left: string, right: string): boolean {
+    const normalizedLeft = normalizeBibliographicTitle(left);
+    const normalizedRight = normalizeBibliographicTitle(right);
+    if (Math.min(normalizedLeft.length, normalizedRight.length) < 8) return false;
+    if (normalizedLeft === normalizedRight) return true;
+    const shorter = normalizedLeft.length <= normalizedRight.length ? normalizedLeft : normalizedRight;
+    const longer = normalizedLeft.length > normalizedRight.length ? normalizedLeft : normalizedRight;
+    return shorter.length / longer.length >= 0.72 && longer.includes(shorter);
+}
+
+function sourceMatchesRequestedBibliographicTitle(source: ReadWeaveEvidenceSource, requestedTitle: string): boolean {
+    if (bibliographicTitlesMatch(source.title, requestedTitle)) return true;
+    const normalizedRequested = normalizeBibliographicTitle(requestedTitle);
+    const normalizedExcerpt = normalizeBibliographicTitle(source.excerpt);
+    return normalizedRequested.length >= 8 && normalizedExcerpt.includes(normalizedRequested);
+}
+
+function sourceContainsDoi(source: ReadWeaveEvidenceSource): boolean {
+    return /\b10\.\d{4,9}\/[-._;()/:\p{L}\p{N}]+/iu.test(`${source.url ?? ""}\n${source.excerpt}`);
+}
+
+function doiFromSource(source: ReadWeaveEvidenceSource): string | undefined {
+    return `${source.url ?? ""}\n${source.excerpt}`.match(/\b10\.\d{4,9}\/[-._;()/:\p{L}\p{N}]+/iu)?.[0];
+}
+
+function ensureBibliographicEvidenceMatchesRequest(
+    sources: ReadWeaveEvidenceSource[],
+    request: ReadWeaveGenerateRequest
+): ReadWeaveEvidenceSource | undefined {
+    if (!/(?:\bDOI\b|数字对象标识)/iu.test(request.title)) return undefined;
+    const requestedTitles = requestedBibliographicTitles(request);
+    if (requestedTitles.length === 0) return undefined;
+    const matchingSource = sources.find(source =>
+        sourceContainsDoi(source)
+        && requestedTitles.some(title => sourceMatchesRequestedBibliographicTitle(source, title)));
+    if (matchingSource) return matchingSource;
+    throw new NonRetryableReadWeaveError("ReadWeave 无法生成：当前检索结果没有与用户指定论文题名一致的来源，已停止生成，避免把其他论文的 DOI 当作答案");
+}
+
+function bibliographicIdentityIssues(
+    claims: ReadWeaveClaim[],
+    sources: ReadWeaveEvidenceSource[],
+    request: ReadWeaveGenerateRequest
+): string[] {
+    if (!/(?:\bDOI\b|数字对象标识)/iu.test(request.title)) return [];
+    const requestedTitles = requestedBibliographicTitles(request);
+    if (requestedTitles.length === 0) return [];
+    const sourceById = new Map(sources.map(source => [ source.sourceId, source ]));
+
+    return claims.flatMap(claim => {
+        const doi = claim.text.match(/\b10\.\d{4,9}\/[-._;()/:\p{L}\p{N}]+/iu)?.[0];
+        if (!doi) return [];
+        const cited = claim.sourceIds.flatMap(sourceId => {
+            const source = sourceById.get(sourceId);
+            return source ? [ source ] : [];
+        });
+        if (cited.some(source => requestedTitles.some(title => sourceMatchesRequestedBibliographicTitle(source, title)))) return [];
+        return [ `DOI ${doi} 的来源题名与用户指定论文不一致，不能把其他论文的 DOI 当作答案` ];
+    });
+}
+
 function sourceHasSubstantiveEvidence(source: ReadWeaveEvidenceSource, claimText: string): boolean {
     const excerpt = cleanText(source.excerpt, 2_000);
     if (!excerpt) return false;
@@ -2306,6 +2392,7 @@ function deterministicIssues(
     sources: ReadWeaveEvidenceSource[],
     contract: ReadWeaveQuestionContract,
     kind: ReadWeaveGenerateRequest["kind"],
+    request: ReadWeaveGenerateRequest,
     termIdentity?: ReadWeaveTermIdentity,
     verifiedNonExpandableArtifact?: ReadWeaveVerifiedNonExpandableArtifact
 ): string[] {
@@ -2334,6 +2421,7 @@ function deterministicIssues(
     if (claims.some(claim => claim.confidence !== "high")) issues.push("正文混入了未达到高置信度的事实，应删除该事实或取得直接证据后再写入");
     if (claims.some(claim => claim.sourceIds.some(sourceId => !sourceIds.has(sourceId)))) issues.push("事实项引用了不存在的来源");
     issues.push(...evidenceSubstantiationIssues(claims, sources));
+    issues.push(...bibliographicIdentityIssues(claims, sources, request));
     if (kind === "term" && !termIdentity && !verifiedNonExpandableArtifact) {
         issues.push("术语身份结构缺失，无法审核缩写、中文名称和英文名称是否对应");
     }
@@ -2569,6 +2657,58 @@ export async function generateUnifiedReadWeaveAnswer(
     const localSources = localEvidence(selected.fragments, accessedAt);
     for (const query of contract.searchQueries.slice(0, MAX_SEARCH_QUERIES)) report("gathering-context", `证据查询：${query}`);
     const external = await gatherExternalEvidence(contract, context, message => report("gathering-context", message));
+    const bibliographicSource = ensureBibliographicEvidenceMatchesRequest([ ...localSources, ...external.sources ], request);
+    if (bibliographicSource) {
+        const doi = doiFromSource(bibliographicSource)!;
+        const body = `论文《${bibliographicSource.title}》的 DOI 是 ${doi}`;
+        const claim: ReadWeaveClaim = {
+            claimId: "C1",
+            text: body,
+            sourceIds: [ bibliographicSource.sourceId ],
+            confidence: "high"
+        };
+        const usage = usageSummary(usages, external.searchCostCny);
+        if (!usage.withinBudget) {
+            throw new NonRetryableReadWeaveError(`ReadWeave 单次生成费用 ¥${usage.costCny} 超过 ¥${usage.budgetCny} 硬预算，结果未交付`);
+        }
+        report("complete", "已核对论文题名与 DOI 来源，回答生成完成");
+        return {
+            body,
+            optimizedTitle: contract.normalizedQuestion !== originalQuestion ? contract.normalizedQuestion : undefined,
+            evidenceSources: [ bibliographicSource ],
+            claims: [ claim ],
+            audit: {
+                workflowVersion: WORKFLOW_VERSION,
+                questionContract: contract,
+                searchQueries: external.queries,
+                unresolvedClaims: [],
+                validationIssues: [],
+                citationsVerified: true,
+                generatedAt: new Date().toISOString()
+            },
+            context: selected.decision,
+            workflow: {
+                generationAttempts: 0,
+                validationPasses: 1,
+                contextExpansions: 0,
+                repairRounds: 0,
+                unchangedSegmentsVerified: true
+            },
+            provider: new URL(getReadWeaveRuntimeConfig().baseUrl).hostname,
+            model: planner.model,
+            usage,
+            ...(external.sources.length > 0 ? {
+                webCalibration: {
+                    used: true as const,
+                    sourceCount: external.sources.length,
+                    model: "unified-evidence-search",
+                    providers: external.providers,
+                    cacheHit: external.cacheHit,
+                    searchCostCny: external.searchCostCny
+                }
+            } : {})
+        };
+    }
     const localEvidenceCanAnswerBoundary = localSources.length > 0
         && /(?:仅凭|单凭|根据|依据|这段|这项|现有|本文|文章|材料|记录|相关性|观察性|能否[^？?]{0,80}(?:证明|断言|推出|推断|判断|确认)|(?:不能|无法|不足以)[^？?]{0,50}(?:证明|断言|推出|推断|判断|确认))/u.test(contract.normalizedQuestion);
     const stableLocalEvidenceCanAnswer = localSources.length > 0
@@ -2679,7 +2819,7 @@ export async function generateUnifiedReadWeaveAnswer(
     }
     let unresolvedClaims = stringList(writer.value.unresolvedClaims, 12, 500);
     let issues = Array.from(new Set([
-        ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, termIdentity, verifiedNonExpandableArtifact),
+        ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, request, termIdentity, verifiedNonExpandableArtifact),
         ...evidenceScopeIssues(claims),
         ...(qualityChecker?.(body, contract.normalizedQuestion, request.kind, termIdentity, verifiedNonExpandableArtifact) ?? [])
     ]));
@@ -2720,7 +2860,7 @@ export async function generateUnifiedReadWeaveAnswer(
             fallbackBody = stabilizeKnownTermCatalog(formatReadWeaveBody(fallbackBody));
             if (request.kind === "term") fallbackBody = compactFocusedTermBody(fallbackBody);
             const fallbackIssues = Array.from(new Set([
-                ...deterministicIssues(fallbackBody, fallbackClaims, sourceIds, sources, contract, request.kind, fallbackIdentity),
+                ...deterministicIssues(fallbackBody, fallbackClaims, sourceIds, sources, contract, request.kind, request, fallbackIdentity),
                 ...evidenceScopeIssues(fallbackClaims),
                 ...(qualityChecker?.(fallbackBody, contract.normalizedQuestion, request.kind, fallbackIdentity) ?? [])
             ]));
@@ -2764,7 +2904,7 @@ export async function generateUnifiedReadWeaveAnswer(
         }
         unresolvedClaims = stringList(writer.value.unresolvedClaims, 12, 500);
         issues = Array.from(new Set([
-            ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, termIdentity, verifiedNonExpandableArtifact),
+            ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, request, termIdentity, verifiedNonExpandableArtifact),
             ...evidenceScopeIssues(claims),
             ...(qualityChecker?.(body, contract.normalizedQuestion, request.kind, termIdentity, verifiedNonExpandableArtifact) ?? [])
         ]));
@@ -2807,7 +2947,7 @@ export async function generateUnifiedReadWeaveAnswer(
         }
         unresolvedClaims = stringList(writer.value.unresolvedClaims, 12, 500);
         issues = Array.from(new Set([
-            ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, termIdentity, verifiedNonExpandableArtifact),
+            ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, request, termIdentity, verifiedNonExpandableArtifact),
             ...evidenceScopeIssues(claims),
             ...(qualityChecker?.(body, contract.normalizedQuestion, request.kind, termIdentity, verifiedNonExpandableArtifact) ?? [])
         ]));
@@ -2836,7 +2976,7 @@ export async function generateUnifiedReadWeaveAnswer(
         }
     }
     issues = Array.from(new Set([
-        ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, termIdentity, verifiedNonExpandableArtifact),
+        ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, request, termIdentity, verifiedNonExpandableArtifact),
         ...evidenceScopeIssues(claims),
         ...(qualityChecker?.(body, contract.normalizedQuestion, request.kind, termIdentity, verifiedNonExpandableArtifact) ?? [])
     ]));
@@ -2855,7 +2995,7 @@ export async function generateUnifiedReadWeaveAnswer(
             claims = claims.filter(claim => !Array.from(peripheralAcronyms).some(acronym =>
                 new RegExp(`(?<![\\p{Script=Latin}\\p{N}_])${escapeRegExp(acronym)}(?![\\p{Script=Latin}\\p{N}_])`, "u").test(claim.text)));
             issues = Array.from(new Set([
-                ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, termIdentity, verifiedNonExpandableArtifact),
+                ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, request, termIdentity, verifiedNonExpandableArtifact),
                 ...evidenceScopeIssues(claims),
                 ...(qualityChecker?.(body, contract.normalizedQuestion, request.kind, termIdentity, verifiedNonExpandableArtifact) ?? [])
             ]));
@@ -2888,7 +3028,7 @@ export async function generateUnifiedReadWeaveAnswer(
             ));
             fallbackBody = compactFocusedTermBody(stabilizeKnownTermCatalog(formatReadWeaveBody(fallbackBody)));
             const fallbackIssues = Array.from(new Set([
-                ...deterministicIssues(fallbackBody, fallbackClaims, sourceIds, sources, contract, request.kind, fallbackIdentity),
+                ...deterministicIssues(fallbackBody, fallbackClaims, sourceIds, sources, contract, request.kind, request, fallbackIdentity),
                 ...evidenceScopeIssues(fallbackClaims),
                 ...(qualityChecker?.(fallbackBody, contract.normalizedQuestion, request.kind, fallbackIdentity) ?? [])
             ]));
@@ -2911,7 +3051,9 @@ export async function generateUnifiedReadWeaveAnswer(
                 `[ReadWeave rejected issues] ${issues.join("；")}`
             ].join("\n"));
         }
-        const Failure = issues.some(issue => issue.includes("只有题名、DOI 或短标题，不能支撑该技术内容"))
+        const Failure = issues.some(issue =>
+            issue.includes("只有题名、DOI 或短标题，不能支撑该技术内容")
+            || issue.includes("来源题名与用户指定论文不一致"))
             ? NonRetryableReadWeaveError
             : ValidationError;
         throw new Failure(`ReadWeave 统一质量门未通过：${issues.join("；")}`);

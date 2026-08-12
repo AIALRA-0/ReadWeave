@@ -521,9 +521,68 @@ describe("ReadWeave unified evidence workflow", () => {
             });
         }));
 
-        const result = await generateUnifiedReadWeaveAnswer(request("这篇论文的 DOI 是什么？"));
+        const doiRequest = request("这篇论文的 DOI 是什么？");
+        doiRequest.fragments[0].text = "Inference and computation for Gaussian process regression model";
+        const result = await generateUnifiedReadWeaveAnswer(doiRequest);
         expect(result.body).toContain("10.1201/example");
         expect(result.audit?.citationsVerified).toBe(true);
+    });
+
+    it("rejects a DOI when the cited metadata belongs to a different paper", async () => {
+        const wrongPaperResult = {
+            used: true,
+            query: "Hetero-3D A Chiplet-Level 3D IC Design Methodology DOI",
+            sources: [ {
+                provider: "Crossref",
+                title: "Unified 3D-IC Multi-Chiplet System Design Solution",
+                url: "https://doi.org/10.1145/3626184.3635279",
+                snippet: "ACM; DOI 10.1145/3626184.3635279",
+                publishedAt: "2024",
+                score: 100
+            } ],
+            providers: [ "Crossref" ],
+            memo: "",
+            warnings: [],
+            elapsedMs: 1,
+            cacheHit: false,
+            searchCostCny: 0
+        };
+        searchMock.mockResolvedValueOnce(wrongPaperResult).mockResolvedValueOnce(wrongPaperResult);
+        vi.stubGlobal("fetch", vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+            const payload = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+            const prompt = payload.messages.map(message => message.content).join("\n");
+            const result = prompt.includes("统一问题分析器")
+                ? {
+                    normalizedQuestion: "这篇论文的 DOI 是什么？",
+                    objective: "给出指定论文的 DOI",
+                    answerRequirements: [ "准确给出 DOI" ],
+                    exclusions: [],
+                    searchQueries: [ "Hetero-3D A Chiplet-Level 3D IC Design Methodology DOI" ],
+                    requiresCurrentEvidence: false
+                }
+                : prompt.includes("统一质量审计器")
+                    ? { valid: true, issues: [], unsupportedClaims: [] }
+                    : {
+                        body: "论文《Hetero-3D: A Chiplet-Level 3D IC Design Methodology》的 DOI 是 10.1145/3626184.3635279",
+                        claims: [ {
+                            claimId: "C1",
+                            text: "论文《Hetero-3D: A Chiplet-Level 3D IC Design Methodology》的 DOI 是 10.1145/3626184.3635279",
+                            sourceIds: [ "S1" ],
+                            confidence: "high"
+                        } ],
+                        unresolvedClaims: []
+                    };
+            return Response.json({
+                model: "deepseek-v4-flash",
+                choices: [ { message: { content: JSON.stringify(result) } } ],
+                usage: { prompt_tokens: 300, completion_tokens: 80, total_tokens: 380 }
+            });
+        }));
+
+        const doiRequest = request("这篇论文的 DOI 是什么？");
+        doiRequest.fragments[0].text = "Hetero-3D: A Chiplet-Level 3D IC Design Methodology";
+        await expect(generateUnifiedReadWeaveAnswer(doiRequest))
+            .rejects.toThrow("没有与用户指定论文题名一致的来源");
     });
 
     it("enforces explicit scope exclusions even when the model verifier approves", async () => {
