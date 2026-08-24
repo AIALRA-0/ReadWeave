@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="560" viewBox="0 0 1200 560" role="img" aria-labelledby="title desc">
+  <title id="title">ReadWeave reading knowledge workflow</title>
+  <desc id="desc">Paragraphs, reviewed questions, stable knowledge objects, and reusable links woven into a reading workflow</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#101828"/><stop offset="1" stop-color="#1d2939"/></linearGradient>
+    <linearGradient id="thread" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#2dd4bf"/><stop offset="0.55" stop-color="#60a5fa"/><stop offset="1" stop-color="#c084fc"/></linearGradient>
+    <filter id="glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="7" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+  </defs>
+  <rect width="1200" height="560" rx="30" fill="url(#bg)"/>
+  <circle cx="105" cy="95" r="145" fill="#2dd4bf" opacity="0.07"/><circle cx="1100" cy="500" r="180" fill="#c084fc" opacity="0.08"/>
+  <text x="600" y="82" text-anchor="middle" fill="#f8fafc" font-family="Segoe UI,Arial,sans-serif" font-size="46" font-weight="750">ReadWeave · 织读</text>
+  <text x="600" y="122" text-anchor="middle" fill="#a5b4c7" font-family="Segoe UI,Arial,sans-serif" font-size="19">Ask deliberately · Review before saving · Reuse by immutable identity</text>
+  <g transform="translate(90 185)">
+    <rect width="290" height="238" rx="22" fill="#172337" stroke="#2dd4bf" stroke-width="2"/>
+    <text x="28" y="44" fill="#5eead4" font-family="Segoe UI,Arial,sans-serif" font-size="15" font-weight="700">ARTICLE PARAGRAPH</text>
+    <path d="M30 78h220M30 108h236M30 138h198M30 168h230" stroke="#94a3b8" stroke-width="10" stroke-linecap="round" opacity="0.65"/>
+    <rect x="23" y="125" width="244" height="32" rx="8" fill="#2dd4bf" opacity="0.16"/>
+    <circle cx="252" cy="141" r="8" fill="#2dd4bf" filter="url(#glow)"/>
+    <text x="28" y="213" fill="#cbd5e1" font-family="Segoe UI,Arial,sans-serif" font-size="16">Stable paragraph anchor</text>
+  </g>
+  <g transform="translate(455 185)">
+    <rect width="290" height="238" rx="22" fill="#172337" stroke="#60a5fa" stroke-width="2"/>
+    <text x="28" y="44" fill="#93c5fd" font-family="Segoe UI,Arial,sans-serif" font-size="15" font-weight="700">REVIEWED DRAFT</text>
+    <rect x="28" y="72" width="234" height="50" rx="12" fill="#0f1b2d" stroke="#334155"/>
+    <text x="46" y="103" fill="#e2e8f0" font-family="Segoe UI,Arial,sans-serif" font-size="16">One question</text>
+    <rect x="28" y="138" width="234" height="44" rx="12" fill="#1e3a5f"/>
+    <path d="M50 160l10 10 20-24" fill="none" stroke="#60a5fa" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="97" y="166" fill="#dbeafe" font-family="Segoe UI,Arial,sans-serif" font-size="16">Review, then save</text>
+    <text x="28" y="213" fill="#cbd5e1" font-family="Segoe UI,Arial,sans-serif" font-size="16">Draft stays in this session</text>
+  </g>
+  <g transform="translate(820 185)">
+    <rect width="290" height="238" rx="22" fill="#172337" stroke="#c084fc" stroke-width="2"/>
+    <text x="28" y="44" fill="#d8b4fe" font-family="Segoe UI,Arial,sans-serif" font-size="15" font-weight="700">KNOWLEDGE OBJECT</text>
+    <circle cx="76" cy="111" r="29" fill="#3b2866" stroke="#c084fc" stroke-width="3"/>
+    <circle cx="214" cy="111" r="29" fill="#3b2866" stroke="#c084fc" stroke-width="3"/>
+    <path d="M105 111h80" stroke="#c084fc" stroke-width="7" stroke-linecap="round"/>
+    <path d="M145 85v52" stroke="#c084fc" stroke-width="7" stroke-linecap="round" opacity="0.6"/>
+    <text x="28" y="171" fill="#e9d5ff" font-family="Segoe UI,Arial,sans-serif" font-size="16">Immutable ID · Reusable link</text>
+    <text x="28" y="213" fill="#cbd5e1" font-family="Segoe UI,Arial,sans-serif" font-size="16">Auditable export and revision</text>
+  </g>
+  <path d="M380 304h75M745 304h75" stroke="url(#thread)" stroke-width="9" stroke-linecap="round" filter="url(#glow)"/>
+  <path d="M433 292l22 12-22 12M798 292l22 12-22 12" fill="none" stroke="#e0e7ff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="600" y="485" text-anchor="middle" fill="#cbd5e1" font-family="Segoe UI,Arial,sans-serif" font-size="17">Trilium remains the source of truth · Search indexes remain rebuildable</text>
+  <text x="600" y="520" text-anchor="middle" fill="#8291a7" font-family="Segoe UI,Arial,sans-serif" font-size="15">Repository-native illustration · No personal notes, credentials, or deployment data</text>
+</svg>
