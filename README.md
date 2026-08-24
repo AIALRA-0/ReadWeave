@@ -1,232 +1,320 @@
-> **ReadWeave（织读）开发分支**：这是基于 TriliumNext 的个人 Web 阅读工作流修改版，核心能力包括段落锚点、单问单答、审核后保存、稳定标识符复用、全局更新与独立索引导出。请先阅读 [ReadWeave 使用与开发说明](./README_READWEAVE.md)。本项目不是 TriliumNext 官方发行版。
-
 <div align="center">
-	<sup>Special thanks to:</sup><br />
-	<a href="https://go.warp.dev/Trilium" target="_blank">		
-		<img alt="Warp sponsorship" width="400" src="https://github.com/warpdotdev/brand-assets/blob/main/Github/Sponsor/Warp-Github-LG-03.png"><br />
-		Warp, built for coding with multiple AI agents<br />
-	</a>
-  <sup>Available for macOS, Linux and Windows</sup>
+  <img src="assets/readme/readweave-hero.svg" alt="ReadWeave 织读从文章段落到审核知识对象的工作流" />
+
+# ReadWeave 织读
+
+**以人的真实问题为主线，把阅读中的主动提问转化为可审核、可复用、与原文稳定关联的知识**
+
+[![Privacy Gate](https://github.com/AIALRA-0/ReadWeave/actions/workflows/readweave-privacy.yml/badge.svg)](https://github.com/AIALRA-0/ReadWeave/actions/workflows/readweave-privacy.yml)
+[![CodeQL](https://github.com/AIALRA-0/ReadWeave/actions/workflows/codeql.yml/badge.svg)](https://github.com/AIALRA-0/ReadWeave/actions/workflows/codeql.yml)
+[![ReadWeave](https://img.shields.io/badge/ReadWeave-0.1.0-60A5FA)](docs/readlayer/10-IMPLEMENTATION-STATUS.md)
+[![TriliumNext](https://img.shields.io/badge/TriliumNext-0.103.0-2DD4BF)](docs/readlayer/research/UPSTREAM-BASELINE.md)
+[![License](https://img.shields.io/badge/License-AGPL--3.0--only-C084FC)](LICENSE)
+
+[English](README.en.md) · [核心闭环](#3-核心闭环) · [系统结构](#5-系统结构) · [本地验证](#11-本地验证) · [实现状态](docs/readlayer/10-IMPLEMENTATION-STATUS.md)
 </div>
 
-<hr />
+<div align="center">
+  <sub>图 1　段落锚点、会话草稿和可复用知识对象之间的织读主链路</sub>
+</div>
 
-# Trilium Notes
+## 1 项目定位
 
-![GitHub Sponsors](https://img.shields.io/github/sponsors/eliandoran) ![LiberaPay patrons](https://img.shields.io/liberapay/patrons/ElianDoran)  
-![Docker Pulls](https://img.shields.io/docker/pulls/triliumnext/trilium)
-![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/triliumnext/trilium/total)  
-[![RelativeCI](https://badges.relative-ci.com/badges/Di5q7dz9daNDZ9UXi0Bp?branch=develop)](https://app.relative-ci.com/projects/Di5q7dz9daNDZ9UXi0Bp) [![Translation status](https://hosted.weblate.org/widget/trilium/svg-badge.svg)](https://hosted.weblate.org/engage/trilium/)
+ReadWeave 是基于 TriliumNext `v0.103.0` 的 Web 优先个人阅读工作流修改版，不是 TriliumNext 官方发行版 [1][2]
 
-<!-- translate:off -->
-<!-- LANGUAGE SWITCHER -->
-[Chinese (Simplified Han script)](./docs/README-ZH_CN.md) | [Chinese (Traditional Han script)](./docs/README-ZH_TW.md) | [English](./docs/README.md) | [French](./docs/README-fr.md) | [German](./docs/README-de.md) | [Greek](./docs/README-el.md) | [Italian](./docs/README-it.md) | [Japanese](./docs/README-ja.md) | [Romanian](./docs/README-ro.md) | [Spanish](./docs/README-es.md)
-<!-- translate:on -->
+用户在 Trilium Web 中阅读，选择完整段落并主动提出一个问题或术语
 
-Trilium Notes is a free and open-source, cross-platform hierarchical note taking application with focus on building large personal knowledge bases.
+系统选择最小充分上下文并调用联网模型，同时保留会话草稿等待人工审核，确认后的内容会保存为由稳定标识符连接的知识对象
 
-<img src="./docs/app.png" alt="Trilium Screenshot" width="1000">
+ReadWeave 不预先猜测问题，也不根据行为自动学习偏好，人始终决定问什么、何时问、是否保存、是否复用和怎样修改 [3]
 
-## ⏬ Download
-- [Latest release](https://github.com/TriliumNext/Trilium/releases/latest) – stable version, recommended for most users.
-- [Nightly build](https://github.com/TriliumNext/Trilium/releases/tag/nightly) – unstable development version, updated daily with the latest features and fixes.
+## 2 基础界面
 
-## 📚 Documentation
+<div align="center">
+  <img src="docs/app.png" alt="TriliumNext 匿名演示知识库基础界面" />
 
-**Visit our comprehensive documentation at [docs.triliumnotes.org](https://docs.triliumnotes.org/)**
+图 2.1　ReadWeave 继承的 TriliumNext 匿名演示基础界面
+</div>
 
-Our documentation is available in multiple formats:
-- **Online Documentation**: Browse the full documentation at [docs.triliumnotes.org](https://docs.triliumnotes.org/)
-- **In-App Help**: Press `F1` within Trilium to access the same documentation directly in the application
-- **GitHub**: Navigate through the [User Guide](./docs/User%20Guide/User%20Guide/) in this repository
+图 2.1 是上游 TriliumNext 的公开演示截图，用于说明树形笔记、富文本编辑器和侧栏基础，不是 ReadWeave 面板截图，也不包含个人笔记或部署信息
 
-### Quick Links
-- [Getting Started Guide](https://docs.triliumnotes.org/)
-- [Installation Instructions](https://docs.triliumnotes.org/user-guide/setup)
-- [Docker Setup](https://docs.triliumnotes.org/user-guide/setup/server/installation/docker)
-- [Upgrading TriliumNext](https://docs.triliumnotes.org/user-guide/setup/upgrading)
-- [Basic Concepts and Features](https://docs.triliumnotes.org/user-guide/concepts/notes)
-- [Patterns of Personal Knowledge Base](https://docs.triliumnotes.org/user-guide/misc/patterns-of-personal-knowledge)
+当前仓库没有可安全公开的 ReadWeave 面板截图，因此 README 使用仓库自有主视觉和结构图表达功能
 
-## 🎁 Features
+真实产品截图只有在匿名隔离数据库中完成视觉验收后才会加入
 
-* Notes can be arranged into arbitrarily deep tree. Single note can be placed into multiple places in the tree (see [cloning](https://docs.triliumnotes.org/user-guide/concepts/notes/cloning))
-* Rich WYSIWYG note editor including e.g. tables, images and [math](https://docs.triliumnotes.org/user-guide/note-types/text) with markdown [autoformat](https://docs.triliumnotes.org/user-guide/note-types/text/markdown-formatting)
-* Support for editing [notes with source code](https://docs.triliumnotes.org/user-guide/note-types/code), including syntax highlighting
-* Fast and easy [navigation between notes](https://docs.triliumnotes.org/user-guide/concepts/navigation/note-navigation), full text search and [note hoisting](https://docs.triliumnotes.org/user-guide/concepts/navigation/note-hoisting)
-* Seamless [note versioning](https://docs.triliumnotes.org/user-guide/concepts/notes/note-revisions)
-* Note [attributes](https://docs.triliumnotes.org/user-guide/advanced-usage/attributes) can be used for note organization, querying and advanced [scripting](https://docs.triliumnotes.org/user-guide/scripts)
-* UI available in English, German, Spanish, French, Romanian, and Chinese (simplified and traditional)
-* Direct [OpenID and TOTP integration](https://docs.triliumnotes.org/user-guide/setup/server/mfa) for more secure login
-* [Synchronization](https://docs.triliumnotes.org/user-guide/setup/synchronization) with self-hosted sync server
-  * there are [3rd party services for hosting synchronisation server](https://docs.triliumnotes.org/user-guide/setup/server/cloud-hosting)
-* [Sharing](https://docs.triliumnotes.org/user-guide/advanced-usage/sharing) (publishing) notes to public internet
-* Strong [note encryption](https://docs.triliumnotes.org/user-guide/concepts/notes/protected-notes) with per-note granularity
-* Sketching diagrams, based on [Excalidraw](https://excalidraw.com/) (note type "canvas")
-* [Relation maps](https://docs.triliumnotes.org/user-guide/note-types/relation-map) and [note/link maps](https://docs.triliumnotes.org/user-guide/note-types/note-map) for visualizing notes and their relations
-* Mind maps, based on [Mind Elixir](https://docs.mind-elixir.com/)
-* [Geo maps](https://docs.triliumnotes.org/user-guide/collections/geomap) with location pins and GPX tracks
-* [Scripting](https://docs.triliumnotes.org/user-guide/scripts) - see [Advanced showcases](https://docs.triliumnotes.org/user-guide/advanced-usage/advanced-showcases)
-* [REST API](https://docs.triliumnotes.org/user-guide/advanced-usage/etapi) for automation
-* Scales well in both usability and performance upwards of 100 000 notes
-* Touch optimized [mobile frontend](https://docs.triliumnotes.org/user-guide/setup/mobile-frontend) for smartphones and tablets
-* Built-in [dark theme](https://docs.triliumnotes.org/user-guide/concepts/themes), support for user themes
-* [Evernote](https://docs.triliumnotes.org/user-guide/concepts/import-export/evernote) and [Markdown import & export](https://docs.triliumnotes.org/user-guide/concepts/import-export/markdown)
-* [Web Clipper](https://docs.triliumnotes.org/user-guide/setup/web-clipper) for easy saving of web content
-* Customizable UI (sidebar buttons, user-defined widgets, ...)
-* [Metrics](https://docs.triliumnotes.org/user-guide/advanced-usage/metrics), along with a Grafana Dashboard.
+## 3 核心闭环
 
-✨ Check out the following third-party resources/communities for more TriliumNext related goodies:
+<div align="center">
 
-- [awesome-trilium](https://github.com/Nriver/awesome-trilium) for 3rd party themes, scripts, plugins and more.
-- [TriliumRocks!](https://trilium.rocks/) for tutorials, guides, and much more.
-
-## ❓Why TriliumNext?
-
-The original Trilium developer ([Zadam](https://github.com/zadam)) has graciously given the Trilium repository to the community project which resides at https://github.com/TriliumNext
-
-### ⬆️Migrating from Zadam/Trilium?
-
-There are no special migration steps to migrate from a zadam/Trilium instance to a TriliumNext/Trilium instance. Simply [install TriliumNext/Trilium](#-installation) as usual and it will use your existing database.
-
-Versions up to and including [v0.90.4](https://github.com/TriliumNext/Trilium/releases/tag/v0.90.4) are compatible with the latest zadam/trilium version of [v0.63.7](https://github.com/zadam/trilium/releases/tag/v0.63.7). Any later versions of TriliumNext/Trilium have their sync versions incremented which prevents direct migration.
-
-## 💬 Discuss with us
-
-Feel free to join our official conversations. We would love to hear what features, suggestions, or issues you may have!
-
-- [Matrix](https://matrix.to/#/#triliumnext:matrix.org) (For synchronous discussions.)
-  - The `General` Matrix room is also bridged to [XMPP](xmpp:discuss@trilium.thisgreat.party?join)
-- [Github Discussions](https://github.com/TriliumNext/Trilium/discussions) (For asynchronous discussions.)
-- [Github Issues](https://github.com/TriliumNext/Trilium/issues) (For bug reports and feature requests.)
-
-## 🏗 Installation
-
-### Windows / MacOS
-
-Download the binary release for your platform from the [latest release page](https://github.com/TriliumNext/Trilium/releases/latest), unzip the package and run the `trilium` executable.
-
-### Linux
-
-If your distribution is listed in the table below, use your distribution's package.
-
-[![Packaging status](https://repology.org/badge/vertical-allrepos/trilium.svg)](https://repology.org/project/trilium/versions)
-
-You may also download the binary release for your platform from the [latest release page](https://github.com/TriliumNext/Trilium/releases/latest), unzip the package and run the `trilium` executable.
-
-TriliumNext is also provided as a Flatpak, but not yet published on FlatHub.
-
-### Browser (any OS)
-
-If you use a server installation (see below), you can directly access the web interface (which is almost identical to the desktop app).
-
-Currently only the latest versions of Chrome & Firefox are supported (and tested).
-
-### Mobile
-
-To use TriliumNext on a mobile device, you can use a mobile web browser to access the mobile interface of a server installation (see below).
-
-See issue https://github.com/TriliumNext/Trilium/issues/4962 for more information on mobile app support.
-
-If you prefer a native Android app, you can use [TriliumDroid](https://apt.izzysoft.de/fdroid/index/apk/eu.fliegendewurst.triliumdroid).
-Report bugs and missing features at [their repository](https://github.com/FliegendeWurst/TriliumDroid).
-Note: It is best to disable automatic updates on your server installation (see below) when using TriliumDroid since the sync version must match between Trilium and TriliumDroid.
-
-### Server
-
-To install TriliumNext on your own server (including via Docker from [Dockerhub](https://hub.docker.com/r/triliumnext/trilium)) follow [the server installation docs](https://docs.triliumnotes.org/user-guide/setup/server).
-
-
-## 💻 Contribute
-
-### Translations
-
-If you are a native speaker, help us translate Trilium by heading over to our [Weblate page](https://hosted.weblate.org/engage/trilium/).
-
-Here's the language coverage we have so far:
-
-[![Translation status](https://hosted.weblate.org/widget/trilium/multi-auto.svg)](https://hosted.weblate.org/engage/trilium/)
-
-### Code
-
-Download the repository, install dependencies using `pnpm` and then run the server (available at http://localhost:8080):
-```shell
-git clone https://github.com/TriliumNext/Trilium.git
-cd Trilium
-pnpm install
-pnpm run server:start
+```mermaid
+%% 从主动选择段落到审核后保存的用户闭环
+flowchart TB
+    Read[阅读 Trilium Web 文章] --> Select[悬停并选择完整段落]
+    Select --> Ask[提出一个问题或术语]
+    Ask --> Context[选择最小充分上下文]
+    Context --> Provider[服务端调用联网模型]
+    Provider --> Draft[答案进入当前标签页草稿]
+    Draft --> Review{用户审核}
+    Review -->|保存| Candidate[检查相似知识对象]
+    Candidate --> Choice{复用、新建或本文变体}
+    Choice --> Object[创建或连接规范对象]
+    Object --> Anchor[稳定标识符关联原文锚点]
+    Review -->|暂不保存| Draft
 ```
 
-### Documentation
+图 3.1　主动提问、会话草稿、人工审核和稳定连接流程
 
-Download the repository, install dependencies using `pnpm` and then run the environment required to edit the documentation:
-```shell
-git clone https://github.com/TriliumNext/Trilium.git
-cd Trilium
-pnpm install
-pnpm edit-docs:edit-docs
+</div>
+
+<div align="center">
+
+表 3.1　七步使用流程
+
+| 步骤 | 用户动作 | 系统承诺 |
+| --- | --- | --- |
+| 1 | 悬停并点击文本段落 | 选择完整段落并持久化稳定锚点 |
+| 2 | 输入一个问题或术语 | 每次生成保持单问单答，不建立多轮聊天 |
+| 3 | 请求回答 | 按确定性预算选择最小充分上下文，模型只在服务端调用 |
+| 4 | 阅读或编辑草稿 | 未审核答案只保留在当前浏览器会话，不写入知识库 |
+| 5 | 查看相似候选 | 突出可复用对象，同时始终允许新建和本文变体 |
+| 6 | 确认保存 | 创建规范对象和锚点连接，标题不充当外键 |
+| 7 | 修改或导出 | 先预览影响范围，再全局修改、创建变体、只改显示或导出索引 |
+
+</div>
+
+## 4 产品原则
+
+<div align="center">
+
+表 4.1　已冻结的边界
+
+| 原则 | 当前选择 | 为什么重要 |
+| --- | --- | --- |
+| 人主动提问 | 不自动批量生成用户可能问的问题 | 保留阅读判断和学习主动性 |
+| 审核后保存 | 生成内容先进入 `sessionStorage` 草稿 | 模型不能直接污染正式知识库 |
+| 标识符连接 | 文章锚点只保存不可变对象标识符 | 标题重命名、同名对象和全局更新保持可靠 |
+| Trilium 为真相源 | 笔记、关系、修订、权限和备份留在 Trilium | 派生相似索引可以删除并重建 |
+| 显式偏好 | 用户设置只能由用户明确修改 | 相同状态和设置保持确定性工作流 |
+| Web 优先 | 首发面向 Trilium Server 和浏览器 | 桌面端不是首发依赖 |
+| 联网模型 | 首个提供方为 DeepSeek，不支持本地模型 | 提供方经服务端适配器隔离 |
+| 个人自用 | 首发不包含社交、多人和中心化云知识库 | 权限与恢复范围保持可控 |
+
+</div>
+
+## 5 系统结构
+
+<div align="center">
+
+```mermaid
+%% ReadWeave 在 Trilium Web、服务端、数据和模型之间的边界
+flowchart TB
+    Browser[浏览器中的 Trilium Web] --> Panel[段落锚点与 ReadWeave 面板]
+    Panel --> API[ReadWeave 服务端接口]
+    API --> Engine[确定性上下文与相似候选引擎]
+    API --> Provider[联网模型服务端适配器]
+    API --> Domain[知识对象领域服务]
+    Domain --> Truth[Trilium 笔记、属性、关系与修订]
+    Domain --> Derived[可重建的相似候选索引]
+    Panel --> Draft[当前标签页 sessionStorage 草稿]
+    Truth --> Backup[Trilium 原生备份]
+    Truth --> Export[独立 JSON 索引导出]
 ```
 
-Alternatively, if you have Nix installed:
-```shell
-# Run directly
-nix run .#edit-docs
+图 5.1　界面、服务端、Trilium 真相数据和模型提供方边界
 
-# Or install to your profile
-nix profile install .#edit-docs
-trilium-edit-docs
+</div>
+
+浏览器只能调用 ReadWeave 服务端接口，不能获得模型密钥，正式知识只存在于 Trilium 真相数据，草稿不参与相似搜索、全局引用、备份承诺或索引导出 [4]
+
+## 6 数据模型
+
+<div align="center">
+
+表 6.1　稳定标识符和数据归属
+
+| 对象 | 标识符 | 保存位置 | 关键语义 |
+| --- | --- | --- | --- |
+| 文章 | `articleId` | Trilium 原生笔记 | 直接使用 `noteId`，标题和路径变化不影响引用 |
+| 段落锚点 | `anchorId` | CKEditor 模型中的持久属性 | 创建后稳定，段落序号和文本哈希不是主键 |
+| 知识对象 | `objectId` | Trilium 隐藏对象子树 | 一个已审核问答或一个术语定义 |
+| 文章连接 | `linkId` | Trilium 隐藏连接子树 | 唯一关联文章、锚点和对象 |
+| 会话草稿 | `articleId + anchorId` | 当前标签页 `sessionStorage` | 未审核、可恢复但不承诺永久保存 |
+| 相似候选 | 派生索引键 | 可重建索引 | 只用于发现候选，不是真相源 |
+
+</div>
+
+规范对象和连接继承来源文章的保护状态
+
+读取和导出都经过当前 Trilium 受保护会话的可读性检查，无权读取对象时不能泄露标题、摘要或相似度 [4]
+
+## 7 复用修改
+
+保存前，相似标题候选只提示复用，不阻止创建独立对象或本文变体
+
+修改已有对象前，界面先显示连接数、文章数和当前会话可访问的文章标题，用户再从三种语义中选择 [5]
+
+<div align="center">
+
+表 7.1　三种修改语义
+
+| 操作 | 修改对象 | 其他文章的结果 |
+| --- | --- | --- |
+| 全局修改 | 更新原 `objectId` 的最新修订 | 所有可读连接下次读取时获得新内容 |
+| 本文变体 | 创建新对象，并把当前 `linkId` 指向新对象 | 其他文章继续引用原对象 |
+| 只改显示 | 只修改当前连接的显示字段 | 规范对象正文和其他连接保持不变 |
+
+</div>
+
+标题、问题文本、答案、术语名称和缩写都不能充当连接键，同名不同义对象可以并存
+
+## 8 上下文生成
+
+上下文选择固定包含用户问题和完整目标段落，再从标题路径、相邻段落、当前小节、文章元数据、文章内相关小节和用户允许的链接来源逐层选择 [4]
+
+系统目标是用最少片段达到可回答条件，不会因为预算还有空余就把无关全文发送给模型
+
+现有单元测试验证目标段始终保留、预算上限有效、无关段落不会被填充、相关段落可以进入上下文 [6]
+
+同一显式设置和同一状态会走相同规则，但联网模型的措辞仍可能变化
+
+ReadWeave 通过固定工作流版本、显式模型配置、低随机度、结构校验、有限重试和评测记录降低波动
+
+## 9 导出备份
+
+文章侧栏可以导出文章、锚点、规范对象和连接组成的独立 JSON 文件，协议版本为 `1.0`，完整性摘要使用 SHA-256 [7]
+
+导出依次检查 JSON 语法、JSON Schema 2020-12、标识符唯一性、连接外键、锚点文章归属、对象类型、术语格式、禁止字段、秘密模式和规范化内容摘要
+
+草稿、服务密钥、派生向量和模型内部推理不进入导出，首发只承诺导出，不承诺安全导入，导出文件也不能替代 Trilium 原生数据库备份
+
+## 10 上游能力
+
+ReadWeave 保留 TriliumNext 的个人知识库基础能力，详细上游说明、安装方式、社区入口和多语言文档仍可从 [`docs/README.md`](docs/README.md) 与 [`docs/README-ZH_CN.md`](docs/README-ZH_CN.md) 查阅 [2]
+
+<div align="center">
+
+表 10.1　继承的 TriliumNext 能力组
+
+| 能力组 | 代表功能 |
+| --- | --- |
+| 知识组织 | 任意深度笔记树、克隆、属性、关系、全文搜索和笔记提升 |
+| 内容创作 | 富文本、表格、图片、数学公式、代码、画布、Mermaid 和思维导图 |
+| 版本安全 | 笔记修订、受保护笔记、原生备份和同步服务器 |
+| 可视化 | 关系图、笔记图、地理图、GPX 轨迹和集合表格 |
+| 自动化 | 脚本、REST API、Web Clipper、导入导出和可定制界面 |
+| 多端访问 | Web、桌面、触屏移动界面、暗色主题和多语言界面 |
+| 规模 | 上游说明支持超过 100,000 条笔记的知识库使用场景 |
+| 运营观察 | 指标端点和 Grafana 仪表板支持 |
+
+</div>
+
+## 11 本地验证
+
+仓库固定 Node.js `24.15.0`、pnpm `10.33.4` 和 TriliumNext `0.103.0` [8]
+
+```bash
+corepack enable # 启用仓库声明的 pnpm 版本
+pnpm install --frozen-lockfile # 按锁文件安装工作区依赖
+pnpm server:start # 启动本地 Trilium Server 与 Web 界面
 ```
 
+本地默认入口为 `http://localhost:8080`，该回环地址只用于开发，不代表正式部署入口
 
-### Building the Executable
-Download the repository, install dependencies using `pnpm` and then build the desktop app for Windows:
-```shell
-git clone https://github.com/TriliumNext/Trilium.git
-cd Trilium
-pnpm install
-pnpm run --filter desktop electron-forge:make --arch=x64 --platform=win32
+ReadWeave 定向检查如下
+
+```bash
+pnpm run readweave:privacy # 扫描相对上游基线的全部 ReadWeave 改动
+pnpm run --filter server test # 运行服务端领域与存储测试
+pnpm run --filter client test # 运行客户端测试
+pnpm run --filter server-e2e test # 在匿名隔离数据库中运行浏览器端到端测试
+pnpm client:build # 生成客户端生产构建
+pnpm server:build # 生成服务端生产构建
 ```
 
-For more details, see the [development docs](https://github.com/TriliumNext/Trilium/tree/main/docs/Developer%20Guide/Developer%20Guide).
+开发和测试必须使用匿名隔离数据库，第一次连接日常数据库前，需要在完整副本上完成升级、备份、恢复和回滚演练 [9]
 
-### Developer Documentation
+## 12 安全隐私
 
-Please view the [documentation guide](https://github.com/TriliumNext/Trilium/blob/main/docs/Developer%20Guide/Developer%20Guide/Environment%20Setup.md) for details. If you have more questions, feel free to reach out via the links described in the "Discuss with us" section above.
+- 模型密钥只通过 Web 服务端秘密管理注入，浏览器、笔记、导出、日志、截图和仓库都不能保存真实值
 
-## 👏 Shoutouts
+- 任何曾通过非受控渠道传输的密钥都应先在提供方控制台吊销，再创建替代密钥
 
-* [zadam](https://github.com/zadam) for the original concept and implementation of the application.
-* [Sarah Hussein](https://github.com/Sarah-Hussein) for designing the application icon.
-* [nriver](https://github.com/nriver) for his work on internationalization.
-* [Thomas Frei](https://github.com/thfrei) for his original work on the Canvas.
-* [antoniotejada](https://github.com/nriver) for the original syntax highlight widget.
-* [Dosu](https://dosu.dev/) for providing us with the automated responses to GitHub issues and discussions.
-* [Tabler Icons](https://tabler.io/icons) for the system tray icons.
+- 匿名测试模型只允许在内存数据库测试模式下启用，自动化测试不读取个人笔记或访问互联网
 
-Trilium would not be possible without the technologies behind it:
+- `_readweaveObjects` 和 `_readweaveLinks` 继承来源内容的保护边界，开放文章不能降低受保护对象权限
 
-* [CKEditor 5](https://github.com/ckeditor/ckeditor5) - the visual editor behind text notes. We are grateful for being offered a set of the premium features.
-* [CodeMirror](https://github.com/codemirror/CodeMirror) - code editor with support for huge amount of languages.
-* [Excalidraw](https://github.com/excalidraw/excalidraw) - the infinite whiteboard used in Canvas notes.
-* [Mind Elixir](https://github.com/SSShooter/mind-elixir-core) - providing the mind map functionality.
-* [Leaflet](https://github.com/Leaflet/Leaflet) - for rendering geographical maps.
-* [Tabulator](https://github.com/olifolkerd/tabulator) - for the interactive table used in collections.
-* [FancyTree](https://github.com/mar10/fancytree) - feature-rich tree library without real competition. 
-* [jsPlumb](https://github.com/jsplumb/jsplumb) - visual connectivity library. Used in [relation maps](https://docs.triliumnotes.org/user-guide/note-types/relation-map) and [link maps](https://docs.triliumnotes.org/user-guide/advanced-usage/note-map#link-map)
+- Git 提交钩子、推送钩子和 GitHub Actions 会扫描秘密、个人路径和 ReadWeave 相对上游的变更 [10]
 
-## 🤝 Support
+- 公开问题和截图不得包含正式网址、服务器路径、真实文章正文、用户标识、数据库文件、账户、令牌或模型用量记录
 
-Trilium is built and maintained with [hundreds of hours of work](https://github.com/TriliumNext/Trilium/graphs/commit-activity). Your support keeps it open-source, improves features, and covers costs such as hosting.
+## 13 当前状态
 
-Consider supporting the main developer ([eliandoran](https://github.com/eliandoran)) of the application via:
+产品版本为 `0.1.0`，核心个人 Web 阅读闭环已实现并进入发布验收 [9]
 
-- [GitHub Sponsors](https://github.com/sponsors/eliandoran)
-- [PayPal](https://paypal.me/eliandoran)
-- [Buy Me a Coffee](https://buymeacoffee.com/eliandoran)
+已验证范围包括客户端和服务端生产构建、领域与存储测试、浏览器端到端、JSON Schema 导出校验、目标项目类型检查、暗色主题与侧栏布局、隐私门禁和 CodeQL
 
+<div align="center">
 
-## 🔑 License
+表 13.1　发布前人工门槛
 
-Copyright 2017-2025 zadam, Elian Doran, and other contributors
+| 门槛 | 完成条件 | 当前边界 |
+| --- | --- | --- |
+| 密钥轮换 | 服务端配置新密钥，旧密钥完成吊销 | 必须由服务所有者在提供方控制台执行 |
+| 真实提供方契约 | 使用匿名公开文章验证计费、超时和错误提示 | 自动化测试不代替真实提供方检查 |
+| 数据库恢复 | 在日常数据库完整副本上完成升级、备份、恢复和回滚 | 禁止首次升级指向唯一日常数据库 |
+| 真实阅读验收 | 产品所有者使用至少三篇文章核对阅读习惯 | 偏好只能转为显式设置，不启用隐式学习 |
 
-This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+</div>
+
+## 14 仓库地图
+
+<div align="center">
+
+表 14.1　ReadWeave 维护入口
+
+| 路径 | 职责 |
+| --- | --- |
+| [`packages/commons/src/lib/readweave.ts`](packages/commons/src/lib/readweave.ts) | 版本化对象、连接、上下文和导出领域类型 |
+| [`packages/ckeditor5/src/plugins/readweave_anchor.ts`](packages/ckeditor5/src/plugins/readweave_anchor.ts) | 把稳定段落锚点持久化到编辑器模型 |
+| [`apps/server/src/services/readweave_engine.ts`](apps/server/src/services/readweave_engine.ts) | 确定性上下文预算和相似标题候选 |
+| [`apps/server/src/services/readweave_repository.ts`](apps/server/src/services/readweave_repository.ts) | 权限、对象、连接、影响范围、变体和导出 |
+| [`apps/server/src/services/readweave_ai.ts`](apps/server/src/services/readweave_ai.ts) | 服务端联网模型适配和匿名测试替身 |
+| [`apps/server-e2e/src/readweave.spec.ts`](apps/server-e2e/src/readweave.spec.ts) | 审核、复用、修改传播和导出浏览器回归 |
+| [`docs/readlayer`](docs/readlayer) | 产品需求、交互、架构、风险、追溯和发布证据 |
+| [`scripts/readweave`](scripts/readweave) | 隐私扫描和 Git 钩子安装 |
+
+</div>
+
+## 15 上游许可
+
+ReadWeave 延续 TriliumNext 的 GNU Affero General Public License v3.0 only，完整许可文本见 [`LICENSE`](LICENSE) [11]
+
+TriliumNext 的原始概念来自 zadam，社区项目由 Elian Doran 和其他贡献者持续维护
+
+ReadWeave 保留上游作者、贡献者、第三方组件、翻译和赞助信息，完整署名可在上游说明和仓库历史中查阅 [2]
+
+ReadWeave 是长期可合并的修改版，后续合并上游时需要记录基线、冲突、数据库版本、依赖变化和回归证据
+
+## 16 参考资料
+
+[1] AIALRA-0, “ReadWeave quick guide,” [`README_READWEAVE.md`](README_READWEAVE.md), 2026
+
+[2] TriliumNext, “Trilium Notes project documentation,” [`docs/README.md`](docs/README.md), 2026
+
+[3] AIALRA-0, “ReadWeave product overview,” [`docs/readlayer/README.md`](docs/readlayer/README.md), 2026
+
+[4] AIALRA-0, “ReadWeave technical architecture,” [`docs/readlayer/03-ARCHITECTURE.md`](docs/readlayer/03-ARCHITECTURE.md), 2026
+
+[5] AIALRA-0, “ReadWeave interaction specification,” [`docs/readlayer/02-UX-SPEC.md`](docs/readlayer/02-UX-SPEC.md), 2026
+
+[6] AIALRA-0, “Deterministic context engine tests,” [`apps/server/src/services/readweave_engine.spec.ts`](apps/server/src/services/readweave_engine.spec.ts), 2026
+
+[7] AIALRA-0, “ReadWeave index export protocol,” [`docs/readlayer/08-INDEX-EXPORT.md`](docs/readlayer/08-INDEX-EXPORT.md), 2026
+
+[8] TriliumNext and AIALRA-0, “Workspace runtime metadata,” [`.nvmrc`](.nvmrc) and [`package.json`](package.json), 2026
+
+[9] AIALRA-0, “ReadWeave implementation and acceptance status,” [`docs/readlayer/10-IMPLEMENTATION-STATUS.md`](docs/readlayer/10-IMPLEMENTATION-STATUS.md), 2026
+
+[10] AIALRA-0, “ReadWeave privacy workflow,” [`.github/workflows/readweave-privacy.yml`](.github/workflows/readweave-privacy.yml), 2026
+
+[11] Free Software Foundation, “GNU Affero General Public License version 3,” [`LICENSE`](LICENSE), 2007
