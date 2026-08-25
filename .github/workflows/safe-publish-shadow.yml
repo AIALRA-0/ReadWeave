@@ -1,0 +1,24 @@
+name: safe-publish shadow
+
+# Run the shared gate for real changes without blocking the repository during the pilot.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+# The reusable scanner only needs to read the checked-out repository.
+permissions:
+  contents: read
+
+jobs:
+  # Pin both the reusable workflow and its scanner input to the same immutable commit.
+  safe-publish:
+    uses: AIALRA-0/agent-github-safe-publish/.github/workflows/reusable-safe-publish.yml@bec8598313e98b8946a8cb61364ef029c39a0480
+    with:
+      tool_ref: bec8598313e98b8946a8cb61364ef029c39a0480
+      shadow: true
+    secrets:
+      SAFE_PUBLISH_POLICY_B64: ${{ secrets.SAFE_PUBLISH_POLICY_B64 }}
