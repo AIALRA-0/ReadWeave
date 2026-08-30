@@ -50,7 +50,7 @@ It is possible to write simple Bash scripts to interact with Trilium. As an exam
 #!/usr/bin/env bash
 
 # Configuration
-TOKEN=z1vA4fkGxjOR_ZXLrZeqHEFOv65yV3882iFCRtNIK9k9iWrHliITNSLQ=
+TOKEN=YOUR_ETAPI_TOKEN
 SERVER=http://localhost:8080
 
 # Download a note by ID
