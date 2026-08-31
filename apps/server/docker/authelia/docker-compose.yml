@@ -9,6 +9,9 @@ services:
       # Not :ro — Authelia's entrypoint chowns /config on startup.
       - ./config:/config
       - authelia_data:/data
+    environment:
+      # Enables the secret-file template expressions in configuration.yml.
+      X_AUTHELIA_CONFIG_FILTERS: template
     # Lets Authelia reach the Trilium dev server running on the host, if ever needed.
     extra_hosts:
       - "host.docker.internal:host-gateway"
