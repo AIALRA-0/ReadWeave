@@ -14,6 +14,7 @@ export default defineConfig( {
 	test: {
 		browser: {
 			enabled: true,
+			api: { host: '127.0.0.1', port: 15151, strictPort: true },
 			provider: webdriverio(),
 			headless: true,
 			ui: false,

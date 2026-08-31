@@ -8,10 +8,11 @@ const BLOCK_SELECTOR = "p,h1,h2,h3,h4,h5,h6,li,blockquote,pre";
 export const READWEAVE_GENERATION_STATUS_CLASSES = [
     "readweave-anchor-status-running",
     "readweave-anchor-status-unread",
+    "readweave-anchor-status-paused",
     "readweave-anchor-status-error"
 ] as const;
 
-export function readWeaveGenerationStatusClass(job: Pick<ReadWeaveGenerationJob, "status" | "unread">): string | undefined {
+export function readWeaveGenerationStatusClass(job: Pick<ReadWeaveGenerationJob, "status" | "unread" | "qualityState">): string | undefined {
     const state = readWeaveGenerationVisualState(job);
     return state ? `readweave-anchor-status-${state}` : undefined;
 }
@@ -21,7 +22,7 @@ export function readWeaveGenerationStatusClass(job: Pick<ReadWeaveGenerationJob,
  * creation request finish. This keeps the feedback attached to the exact range
  * the user clicked, including nested ranges, instead of decorating its block.
  */
-export function applyReadWeaveGenerationVisual(root: HTMLElement, job: Pick<ReadWeaveGenerationJob, "anchorId" | "kind" | "status" | "unread" | "updatedAt">): void {
+export function applyReadWeaveGenerationVisual(root: HTMLElement, job: Pick<ReadWeaveGenerationJob, "anchorId" | "kind" | "status" | "unread" | "qualityState" | "updatedAt">): void {
     const elements = matchingReadWeaveAnchorElements(root, job.anchorId);
     if (!elements.length) return;
 

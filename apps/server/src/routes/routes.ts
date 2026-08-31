@@ -181,6 +181,15 @@ function register(app: express.Application) {
     apiRoute(PUT, "/api/readweave/settings", readweaveRoute.updateSettings);
     asyncApiRoute(GET, "/api/readweave/settings/models", readweaveRoute.getModels);
     asyncApiRoute(PST, "/api/readweave/settings/search-test", readweaveRoute.testSearch);
+    apiRoute(GET, "/api/readweave/harness", readweaveRoute.listHarnessProfiles);
+    apiRoute(PST, "/api/readweave/harness", readweaveRoute.createHarnessDraft);
+    apiRoute(GET, "/api/readweave/harness/:versionId", readweaveRoute.getHarnessProfile);
+    apiRoute(PUT, "/api/readweave/harness/:versionId", readweaveRoute.updateHarnessDraft);
+    apiRoute(PST, "/api/readweave/harness/:versionId/cases", readweaveRoute.addHarnessCase);
+    asyncApiRoute(PST, "/api/readweave/harness/:versionId/trial", readweaveRoute.trialHarness);
+    apiRoute(PST, "/api/readweave/harness/:versionId/publish", readweaveRoute.publishHarness);
+    apiRoute(PST, "/api/readweave/harness/:versionId/rollback", readweaveRoute.rollbackHarness);
+    apiRoute(PST, "/api/readweave/harness/:versionId/archive", readweaveRoute.archiveHarness);
     apiRoute(GET, "/api/readweave/articles/:articleId/anchors", readweaveRoute.getAnchors);
     apiRoute(GET, "/api/readweave/articles/:articleId/anchors/:anchorId", readweaveRoute.getEntries);
     apiRoute(PST, "/api/readweave/candidates", readweaveRoute.queryCandidates);
@@ -191,11 +200,13 @@ function register(app: express.Application) {
     apiRoute(DEL, "/api/readweave/links/:linkId", readweaveRoute.deleteLink);
     asyncApiRoute(PST, "/api/readweave/generate", readweaveRoute.generate);
     apiRoute(PST, "/api/readweave/generation-jobs", readweaveRoute.startGenerationJob);
+    apiRoute(GET, "/api/readweave/generation-jobs", readweaveRoute.listGlobalGenerationJobs);
     apiRoute(GET, "/api/readweave/articles/:articleId/generation-jobs", readweaveRoute.listGenerationJobs);
     apiRoute(GET, "/api/readweave/generation-jobs/:jobId", readweaveRoute.getGenerationJob);
     apiRoute(GET, "/api/readweave/generation-jobs/:jobId/events", readweaveRoute.getGenerationEvents);
     apiRoute(PATCH, "/api/readweave/generation-jobs/:jobId/viewed", readweaveRoute.markGenerationJobViewed);
     apiRoute(PST, "/api/readweave/generation-jobs/:jobId/regenerate", readweaveRoute.regenerateGenerationJob);
+    apiRoute(PATCH, "/api/readweave/generation-jobs/:jobId/cancel", readweaveRoute.cancelGenerationJob);
     apiRoute(DEL, "/api/readweave/generation-jobs/:jobId", readweaveRoute.discardGenerationJob);
     apiRoute(GET, "/api/readweave/export", readweaveRoute.exportIndex);
 

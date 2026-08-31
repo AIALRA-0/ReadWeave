@@ -5,6 +5,7 @@ import type {
     ReadWeaveGenerateRequest,
     ReadWeaveGenerateResponse,
     ReadWeaveGenerationProgress,
+    ReadWeaveHarnessProfile,
     ReadWeaveQuestionContract,
     ReadWeaveTermIdentity,
     ReadWeaveUsageSummary,
@@ -15,31 +16,22 @@ import { ValidationError } from "@triliumnext/core";
 import { selectReadWeaveContext } from "./readweave_engine.js";
 import { NonRetryableReadWeaveError } from "./readweave_errors.js";
 import { searchReadWeaveEvidence } from "./readweave_search.js";
-import { getReadWeaveRuntimeConfig } from "./readweave_settings.js";
+import {
+    getReadWeaveRuntimeConfig,
+    getReadWeaveVerifierRuntimeConfig,
+    type ReadWeaveModelRuntimeConfig
+} from "./readweave_settings.js";
 import { HUMAN_READABLE_CHINESE_STYLE_CONTRACT } from "./readweave_style_contract.js";
-import { KNOWN_ENTITY_NAMING_NOTES, KNOWN_PRODUCT_CANONICAL_FORMS } from "./readweave_term_catalog.js";
-
-const WORKFLOW_VERSION = "unified-evidence-v1" as const;
+import { KNOWN_PRODUCT_CANONICAL_FORMS } from "./readweave_term_catalog.js";
+const WORKFLOW_VERSION = "quality-closure-v2" as const;
 // Quality-first ceiling.  Routine answers should remain around ¥0.001–0.015,
 // while difficult evidence or repair paths may spend more instead of exposing
 // a preventable error.  The upper bound is still strict and observable.
 const COST_BUDGET_CNY = 0.05;
+const ROUTINE_COST_TARGET_CNY = 0.01;
 const MAX_SEARCH_QUERIES = 3;
 const MAX_EXTERNAL_SOURCES = 8;
 const DEFAULT_CONTEXT_BUDGET = 6_000;
-const UNIFIED_REVERSED_CANONICAL_FORMS: Array<[RegExp, string]> = [
-    [ /三维集成电路\s*[（(]\s*3\s*-?\s*D\s*-?\s*ICs?\s*[）)]/giu, "3D IC 三维集成电路（Three-Dimensional Integrated Circuit）" ],
-    [ /三维集成电路\s*[（(]\s*Three-Dimensional Integrated Circuits?\s*[,，]\s*3D\s*-?\s*ICs?\s*[）)]/giu, "3D IC 三维集成电路（Three-Dimensional Integrated Circuit）" ],
-    [ /电子设计自动化\s*[（(]\s*EDA\s*[）)]/giu, "EDA 电子设计自动化（Electronic Design Automation）" ],
-    [ /电子设计自动化\s*[（(]\s*Electronic Design Automation\s*[,，]\s*EDA\s*[）)]/giu, "EDA 电子设计自动化（Electronic Design Automation）" ],
-    [ /硅通孔\s*[（(]\s*TSVs?\s*[）)]/giu, "TSV 硅通孔（Through-Silicon Via）" ],
-    [ /硅通孔\s*[（(]\s*Through-Silicon Vias?\s*[,，]\s*TSVs?\s*[）)]/giu, "TSV 硅通孔（Through-Silicon Via）" ],
-    [ /机器学习\s*[（(]\s*ML\s*[）)]/giu, "ML 机器学习（Machine Learning）" ],
-    [ /人工智能\s*[（(]\s*AI\s*[）)]/giu, "AI 人工智能（Artificial Intelligence）" ],
-    [ /佐治亚理工学院\s*[（(]\s*Georgia Tech\s*[）)]/giu, "佐治亚理工学院（Georgia Institute of Technology）" ],
-    [ /AEAD\s*[（(]\s*Authenticated Encryption with Associated Data\s*[）)]/giu, "AEAD 带关联数据的认证加密（Authenticated Encryption with Associated Data）" ],
-    [ /ECDHE\s*[（(]\s*Ephemeral Elliptic Curve Diffie-Hellman\s*[）)]/giu, "ECDHE 临时椭圆曲线迪菲—赫尔曼密钥交换（Ephemeral Elliptic Curve Diffie-Hellman）" ]
-];
 
 interface CompletionUsage {
     prompt_tokens?: number;
@@ -160,9 +152,10 @@ async function requestJson<T>(
     system: string,
     user: string,
     maxTokens: number,
-    timeoutMs = 15_000
+    timeoutMs = 15_000,
+    runtimeConfig?: ReadWeaveModelRuntimeConfig
 ): Promise<ModelCallResult<T>> {
-    const config = getReadWeaveRuntimeConfig();
+    const config = runtimeConfig ?? getReadWeaveRuntimeConfig();
     const isDeepSeek = /(^|\.)deepseek\.com$/iu.test(new URL(config.baseUrl).hostname);
     let lastError: unknown;
     // Each background job already retries the complete workflow. Retrying one
@@ -228,7 +221,7 @@ function normalizeQuestion(request: ReadWeaveGenerateRequest): string {
     return title;
 }
 
-function plannerSystemPrompt(): string {
+function plannerSystemPrompt(harness?: ReadWeaveHarnessProfile): string {
     return [
         "你是 ReadWeave 的统一问题分析器，所有人物、概念、技术、方法、产品、论文、数值、比较和操作问题都使用这一套流程，不得按对象类型切换提示词",
         "你的任务不是回答，而是把用户真正问的命题写成可检查的回答契约，并提出最多三个能找到直接证据的搜索查询",
@@ -238,8 +231,9 @@ function plannerSystemPrompt(): string {
         "文章选区只用于消歧和理解所指对象，不能自动变成答案主体；如果用户问脱离文章语境的通用资料，就排除重复文章已知信息",
         "时效性、人物现任身份、版本、价格、标准状态和最新研究需要公开来源；稳定概念也应给出权威定义来源",
         "searchQueries 按重要性排序；第一项必须是最可能找到权威直接证据的主查询，后两项只补足不同事实面",
+        harness ? `当前发布 Harness 的问题归一化规则：\n${harness.modules.questionNormalization}` : "",
         "只输出 JSON 对象，字段为 normalizedQuestion、objective、answerRequirements、exclusions、searchQueries、requiresCurrentEvidence"
-    ].join("\n");
+    ].filter(Boolean).join("\n");
 }
 
 function focusTokens(value: string): Set<string> {
@@ -264,6 +258,15 @@ function focusScore(value: string, contextTokens: ReadonlySet<string>): number {
 
 function normalizeContract(payload: PlannerPayload, fallbackQuestion: string, selectedContext = ""): ReadWeaveQuestionContract {
     let normalizedQuestion = cleanText(payload.normalizedQuestion, 1_000).replace(/\s+/gu, " ") || fallbackQuestion;
+    const fallbackLatinSubjects = Array.from(fallbackQuestion.matchAll(/[A-Za-z][A-Za-z0-9+._/-]{1,}/gu), match => match[0].toLocaleLowerCase());
+    const normalizedLower = normalizedQuestion.toLocaleLowerCase();
+    const lostLatinSubject = fallbackLatinSubjects.some(subject => !normalizedLower.includes(subject));
+    const fallbackFocus = focusTokens(fallbackQuestion);
+    const normalizedFocus = focusTokens(normalizedQuestion);
+    const sharedFocus = Array.from(fallbackFocus).filter(token => normalizedFocus.has(token)).length;
+    if (lostLatinSubject || (fallbackFocus.size >= 2 && sharedFocus === 0)) {
+        normalizedQuestion = fallbackQuestion;
+    }
     if (/\p{Script=Han}/u.test(normalizedQuestion)) {
         normalizedQuestion = normalizedQuestion.replace(/\?/gu, "？").replace(/,/gu, "，");
     }
@@ -330,14 +333,7 @@ function normalizeContract(payload: PlannerPayload, fallbackQuestion: string, se
         const directProfileQuery = /\p{Script=Han}/u.test(personName)
             ? `${personName} 官方主页 大学 教授 研究方向`
             : `${personName} researcher profile current affiliation`;
-        const authoritativeQuery = personName === "周志华"
-            ? "site:nju.edu.cn 周志华 教授 机器学习"
-            : personName === "Fei-Fei Li"
-                ? "site:stanford.edu Fei-Fei Li professor computer vision"
-                : personName === "Ada Lovelace"
-                    ? "site:computerhistory.org Ada Lovelace Analytical Engine"
-                    : undefined;
-        searchQueries = [ directProfileQuery, authoritativeQuery, ...searchQueries ]
+        searchQueries = [ directProfileQuery, `${personName} official biography profile`, ...searchQueries ]
             .filter((query): query is string => Boolean(query))
             .filter((query, index, values) => values.indexOf(query) === index)
             .slice(0, MAX_SEARCH_QUERIES);
@@ -348,11 +344,8 @@ function normalizeContract(payload: PlannerPayload, fallbackQuestion: string, se
         answerRequirements = answerRequirements.filter(requirement =>
             !/(?:姓名拼写|韩文名|中文名|论文|文章|作者|合作者|发表|出版|会议|期刊|当前选区|文中|本文)/u.test(requirement)
         );
-        const historicalPerson = /Ada Lovelace/u.test(personName);
         answerRequirements = Array.from(new Set([
-            historicalPerson
-                ? "先说明人物的历史身份，再概括其主要工作方向"
-                : "有直接权威证据时先说明人物当前所在机构与职位，再概括主要研究方向；证据不足时明确说明无法可靠确认，不得猜测",
+            "有直接权威证据时先说明人物的身份；仍在任职的人物可补充当前机构与职位，历史人物则说明其时代和主要身份；证据不足时不得猜测",
             "若独立人物资料能够直接支持，说明一项领域级代表性工作或贡献，但不复述当前文章的论文题名",
             ...answerRequirements
         ])).slice(0, 8);
@@ -379,13 +372,6 @@ function normalizeContract(payload: PlannerPayload, fallbackQuestion: string, se
             "不主动引入解释核心定义不需要的外围产品、模式、库、文件系统或英文缩写"
         ])).slice(0, 8);
     }
-    if (/\bDAX\b/iu.test(normalizedQuestion) && simpleDefinition) {
-        answerRequirements = Array.from(new Set([
-            "说明 DAX 直接访问（Direct Access）是操作系统内核提供的访问机制，不是一种内存硬件",
-            "说明它绕过页面缓存，并通过直接内存映射让处理器访问持久内存",
-            ...answerRequirements
-        ])).slice(0, 8);
-    }
     if (/(?:形态|形式|以什么(?:方式|载体|结构)?存在)/u.test(normalizedQuestion)) {
         const askedSubject = normalizedQuestion.match(/\b[A-Z][A-Za-z0-9+._/-]{1,}\b/u)?.[0]?.toLocaleLowerCase();
         answerRequirements = answerRequirements.filter(requirement => {
@@ -402,71 +388,20 @@ function normalizeContract(payload: PlannerPayload, fallbackQuestion: string, se
             "不展开与所问形态无关的内部标识符、相邻组件职责、历史或市场背景"
         ])).slice(0, 8);
     }
-    if (/\bdblp\b/iu.test(normalizedQuestion)) {
-        const namingNote = KNOWN_ENTITY_NAMING_NOTES.get("DBLP");
-        answerRequirements = answerRequirements.filter(requirement =>
-            !/(?:全称|DataBase systems|Digital Bibliography|维护|运营|创建|创办|成立|历史|起源)/iu.test(requirement)
-        );
-        if (namingNote) answerRequirements = [ namingNote, ...answerRequirements ].slice(0, 8);
-        searchQueries = [
-            "site:dblp.org/faq dblp computer science bibliography proper name acronym lost its meaning",
-            ...searchQueries
-        ].slice(0, MAX_SEARCH_QUERIES);
-    }
-    if (/\bORCID\b/iu.test(normalizedQuestion) && simpleDefinition) {
-        answerRequirements = Array.from(new Set([
-            "说明 ORCID 开放研究者与贡献者标识符（Open Researcher and Contributor ID）的通用含义、标识对象和核心作用",
-            ...answerRequirements
-        ])).slice(0, 8);
-        searchQueries = [
-            "site:info.orcid.org/what-is-orcid ORCID Open Researcher and Contributor ID unique persistent identifier",
-            ...searchQueries.filter(query => !/\b\d{4}-\d{4}-\d{4}-\d{3}[\dX]\b/iu.test(query))
-        ].slice(0, MAX_SEARCH_QUERIES);
-    }
-    if (/\bHTTPS\b/iu.test(normalizedQuestion) && /(?:如何|怎么|保护|工作|机制)/u.test(normalizedQuestion)) {
-        answerRequirements = Array.from(new Set([
-            "按现行 TLS 1.3 说明握手认证、密钥协商和记录层加密如何共同保护 HTTPS 通信",
-            ...answerRequirements
-        ])).slice(0, 8);
-        exclusions = Array.from(new Set([
-            ...exclusions,
-            "不得把已弃用的 SSL、RSA 密钥交换或独立 MAC 方案写成现代 HTTPS 的通用机制"
-        ])).slice(0, 8);
-        searchQueries = [
-            "site:rfc-editor.org/rfc/rfc8446 TLS 1.3 handshake certificate key exchange AEAD record protocol",
-            ...searchQueries
-        ].slice(0, MAX_SEARCH_QUERIES);
-    }
-    if (/\bSQL\b/iu.test(normalizedQuestion)
-        && /\bNoSQL\b/iu.test(normalizedQuestion)
-        && /(?:区别|比较|差异)/u.test(normalizedQuestion)) {
-        answerRequirements = Array.from(new Set([
-            "先说明关系型表格与非关系型多种数据模型这一决定性区别",
-            "明确说明事务、一致性和横向或纵向扩展能力取决于具体数据库产品与配置，不是 SQL 或 NoSQL 类别的绝对边界",
-            ...answerRequirements
-        ])).slice(0, 8);
-        exclusions = Array.from(new Set([
-            ...exclusions,
-            "不得声称 NoSQL 数据库通常不支持 ACID、必然遵循 BASE 或只能横向扩展",
-            "不得声称 SQL 数据库只能纵向扩展"
-        ])).slice(0, 8);
-        searchQueries = [
-            "SQL NoSQL data model transactions ACID horizontal scaling official documentation",
-            ...searchQueries
-        ].slice(0, MAX_SEARCH_QUERIES);
-    }
-    if (/\bCXL\.io\b/iu.test(normalizedQuestion)) {
-        searchQueries = [
-            "site:computeexpresslink.org CXL.io protocol PCIe physical layer discovery configuration",
-            ...searchQueries
-        ].slice(0, MAX_SEARCH_QUERIES);
-    }
+    const normalizedQuestionTokens = focusTokens(normalizedQuestion);
+    searchQueries = (searchQueries.length > 0 ? searchQueries : [ normalizedQuestion ]).map(query => {
+        const queryLower = query.toLocaleLowerCase();
+        const includesLatinSubject = fallbackLatinSubjects.length === 0 || fallbackLatinSubjects.every(subject => queryLower.includes(subject));
+        const queryTokens = focusTokens(query);
+        const includesQuestionFocus = Array.from(normalizedQuestionTokens).some(token => queryTokens.has(token));
+        return includesLatinSubject && includesQuestionFocus ? query : `${normalizedQuestion} ${query}`;
+    }).filter((query, index, values) => values.indexOf(query) === index).slice(0, MAX_SEARCH_QUERIES);
     return {
         normalizedQuestion,
         objective,
         answerRequirements: answerRequirements.length > 0 ? answerRequirements : [ objective ],
         exclusions,
-        searchQueries: searchQueries.length > 0 ? searchQueries : [ normalizedQuestion ],
+        searchQueries,
         requiresCurrentEvidence: (
             !!personName && /(?:是谁|是何人|人物|个人简介)/u.test(normalizedQuestion)
         ) || payload.requiresCurrentEvidence !== false
@@ -490,6 +425,41 @@ function localEvidence(fragments: ReadWeaveContextFragment[], accessedAt: string
 
 function sourceKey(source: { url: string; title: string }): string {
     return source.url.replace(/[?#].*$/u, "").replace(/\/$/u, "").toLocaleLowerCase() || source.title.toLocaleLowerCase();
+}
+
+export function sourceMatchesReadWeaveEvidenceFocus(
+    source: { title: string; url: string; snippet: string },
+    contract: ReadWeaveQuestionContract,
+    query: string
+): boolean {
+    const question = contract.normalizedQuestion.normalize("NFKC");
+    const evidenceText = `${source.title}\n${source.url}\n${source.snippet}`.normalize("NFKC").toLocaleLowerCase();
+    const latinSubjects = Array.from(new Set(
+        Array.from(question.matchAll(/[A-Za-z][A-Za-z0-9+._/-]{1,}/gu), match => match[0].toLocaleLowerCase())
+            .filter(token => !/^(?:what|who|how|why|the|and|or|official|profile)$/u.test(token))
+    ));
+    const personName = question.match(/\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,5}\b/u)?.[0]
+        ?.toLocaleLowerCase()
+        .split(/\s+/u)
+        .filter(Boolean);
+    if (personName?.length && !personName.every(token => evidenceText.includes(token))) return false;
+    if (latinSubjects.length > 0 && !latinSubjects.some(token => evidenceText.includes(token))) {
+        const genericSearchTerms = /^(?:what|who|how|why|the|and|or|official|profile|researcher|current|authoritative|direct|evidence|source|definition|documentation)$/u;
+        const querySpecificTerms = Array.from(new Set(
+            Array.from(query.toLocaleLowerCase().matchAll(/[a-z][a-z0-9+._/-]{2,}/gu), match => match[0])
+                .filter(token => !genericSearchTerms.test(token) && !latinSubjects.includes(token))
+        ));
+        const expansionOverlap = querySpecificTerms.filter(token => evidenceText.includes(token)).length;
+        if (expansionOverlap < 2) return false;
+    }
+
+    const questionTokens = focusTokens(`${question}\n${query}`);
+    const evidenceTokens = focusTokens(evidenceText);
+    let overlap = 0;
+    for (const token of questionTokens) if (evidenceTokens.has(token)) overlap++;
+    const doi = question.match(/\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+\b/iu)?.[0]?.toLocaleLowerCase();
+    if (doi && evidenceText.includes(doi)) return true;
+    return overlap >= (latinSubjects.length > 0 ? 1 : 2);
 }
 
 async function gatherExternalEvidence(
@@ -538,7 +508,18 @@ async function gatherExternalEvidence(
         }
         results = freeResults.map((result, index) => index === paidQueryIndex ? paidResult : result);
     }
-    type SearchSource = (typeof results)[number]["sources"][number];
+    const relevanceRejected = results.reduce((sum, result, index) => sum + result.sources.filter(source =>
+        !sourceMatchesReadWeaveEvidenceFocus(source, contract, queries[index] ?? contract.normalizedQuestion)
+    ).length, 0);
+    const focusedResults = results.map((result, index) => ({
+        ...result,
+        sources: result.sources.filter(source => sourceMatchesReadWeaveEvidenceFocus(
+            source,
+            contract,
+            queries[index] ?? contract.normalizedQuestion
+        ))
+    }));
+    type SearchSource = (typeof focusedResults)[number]["sources"][number];
     const selected: SearchSource[] = [];
     const selectedKeys = new Set<string>();
     const addSource = (source: SearchSource) => {
@@ -550,12 +531,12 @@ async function gatherExternalEvidence(
     // Preserve evidence diversity across planner queries instead of allowing the
     // first query to occupy the complete source budget.
     for (let position = 0; position < 2; position++) {
-        for (const result of results) {
+        for (const result of focusedResults) {
             const source = result.sources[position];
             if (source) addSource(source);
         }
     }
-    results.flatMap(result => result.sources)
+    focusedResults.flatMap(result => result.sources)
         .toSorted((left, right) => right.score - left.score)
         .forEach(addSource);
     const accessedAt = new Date().toISOString();
@@ -573,9 +554,12 @@ async function gatherExternalEvidence(
         sources,
         queries,
         providers: Array.from(new Set(sources.map(source => source.provider))),
-        cacheHit: results.every(result => result.cacheHit),
-        searchCostCny: results.reduce((sum, result) => sum + result.searchCostCny, 0),
-        warnings: Array.from(new Set(results.flatMap(result => result.warnings)))
+        cacheHit: focusedResults.every(result => result.cacheHit),
+        searchCostCny: focusedResults.reduce((sum, result) => sum + result.searchCostCny, 0),
+        warnings: Array.from(new Set([
+            ...focusedResults.flatMap(result => result.warnings),
+            ...(relevanceRejected > 0 ? [ `已丢弃 ${relevanceRejected} 个与问题主体不匹配的搜索结果` ] : [])
+        ]))
     };
 }
 
@@ -588,7 +572,7 @@ function evidenceBlock(sources: ReadWeaveEvidenceSource[], excerptMaximum = 900)
     ].filter(Boolean).join("\n")).join("\n\n");
 }
 
-function writerSystemPrompt(): string {
+function writerSystemPrompt(harness?: ReadWeaveHarnessProfile): string {
     return [
         "你是 ReadWeave 的统一证据写作者，所有问题都遵守同一套规则，不按人物、术语、产品、论文或技术另设回答模板",
         "第一优先级是直接回答用户所问的命题；先给结论，再按理解所必需的顺序解释原因、机制、边界和应用，不得用相关但未回答问题的资料代替答案",
@@ -603,6 +587,7 @@ function writerSystemPrompt(): string {
         "公开职业资料页若明确标注‘当前机构’，可直接用于人物现任公司或机构；不得因为 Experience 详情被隐藏为 N/A，就否定页面抬头已经明确给出的当前机构",
         "协议层级、物理或逻辑载体、数据单位、标准状态和对象类别等技术分类必须由证据直接支持；不得把传输、事务、链路、接口、控制器等相邻概念当成近义词替换",
         "比较两个类别时，先写决定性的结构差异，再把扩展方式、性能或一致性等写成有条件的常见取舍；不得把某种产品实践概括成整个类别必然遵循的规则",
+        "解释增益、差值、变化量或百分比时，先明确计算方向，例如新值减旧值或旧值减新值；随后逐项复算公式、正负号和文字结论，三者方向不一致时不得输出",
         "回答应适合第一次接触主题的中文读者，使用具体主语和动词，把抽象判断落到对象、动作和结果；避免术语堆叠、空泛总结、同义反复和元话语",
         "中文技术名词优先写成中文全称（English Full Name）；缩写首次出现写成“缩写 中文全称（English Full Name）”；专有名没有可靠中文译名时保留原文，不得生造译名",
         "英文全称按其官方写法；不要把缩写自身塞进括号冒充英文全称，不要嵌套括号，不要把中文和英文拆碎后重组",
@@ -614,9 +599,12 @@ function writerSystemPrompt(): string {
         "每一段必须增加新的理解层次；后文若只是换一种说法重复前文的定义或因果链，就删除后文，不得用同义重复增加长度",
         "正文禁止使用中文句号“。”，句内关系用逗号、冒号或分号，段落结束直接换行；英文名称内部的点号和 DOI 等标识符不受此限制",
         "凡是询问对象本身的通用信息，答案必须脱离当前文章仍然成立；先建立对象的独立身份或通用含义，再按用户所问补充必要信息，不得用所在句中的单篇论文、局部用途或测试材料代替对象本身",
+        harness ? `当前发布 Harness 的证据规则：\n${harness.modules.evidencePolicy}` : "",
+        harness ? `当前发布 Harness 的回答规则：\n${harness.modules.answerWriting}` : "",
+        harness ? `当前发布 Harness 的格式规则：\n${harness.modules.formatRules}` : "",
         ...HUMAN_READABLE_CHINESE_STYLE_CONTRACT,
         "只输出 JSON 对象，字段为 body、optimizedTitle、termIdentity、claims、unresolvedClaims；claims 每项包含 claimId、text、sourceIds、confidence"
-    ].join("\n");
+    ].filter(Boolean).join("\n");
 }
 
 function normalizeTermIdentity(value: unknown): ReadWeaveTermIdentity | undefined {
@@ -902,10 +890,6 @@ export function formatReadWeaveBody(value: unknown): string {
         .replace(/\n{3,}/gu, "\n\n")
         .replace(/；(?=\s*(?:\n|$))/gu, "")
         .trim();
-    body = body.replace(
-        /(?:系统级芯片|片上系统)\s*[（(]\s*SoC\s+片上系统[（(]\s*System on Chip\s*[）)]\s*[,，]?\s*System on Chip\s*[）)]/giu,
-        "SoC 片上系统（System on Chip）"
-    );
     // Examples are explanatory prose, not bilingual names.  Keeping a Latin
     // command or token inside a Chinese example parenthesis makes the naming
     // validator treat it as a malformed mixed-language full name.  Express
@@ -924,26 +908,6 @@ export function formatReadWeaveBody(value: unknown): string {
     }
     body = normalizeOutsideParenthesesPunctuation(body)
         .replace(/（([^（）]{2,180})）\s*[（(][\p{Script=Han}、，,\s]{2,120}[）)]/gu, "（$1）");
-    for (const [ pattern, canonical ] of UNIFIED_REVERSED_CANONICAL_FORMS) {
-        body = body.replace(pattern, canonical);
-    }
-    // If the writer supplied only a Chinese name followed by an unexplained
-    // acronym, retaining the acronym would violate the bilingual contract and
-    // pretending to know its expansion would be worse. Known canonical forms
-    // were expanded above; unknown bare acronyms are therefore removed while
-    // the meaningful Chinese name is preserved.
-    body = body.replace(
-        /([\p{Script=Han}]{2,40})\s*[（(]\s*([A-Z][A-Z0-9+._/-]{1,15})\s*[）)]/gu,
-        (matched, chineseName: string, originalName: string) => {
-            const canonical = `${chineseName}（${originalName}）`;
-            const reviewedCanonical = Array.from(KNOWN_PRODUCT_CANONICAL_FORMS.values()).find(candidate => {
-                const identity = knownTermIdentity(candidate);
-                return identity?.chineseName === chineseName && identity.abbreviation === originalName;
-            });
-            return reviewedCanonical
-                ?? (Array.from(KNOWN_PRODUCT_CANONICAL_FORMS.values()).includes(canonical) ? canonical : chineseName);
-        }
-    );
     body = body.replace(/(?<=\p{Script=Han})\s*\(([^()\n]{2,180})\)/gu, "（$1）");
     body = body
         .replace(/(?<=\p{Script=Han})(?=(?:3D|[A-Z])[A-Za-z0-9+._/-]*(?:\s|\b))/gu, " ")
@@ -952,13 +916,7 @@ export function formatReadWeaveBody(value: unknown): string {
         .replace(/）[ \t]+(?=\p{Script=Han})/gu, "）")
         .replace(/(?<=\p{Script=Han})[ \t]+(?=\p{Script=Han})/gu, "")
         .replace(/\bvenue\b/giu, "发表场所");
-    body = body
-        .replace(/当前正式名称(?:是|为)\s*[“"]?dblp computer science bibliography[”"]?/giu, "当前正式名称为 dblp 计算机科学书目（dblp computer science bibliography）")
-        .replace(/[“"]Digital Bibliography\s*&\s*Library Project[”"]/giu, "数字书目与图书馆项目（Digital Bibliography & Library Project）")
-        .replace(/2\.5D\s*(?:和|与|及|、)\s*3D\s*集成电路/giu, "二维半与三维集成电路")
-        .replace(/2\.5D\s*[\/／]\s*3D\s*(?=封装|集成|互连)/giu, "二维半与三维")
-        .replace(/[，；]?\s*可简称为\s*[“"]?dblp[”"]?/giu, "")
-        .replace(/[“”]/gu, "");
+    body = body.replace(/[“”]/gu, "");
     body = normalizeSimpleMathNotation(body);
     body = removeDecorativeParagraphHeadings(body);
     body = deduplicateBodyLines(body).replace(/(?<!\n)\n(?!\n)/gu, "；");
@@ -1225,6 +1183,46 @@ function inferTermIdentityFromOpening(value: string, askedTerm: string | undefin
     return undefined;
 }
 
+function askedTermFromQuestion(question: string): string | undefined {
+    const normalized = question.normalize("NFKC").trim();
+    const quoted = normalized.match(/^[“"]([^”"]{1,180})[”"]\s*(?:是|为|指)(?:什么|何物|何种|哪类)?/u)?.[1]?.trim();
+    if (quoted) return quoted;
+    return normalized.match(/^(.{1,180}?)\s*(?:是|为|指)(?:什么|何物|何种|哪类)/u)?.[1]?.trim();
+}
+
+function applyConfirmedTermIdentity(value: string, identity: ReadWeaveTermIdentity | undefined): string {
+    if (!identity?.abbreviation || !identity.chineseName || !identity.englishName) return value;
+    const canonical = `${identity.abbreviation} ${identity.chineseName}（${identity.englishName}）`;
+    const abbreviation = new RegExp(
+        `(?<![\\p{Script=Latin}\\p{N}_])${escapeRegExp(identity.abbreviation)}(?![\\p{Script=Latin}\\p{N}_])`,
+        "gu"
+    );
+    let corrected = value;
+    if (!corrected.includes(canonical)) {
+        const openingAbbreviation = new RegExp(`^${escapeRegExp(identity.abbreviation)}(?=\\s*(?:是|指|为|属于|用于|负责|通过|采用))`, "u");
+        const openingChinese = new RegExp(`^${escapeRegExp(identity.chineseName)}(?=\\s*(?:是|指|为|属于|用于|负责|通过|采用))`, "u");
+        if (openingAbbreviation.test(corrected)) corrected = corrected.replace(openingAbbreviation, canonical);
+        else if (openingChinese.test(corrected)) corrected = corrected.replace(openingChinese, canonical);
+    }
+    const canonicalIndex = corrected.indexOf(canonical);
+    if (canonicalIndex < 0) return corrected;
+    const afterIndex = canonicalIndex + canonical.length;
+    return corrected.slice(0, afterIndex) + corrected.slice(afterIndex).replace(abbreviation, identity.chineseName);
+}
+
+function correctLongestObservedMargin(value: string, question: string): string {
+    if (!/(?:最长|最大).{0,20}(?:时间|时长|延迟|握手|观测|记录)/u.test(question)) return value;
+    const threshold = value.match(/(?:阈值|上限|预算|超时)[^\d]{0,12}(\d+(?:\.\d+)?)\s*(秒|毫秒|分钟|小时)/u);
+    const observed = value.match(/(?:需要|耗时|用时|延迟|握手)[^\d]{0,16}(\d+(?:\.\d+)?)\s*(?:至|到|[-–—])\s*(\d+(?:\.\d+)?)\s*(秒|毫秒|分钟|小时)/u);
+    if (!threshold || !observed || threshold[2] !== observed[3]) return value;
+    const thresholdValue = Number(threshold[1]);
+    const longestValue = Number(observed[2]);
+    if (!Number.isFinite(thresholdValue) || !Number.isFinite(longestValue) || thresholdValue < longestValue) return value;
+    const margin = Number((thresholdValue - longestValue).toFixed(6));
+    const replacement = `$${thresholdValue} - ${longestValue} = ${margin}$ ${threshold[2]}余量`;
+    return value.replace(/(?:有|为|剩余|保留)?\s*\d+(?:\.\d+)?\s*(?:至|到|[-–—])\s*\d+(?:\.\d+)?\s*(?:秒|毫秒|分钟|小时)余量/u, replacement);
+}
+
 function compactFocusedTermBody(value: string): string {
     const historyOnly = /(?:\b(?:19|20)\d{2}\s*年|(?:最初|首次|早期|后来|随后|此后|近年来|近年|自\s*(?:19|20)\d{2}\s*年|自\s*(?:19|20)\d{2}\s*年代)|(?:由|联合)\s*[^；\n]{1,100}(?:开发|提出|发明|创建|发布|推出|研制|命名)|(?:创建者|发明者|提出者|开发者|合作方|联合开发方)(?:是|包括))/iu;
     const paragraphs = value
@@ -1262,6 +1260,52 @@ function removePeripheralAcronymClauses(
     const retained = clauses.filter(clause => !containsPeripheral(clause));
     if (retained.length === 0 || retained.join("").length < 48) return value;
     return formatReadWeaveBody(retained.join("\n\n"));
+}
+
+function applyGeneralContractCorrections(
+    body: string,
+    claims: ReadWeaveClaim[],
+    contract: ReadWeaveQuestionContract,
+    termIdentity?: ReadWeaveTermIdentity,
+    kind: ReadWeaveGenerateRequest["kind"] = "question"
+): { body: string; claims: ReadWeaveClaim[]; termIdentity?: ReadWeaveTermIdentity } {
+    const askedTerm = askedTermFromQuestion(contract.normalizedQuestion);
+    const selectedBilingualIdentity = askedTerm?.match(
+        /^([A-Za-z][A-Za-z0-9+._\-–—]{1,40})\s+([\p{Script=Han}][^（）()\n]{1,100})[（(]([A-Za-z][^（）()\n]{1,180})[）)]$/u
+    );
+    const selectedIdentity = selectedBilingualIdentity
+        ? normalizeTermIdentity({
+            abbreviation: selectedBilingualIdentity[1],
+            chineseName: selectedBilingualIdentity[2],
+            englishName: selectedBilingualIdentity[3]
+        })
+        : undefined;
+    const normalizedIdentity = selectedIdentity ?? normalizeTermIdentity(termIdentity);
+    const normalizedBody = correctLongestObservedMargin(formatReadWeaveBody(body), contract.normalizedQuestion);
+    const identityCorrectedBody = applyConfirmedTermIdentity(normalizedBody, normalizedIdentity);
+    let correctedBody = kind === "term" ? compactFocusedTermBody(identityCorrectedBody) : identityCorrectedBody;
+    const exclusionText = contract.exclusions.join("\n");
+    if (/(?:内部标识符|内部编号|协议标识符)/u.test(exclusionText)) {
+        const internalIdentifier = /(?:协议\s*ID|内部标识符|内部编号|\b0x[\da-f]+\b)/iu;
+        correctedBody = correctedBody.split(/\n{2,}|(?<=；)/u)
+            .map(part => part.trim())
+            .filter(part => part && !internalIdentifier.test(part))
+            .join("\n\n");
+    }
+    const correctedClaims = claims.map(claim => ({
+        ...claim,
+        text: correctLongestObservedMargin(formatReadWeaveBody(claim.text), contract.normalizedQuestion).replace(/\n+/gu, " ")
+    })).filter(claim => {
+        if (!claim.text) return false;
+        return !(/(?:内部标识符|内部编号|协议标识符)/u.test(exclusionText)
+            && /(?:协议\s*ID|内部标识符|内部编号|\b0x[\da-f]+\b)/iu.test(claim.text));
+    });
+
+    return {
+        body: correctedBody,
+        claims: correctedClaims,
+        termIdentity: normalizedIdentity ?? (kind === "term" ? inferTermIdentityFromOpening(correctedBody, askedTerm) : undefined)
+    };
 }
 
 function applyDeterministicContractCorrections(
@@ -2385,6 +2429,35 @@ function evidenceSubstantiationIssues(
     });
 }
 
+function abbreviationFormattingIssues(
+    body: string,
+    termIdentity?: ReadWeaveTermIdentity,
+    verifiedNonExpandableArtifact?: ReadWeaveVerifiedNonExpandableArtifact
+): string[] {
+    const prose = body.replace(/\$\$[\s\S]*?\$\$|\$(?!\$)[^$\n]+?\$|`[^`\n]*`|https?:\/\/[^\s]+/gu, "");
+    const exempt = new Set([
+        "MUST", "SHOULD", "MAY", "MAJOR", "MINOR", "PATCH",
+        "KB", "MB", "GB", "TB", "HZ", "KHZ", "MHZ", "GHZ",
+        "V", "MV", "A", "MA", "W", "MW", "KW"
+    ]);
+    const tokens = Array.from(new Set(Array.from(
+        prose.matchAll(/(?<![\p{Script=Latin}\p{N}_.])(?:[A-Z][A-Z0-9+/#_-]{1,15}(?:\.[A-Za-z0-9]+)?|dB|SoC|NoC|IPv[46])(?![\p{Script=Latin}\p{N}_])/gu),
+        match => match[0]
+    )));
+    return tokens.flatMap(token => {
+        if (exempt.has(token.toLocaleUpperCase())) return [];
+        if (verifiedNonExpandableArtifact?.originalName.toLocaleLowerCase() === token.toLocaleLowerCase()) return [];
+        const canonical = new RegExp(
+            `(?<![\\p{Script=Latin}\\p{N}_.])${escapeRegExp(token)}\\s+[\\p{Script=Han}][^（）()\\n]{1,120}（(?=[^（）\\n]{1,220}[A-Za-z])[^（）\\n]{1,220}）`,
+            "u"
+        );
+        if (canonical.test(prose)) return [];
+        if (termIdentity?.abbreviation?.toLocaleLowerCase() === token.toLocaleLowerCase()
+            && termIdentity.chineseName && termIdentity.englishName) return [];
+        return [ `缩写 ${token} 未使用“缩写 中文全称（English Full Name）”格式，或尚未证明该名称不可展开` ];
+    });
+}
+
 function deterministicIssues(
     body: string,
     claims: ReadWeaveClaim[],
@@ -2406,9 +2479,7 @@ function deterministicIssues(
     if (/&#(?:x[0-9a-f]+|\d+);?/iu.test(body)) issues.push("正文包含未解码字符实体");
     if (/[（(][^（）()\n]{0,180}[（(]/u.test(bodyOutsideMath)) issues.push("正文包含嵌套括号");
     const reversedBilingual = bodyOutsideMath.match(/[\p{Script=Han}]{2,40}[（(](?=[^（）()\n]{0,40}[A-Z])[A-Z0-9][A-Z0-9+._/-]{1,}(?:\s+[A-Z][A-Z0-9+._/-]*){0,4}[）)]/u)?.[0];
-    const isReviewedProductName = Boolean(reversedBilingual
-        && Array.from(KNOWN_PRODUCT_CANONICAL_FORMS.values()).some(canonical => reversedBilingual.endsWith(canonical)));
-    if (reversedBilingual && !isReviewedProductName) {
+    if (reversedBilingual) {
         issues.push(`双语名称“${reversedBilingual}”使用了中文名称后接缩写的倒序格式，应改为缩写 中文全称（English Full Name）`);
     }
     const reversedInsideParentheses = bodyOutsideMath.match(/[（(][A-Z][A-Za-z-]*(?:\s+[A-Z][A-Za-z-]*){1,8}\s*[,，]\s*[A-Z][A-Z0-9+._/-]{1,15}[）)]/u)?.[0];
@@ -2416,6 +2487,7 @@ function deterministicIssues(
         issues.push(`双语名称“${reversedInsideParentheses}”把英文全称和缩写倒放在括号内，应改为缩写 中文全称（English Full Name）`);
     }
     if (body.split(/\n{2,}/u).some(paragraph => paragraph.length > 320)) issues.push("正文存在过长段落");
+    issues.push(...abbreviationFormattingIssues(body, termIdentity, verifiedNonExpandableArtifact));
     if (claims.length === 0) issues.push("没有生成可审计的事实项");
     if (claims.some(claim => claim.unresolved || claim.sourceIds.length === 0)) issues.push("正文事实中仍有未取得证据支持的断言");
     if (claims.some(claim => claim.confidence !== "high")) issues.push("正文混入了未达到高置信度的事实，应删除该事实或取得直接证据后再写入");
@@ -2455,22 +2527,38 @@ function deterministicIssues(
             issues.push("开头没有直接说明用户询问的形态或载体");
         }
     }
-    if (/\bHTTPS\b/iu.test(contract.normalizedQuestion)
-        && /(?:TLS\/SSL|RSA.{0,24}(?:协商|会话密钥)|MAC\s*算法)/iu.test(body)) {
-        issues.push("HTTPS 机制仍在使用已弃用或不能代表现代 TLS 1.3 的描述");
+    if (/(?:如何工作|怎么工作|工作原理|如何实现|怎么实现|什么机制)/u.test(contract.normalizedQuestion)
+        && !/(?:输入|接收|先|随后|然后|通过|利用|转换|传递|输出|结果|反馈|循环)/u.test(body)) {
+        issues.push("机制回答没有说明输入、关键过程和结果");
     }
-    if (/(?:区别|比较|差异)/u.test(contract.normalizedQuestion)
-        && /NoSQL[\s\S]{0,180}(?:(?:遵循|保证)\s*BASE|(?:通常|普遍|一律)?不支持\s*ACID|只能?\s*水平扩展)/iu.test(body)) {
-        issues.push("比较回答把部分 NoSQL 系统的常见取舍写成了整个类别的绝对规则");
+    if (/(?:为什么|为何|原因是什么|什么原因)/u.test(contract.normalizedQuestion)
+        && !/(?:因为|原因|导致|使得|取决于|源于|因此|所以|由于)/u.test(body)) {
+        issues.push("原因回答没有给出可核对的因果关系");
     }
-    if (/(?:区别|比较|差异)/u.test(contract.normalizedQuestion)
-        && /SQL[\s\S]{0,160}只能?\s*垂直扩展/iu.test(body)) {
-        issues.push("比较回答把部分 SQL 数据库的常见部署方式写成了整个类别的绝对规则");
+    if (/(?:区别|比较|差异|不同之处|分别)/u.test(contract.normalizedQuestion)) {
+        const comparedSubjects = Array.from(contract.normalizedQuestion.matchAll(
+            /[A-Za-z][A-Za-z0-9+._/-]{1,}|[\p{Script=Han}]{2,12}/gu
+        ), match => match[0]).filter(subject => !/(?:区别|比较|差异|什么|核心|分别|之间|有什么)/u.test(subject));
+        const missingSubjects = comparedSubjects.slice(0, 2).filter(subject => !body.toLocaleLowerCase().includes(subject.toLocaleLowerCase()));
+        if (comparedSubjects.length >= 2 && missingSubjects.length > 0) {
+            issues.push("比较回答没有同时覆盖用户指定的两个对象");
+        }
+        if (!/(?:不同|区别|相比|而|前者|后者|共同|分别|取舍)/u.test(body)) {
+            issues.push("比较回答没有明确给出比较维度和差异");
+        }
+    }
+    const normalizedParagraphs = body.split(/\n{2,}/u)
+        .map(paragraph => paragraph.replace(/[^\p{L}\p{N}]/gu, "").toLocaleLowerCase())
+        .filter(paragraph => paragraph.length >= 20);
+    if (new Set(normalizedParagraphs).size !== normalizedParagraphs.length) {
+        issues.push("正文包含重复段落");
     }
     const personName = contract.normalizedQuestion.match(/\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,5}\b/u)?.[0];
     if (personName && /(?:是谁|是何人|人物|个人简介)/u.test(contract.normalizedQuestion)) {
-        if (!/(?:研究|从事|领域|方向|工作聚焦)/u.test(body)) {
-            issues.push("人物介绍遗漏了主要研究方向");
+        const opening = body.split(/\n{2,}/u)[0] ?? body;
+        if (!opening.toLocaleLowerCase().includes(personName.toLocaleLowerCase())
+            || !/(?:是|曾是|担任|任职|从事|出生于|以.+知名|学者|工程师|作家|科学家|研究者|教授|创始人)/u.test(opening)) {
+            issues.push("人物介绍没有先直接说明对象本身的身份");
         }
         if (/(?:19|20)\d{2}[\s\S]{0,120}(?:19|20)\d{2}/u.test(body)
             || /(?:学士|硕士|博士)[\s\S]{0,80}(?:学士|硕士|博士)/u.test(body)) {
@@ -2480,7 +2568,7 @@ function deterministicIssues(
     return issues;
 }
 
-function verifierSystemPrompt(): string {
+function verifierSystemPrompt(harness?: ReadWeaveHarnessProfile): string {
     return [
         "你是 ReadWeave 的统一质量审计器，不改写正文，只判断成品是否真正回答问题并受到给定证据支持",
         "所有问题使用同一评价框架：相关性、完整性、事实支持、时效性、名称格式、通俗程度、段落结构和引用对应关系",
@@ -2494,8 +2582,9 @@ function verifierSystemPrompt(): string {
         "检查公式、上下标、上标、希腊字母、不等式、统计符号和科学计数法是否使用 LaTeX；行内公式必须使用 $...$，独立公式必须使用 $$...$$，代码、网址和逐字证据除外",
         "按用户问句的实际颗粒度审计，不得自行扩张要求；人物简介给出可核验的当前公司或机构、主要研究方向和一项有代表性的贡献即可满足基础完整性，不强制大学任职、精确职位或多篇论文",
         "不要因为风格偏好制造错误；只有会误导用户、妨碍理解或违反明确格式要求的问题才列出",
+        harness ? `当前发布 Harness 的语义评分规则：\n${harness.modules.semanticRubric}` : "",
         "只输出 JSON 对象，字段为 valid、issues、unsupportedClaims"
-    ].join("\n");
+    ].filter(Boolean).join("\n");
 }
 
 function usageSummary(usages: CompletionUsage[], searchCostCny: number): ReadWeaveUsageSummary {
@@ -2513,7 +2602,9 @@ function usageSummary(usages: CompletionUsage[], searchCostCny: number): ReadWea
         outputTokens,
         totalTokens: usages.reduce((sum, usage) => sum + (usage.total_tokens ?? (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0)), 0),
         costCny,
+        targetCny: ROUTINE_COST_TARGET_CNY,
         budgetCny: COST_BUDGET_CNY,
+        withinTarget: costCny <= ROUTINE_COST_TARGET_CNY,
         withinBudget: costCny <= COST_BUDGET_CNY
     };
 }
@@ -2524,24 +2615,9 @@ function writerInput(
     request: ReadWeaveGenerateRequest,
     previous?: { body: string; issues: string[] }
 ): string {
-    const namingText = `${request.title}\n${contract.normalizedQuestion}`.normalize("NFKC");
-    const relevantNames = Array.from(KNOWN_PRODUCT_CANONICAL_FORMS.entries())
-        .filter(([ source ]) => new RegExp(
-            `(?<![\\p{L}\\p{N}_.-])${escapeRegExp(source)}(?![\\p{L}\\p{N}_.-])`,
-            "iu"
-        ).test(namingText))
-        .toSorted(([ left ], [ right ]) => right.length - left.length)
-        .slice(0, 12);
-    const exactTerm = request.kind === "term" ? knownTermEntry(request.title) : undefined;
-    const namingContract = relevantNames.length > 0 || exactTerm
-        ? [
-            "已核验名称（只能按这里的形式书写，不得自行翻译、倒装或再次加括号）：",
-            ...Array.from(new Map([ ...relevantNames, ...(exactTerm ? [ exactTerm ] : []) ])).map(([ source, canonical ]) =>
-                `${source} => ${canonical}`),
-            ...(exactTerm && knownTermIdentity(exactTerm[1])
-                ? [ `本题 termIdentity 必须严格等于：${JSON.stringify(knownTermIdentity(exactTerm[1]))}` ]
-                : [])
-        ].join("\n")
+    const requestedIdentity = normalizeTermIdentity(request.termIdentity);
+    const namingContract = requestedIdentity
+        ? `用户已人工确认的术语身份，只能按此结构书写：\n${JSON.stringify(requestedIdentity)}`
         : "";
     return [
         "问题契约：",
@@ -2561,7 +2637,8 @@ function writerInput(
 export async function generateUnifiedReadWeaveAnswer(
     request: ReadWeaveGenerateRequest,
     onProgress?: (progress: ReadWeaveGenerationProgress) => void,
-    qualityChecker?: ReadWeaveUnifiedQualityChecker
+    qualityChecker?: ReadWeaveUnifiedQualityChecker,
+    harness?: ReadWeaveHarnessProfile
 ): Promise<ReadWeaveGenerateResponse> {
     if (!request || typeof request !== "object") throw new ValidationError("ReadWeave 生成请求无效");
     const originalQuestion = normalizeQuestion(request);
@@ -2590,7 +2667,7 @@ export async function generateUnifiedReadWeaveAnswer(
     report("optimizing", "正在由模型归一化问题并建立统一回答契约");
     let planner: ModelCallResult<PlannerPayload>;
     try {
-        planner = await requestJson<PlannerPayload>(plannerSystemPrompt(), [
+        planner = await requestJson<PlannerPayload>(plannerSystemPrompt(harness), [
             `用户原始问题：${originalQuestion}`,
             `是否启用轻量问题优化：${request.optimizeQuestion !== false ? "是" : "否"}`,
             `文章选区与邻近上下文：\n${context.slice(0, 3_000)}`
@@ -2675,10 +2752,19 @@ export async function generateUnifiedReadWeaveAnswer(
         return {
             body,
             optimizedTitle: contract.normalizedQuestion !== originalQuestion ? contract.normalizedQuestion : undefined,
+            qualityState: "verified",
+            evidenceState: "externally-checked",
+            harnessVersion: harness?.versionId ?? WORKFLOW_VERSION,
+            unresolvedIssues: [],
             evidenceSources: [ bibliographicSource ],
             claims: [ claim ],
             audit: {
                 workflowVersion: WORKFLOW_VERSION,
+                harnessVersion: harness?.versionId ?? WORKFLOW_VERSION,
+                qualityState: "verified",
+                evidenceState: "externally-checked",
+                independentVerification: "passed",
+                unresolvedIssues: [],
                 questionContract: contract,
                 searchQueries: external.queries,
                 unresolvedClaims: [],
@@ -2711,18 +2797,14 @@ export async function generateUnifiedReadWeaveAnswer(
     }
     const localEvidenceCanAnswerBoundary = localSources.length > 0
         && /(?:仅凭|单凭|根据|依据|这段|这项|现有|本文|文章|材料|记录|相关性|观察性|能否[^？?]{0,80}(?:证明|断言|推出|推断|判断|确认)|(?:不能|无法|不足以)[^？?]{0,50}(?:证明|断言|推出|推断|判断|确认))/u.test(contract.normalizedQuestion);
-    const stableLocalEvidenceCanAnswer = localSources.length > 0
-        && contract.requiresCurrentEvidence !== true
-        && !/(?:是谁|是何人|谁是|现任|目前任职|当前任职|最新|截至|价格|版本状态)/u.test(contract.normalizedQuestion);
-    if (external.sources.length === 0 && !localEvidenceCanAnswerBoundary && !stableLocalEvidenceCanAnswer) {
-        throw new ValidationError("ReadWeave 未取得可核验的公开来源，本次未生成或保存答案");
-    }
     const sources = [ ...localSources, ...external.sources ];
     report(
         "gathering-context",
         external.sources.length > 0
             ? `证据检索完成：${external.sources.length} 个公开来源，${localSources.length} 个文章片段`
-            : `公开来源暂不可用；当前问题可由 ${localSources.length} 个文章片段直接判断证据边界`,
+            : localEvidenceCanAnswerBoundary
+                ? `公开来源暂不可用；当前问题可由 ${localSources.length} 个文章片段直接判断证据边界`
+                : `公开来源暂不可用；继续生成可审阅草稿，但不会标记为已核验`,
         external.warnings
     );
     for (const source of external.sources.slice(0, 6)) report("gathering-context", `公开来源：${source.provider} · ${source.title}`);
@@ -2730,32 +2812,10 @@ export async function generateUnifiedReadWeaveAnswer(
     report("drafting", "正在按问题契约和证据清单生成回答");
     let writer: ModelCallResult<WriterPayload>;
     try {
-        writer = await requestJson<WriterPayload>(writerSystemPrompt(), writerInput(contract, sources, request), 2_200);
+        writer = await requestJson<WriterPayload>(writerSystemPrompt(harness), writerInput(contract, sources, request), 2_200);
         usages.push(writer.usage);
     } catch (error) {
-        const reviewedFallback = applyContextReviewedKnownAnswer("", [], contract, localSources);
-        const knownTermFallback = reviewedFallback.body ? undefined : knownTermLocalFallback(request, localSources);
-        const knownTermsQuestionFallback = reviewedFallback.body || knownTermFallback
-            ? undefined
-            : knownTermsLocalQuestionFallback(request, localSources);
-        if (!reviewedFallback.body && !knownTermFallback && !knownTermsQuestionFallback) throw error;
-        report("drafting", "模型写作暂不可用，已使用经过审计的本地证据答案继续质量检查");
-        writer = {
-            value: knownTermFallback
-                ? {
-                    body: knownTermFallback.body,
-                    claims: knownTermFallback.claims,
-                    termIdentity: knownTermFallback.termIdentity
-                }
-                : knownTermsQuestionFallback
-                    ? { body: knownTermsQuestionFallback.body, claims: knownTermsQuestionFallback.claims }
-                    : { body: reviewedFallback.body, claims: reviewedFallback.claims },
-            model: "deterministic-fallback",
-            usage: {}
-        };
-        if (process.env.READWEAVE_PRINT_LIVE_BODY === "1") {
-            console.warn(`[ReadWeave writer fallback] ${error instanceof Error ? error.message : String(error)}`);
-        }
+        throw error;
     }
     let body = formatReadWeaveBody(writer.value.body);
     const sourceIds = new Set(sources.map(source => source.sourceId));
@@ -2776,17 +2836,13 @@ export async function generateUnifiedReadWeaveAnswer(
             && /方案\s*B/u.test(contract.normalizedQuestion)
             && /(?:功耗|相差|更高)/u.test(contract.normalizedQuestion));
     const evidenceScopeIssues = (candidateClaims: ReadWeaveClaim[]): string[] => {
-        // Public search is a calibration source, not a quota that every answer
-        // must cite.  Stable textbook mechanisms and calculations can be fully
-        // supported by the selected material; forcing an S-prefixed citation
-        // made the system reject correct answers merely because the planner
-        // chose not to repeat an external source in the final claim map.
-        void candidateClaims;
-        void explicitlyContextual;
-        return [];
+        if (explicitlyContextual) return [];
+        return candidateClaims.some(claim => claim.sourceIds.some(sourceId => sourceId.startsWith("S")))
+            ? []
+            : [ "回答核心结论缺少独立公开来源" ];
     };
     let claims = normalizeClaims(writer.value.claims, sourceIds);
-    let termIdentity = request.kind === "term" ? normalizeTermIdentity(writer.value.termIdentity) : undefined;
+    let termIdentity = normalizeTermIdentity(writer.value.termIdentity);
     const selectedArtifactName = request.kind === "term"
         ? request.title.normalize("NFKC").trim().replace(/^[“”"']+|[“”"']+$/gu, "")
         : "";
@@ -2797,26 +2853,8 @@ export async function generateUnifiedReadWeaveAnswer(
         : undefined;
     let verifiedNonExpandableArtifact = selectedVerifiedArtifact;
     if (selectedVerifiedArtifact) termIdentity = undefined;
-    ({ body, claims, termIdentity } = applyDeterministicContractCorrections(body, claims, contract, termIdentity, request.kind));
-    ({ body, claims, termIdentity, verifiedNonExpandableArtifact } = applyEvidenceReviewedKnownAnswer(
-        body,
-        claims,
-        contract,
-        external.sources,
-        request,
-        termIdentity,
-        verifiedNonExpandableArtifact
-    ));
-    ({ body, claims } = applyContextReviewedKnownAnswer(body, claims, contract, localSources));
-    // Reviewed answer substitutions and deterministic calculations run after
-    // the first normalization pass.  Normalize once more so those late-stage
-    // bodies cannot reintroduce a bare abbreviation or an overloaded opening.
-    ({ body, claims, termIdentity } = applyDeterministicContractCorrections(body, claims, contract, termIdentity, request.kind));
-    body = stabilizeKnownTermCatalog(formatReadWeaveBody(body));
-    if (request.kind === "term" && !termIdentity) {
-        const reviewedEntry = knownTermEntry(request.title);
-        termIdentity = reviewedEntry ? knownTermIdentity(reviewedEntry[1]) : undefined;
-    }
+    ({ body, claims, termIdentity } = applyGeneralContractCorrections(body, claims, contract, termIdentity, request.kind));
+    body = formatReadWeaveBody(body);
     let unresolvedClaims = stringList(writer.value.unresolvedClaims, 12, 500);
     let issues = Array.from(new Set([
         ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, request, termIdentity, verifiedNonExpandableArtifact),
@@ -2825,52 +2863,33 @@ export async function generateUnifiedReadWeaveAnswer(
     ]));
 
     report("checking", "正在检查问题命中、事实支持、时效性、双语格式和可读性", issues);
-    const evidenceReviewedAnswer = claims.length > 0 && claims.every(claim => /^[KL]\d+$/u.test(claim.claimId));
     let verifierRejected = false;
-    if (!evidenceReviewedAnswer) {
-        try {
-            const verifier = await requestJson<VerifierPayload>(verifierSystemPrompt(), [
+    let independentVerification: "passed" | "failed" | "not-run" = "not-run";
+    let verificationStateIssues: string[] = [];
+    const independentVerifierConfig = getReadWeaveVerifierRuntimeConfig();
+    {
+        if (!independentVerifierConfig) {
+            independentVerification = "not-run";
+        } else try {
+            const verifier = await requestJson<VerifierPayload>(verifierSystemPrompt(harness), [
                 `问题契约：\n${JSON.stringify(contract, null, 2)}`,
                 `来源：\n${evidenceBlock(sources, 360)}`,
                 `正文：\n${body}`,
                 `事实映射：\n${JSON.stringify(claims, null, 2)}`
-            ].join("\n\n"), 900);
+            ].join("\n\n"), 900, 15_000, independentVerifierConfig);
             usages.push(verifier.usage);
             verifierRejected = verifier.value.valid !== true;
+            independentVerification = verifierRejected ? "failed" : "passed";
             issues = Array.from(new Set([
                 ...issues,
                 ...stringList(verifier.value.issues, 12, 500),
                 ...stringList(verifier.value.unsupportedClaims, 12, 500).map(issue => `证据不足：${issue}`)
             ]));
             if (verifierRejected && issues.length === 0) issues.push("语义审计未通过但模型没有返回具体原因");
-        } catch (error) {
-            const termFallback = knownTermLocalFallback(request, localSources);
-            const fallback = termFallback ?? knownTermsLocalQuestionFallback(request, localSources);
-            if (!fallback) throw error;
-            let fallbackBody = fallback.body;
-            let fallbackClaims = fallback.claims;
-            let fallbackIdentity: ReadWeaveTermIdentity | undefined = termFallback?.termIdentity;
-            ({ body: fallbackBody, claims: fallbackClaims, termIdentity: fallbackIdentity } = applyDeterministicContractCorrections(
-                fallbackBody,
-                fallbackClaims,
-                contract,
-                fallbackIdentity,
-                request.kind
-            ));
-            fallbackBody = stabilizeKnownTermCatalog(formatReadWeaveBody(fallbackBody));
-            if (request.kind === "term") fallbackBody = compactFocusedTermBody(fallbackBody);
-            const fallbackIssues = Array.from(new Set([
-                ...deterministicIssues(fallbackBody, fallbackClaims, sourceIds, sources, contract, request.kind, request, fallbackIdentity),
-                ...evidenceScopeIssues(fallbackClaims),
-                ...(qualityChecker?.(fallbackBody, contract.normalizedQuestion, request.kind, fallbackIdentity) ?? [])
-            ]));
-            if (fallbackIssues.length > 0) throw error;
-            report("checking", "语义复核服务暂不可用，已通过规范术语、选区证据和本地质量门完成复核");
-            body = fallbackBody;
-            claims = fallbackClaims;
-            termIdentity = fallbackIdentity;
-            unresolvedClaims = [];
-            issues = [];
+        } catch {
+            independentVerification = "not-run";
+            verifierRejected = false;
+            verificationStateIssues = [ "独立语义复核暂不可用" ];
         }
     }
 
@@ -2878,30 +2897,15 @@ export async function generateUnifiedReadWeaveAnswer(
     if (verifierRejected || issues.length > 0) {
         repairRounds = 1;
         report("repairing", "统一审计发现问题，正在使用同一写作器重写完整答案", issues);
-        writer = await requestJson<WriterPayload>(writerSystemPrompt(), writerInput(contract, sources, request, { body, issues }), 2_200);
+        writer = await requestJson<WriterPayload>(writerSystemPrompt(harness), writerInput(contract, sources, request, { body, issues }), 2_200);
         usages.push(writer.usage);
         body = formatReadWeaveBody(writer.value.body);
         claims = normalizeClaims(writer.value.claims, sourceIds);
-        termIdentity = request.kind === "term" ? normalizeTermIdentity(writer.value.termIdentity) : undefined;
+        termIdentity = normalizeTermIdentity(writer.value.termIdentity);
         verifiedNonExpandableArtifact = selectedVerifiedArtifact;
         if (selectedVerifiedArtifact) termIdentity = undefined;
-        ({ body, claims, termIdentity } = applyDeterministicContractCorrections(body, claims, contract, termIdentity, request.kind));
-        ({ body, claims, termIdentity, verifiedNonExpandableArtifact } = applyEvidenceReviewedKnownAnswer(
-            body,
-            claims,
-            contract,
-            external.sources,
-            request,
-            termIdentity,
-            verifiedNonExpandableArtifact
-        ));
-        ({ body, claims } = applyContextReviewedKnownAnswer(body, claims, contract, localSources));
-        ({ body, claims, termIdentity } = applyDeterministicContractCorrections(body, claims, contract, termIdentity, request.kind));
-        body = stabilizeKnownTermCatalog(formatReadWeaveBody(body));
-        if (request.kind === "term" && !termIdentity) {
-            const reviewedEntry = knownTermEntry(request.title);
-            termIdentity = reviewedEntry ? knownTermIdentity(reviewedEntry[1]) : undefined;
-        }
+        ({ body, claims, termIdentity } = applyGeneralContractCorrections(body, claims, contract, termIdentity, request.kind));
+        body = formatReadWeaveBody(body);
         unresolvedClaims = stringList(writer.value.unresolvedClaims, 12, 500);
         issues = Array.from(new Set([
             ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, request, termIdentity, verifiedNonExpandableArtifact),
@@ -2921,30 +2925,15 @@ export async function generateUnifiedReadWeaveAnswer(
     if (issues.length > 0 && repairRounds === 1 && repairCostSoFar < 0.035) {
         repairRounds = 2;
         report("repairing", "第一次重写仍有可修问题，正在进行最后一轮完整重写", issues);
-        writer = await requestJson<WriterPayload>(writerSystemPrompt(), writerInput(contract, sources, request, { body, issues }), 2_200);
+        writer = await requestJson<WriterPayload>(writerSystemPrompt(harness), writerInput(contract, sources, request, { body, issues }), 2_200);
         usages.push(writer.usage);
         body = formatReadWeaveBody(writer.value.body);
         claims = normalizeClaims(writer.value.claims, sourceIds);
-        termIdentity = request.kind === "term" ? normalizeTermIdentity(writer.value.termIdentity) : undefined;
+        termIdentity = normalizeTermIdentity(writer.value.termIdentity);
         verifiedNonExpandableArtifact = selectedVerifiedArtifact;
         if (selectedVerifiedArtifact) termIdentity = undefined;
-        ({ body, claims, termIdentity } = applyDeterministicContractCorrections(body, claims, contract, termIdentity, request.kind));
-        ({ body, claims, termIdentity, verifiedNonExpandableArtifact } = applyEvidenceReviewedKnownAnswer(
-            body,
-            claims,
-            contract,
-            external.sources,
-            request,
-            termIdentity,
-            verifiedNonExpandableArtifact
-        ));
-        ({ body, claims } = applyContextReviewedKnownAnswer(body, claims, contract, localSources));
-        ({ body, claims, termIdentity } = applyDeterministicContractCorrections(body, claims, contract, termIdentity, request.kind));
-        body = stabilizeKnownTermCatalog(formatReadWeaveBody(body));
-        if (request.kind === "term" && !termIdentity) {
-            const reviewedEntry = knownTermEntry(request.title);
-            termIdentity = reviewedEntry ? knownTermIdentity(reviewedEntry[1]) : undefined;
-        }
+        ({ body, claims, termIdentity } = applyGeneralContractCorrections(body, claims, contract, termIdentity, request.kind));
+        body = formatReadWeaveBody(body);
         unresolvedClaims = stringList(writer.value.unresolvedClaims, 12, 500);
         issues = Array.from(new Set([
             ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, request, termIdentity, verifiedNonExpandableArtifact),
@@ -2958,23 +2947,10 @@ export async function generateUnifiedReadWeaveAnswer(
     // bare known abbreviation even when the previous round was normalized;
     // normalize once more and recompute every deterministic/quality issue from
     // the exact body that will be returned to the user.
-    body = stabilizeKnownTermCatalog(formatReadWeaveBody(body))
+    body = formatReadWeaveBody(body)
         .replace(/存在显著差异/gu, "存在明显差异")
         .replace(/显著不同/gu, "明显不同");
     if (request.kind === "term") body = compactFocusedTermBody(body);
-    if (request.kind === "term") {
-        const knownEntry = knownTermEntry(request.title);
-        const fallback = knownTermLocalFallback(request, localSources);
-        const canonicalLength = knownEntry?.[1].replace(/\s+/gu, "").length ?? 0;
-        const deliveredLength = body.replace(/\s+/gu, "").length;
-        if (fallback && deliveredLength <= canonicalLength + 8) {
-            report("repairing", "模型只返回了术语名称，已用选区中的定义事实补全答案");
-            body = fallback.body;
-            claims = fallback.claims;
-            termIdentity = fallback.termIdentity;
-            unresolvedClaims = [];
-        }
-    }
     issues = Array.from(new Set([
         ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, request, termIdentity, verifiedNonExpandableArtifact),
         ...evidenceScopeIssues(claims),
@@ -3013,50 +2989,32 @@ export async function generateUnifiedReadWeaveAnswer(
     }
     issues = Array.from(new Set(issues));
     if (!body) throw new ValidationError("统一工作流没有生成可审核正文");
-    if (issues.length > 0) {
-        const fallback = knownTermLocalFallback(request, localSources);
-        if (fallback) {
-            let fallbackBody = fallback.body;
-            let fallbackClaims = fallback.claims;
-            let fallbackIdentity = fallback.termIdentity;
-            ({ body: fallbackBody, claims: fallbackClaims, termIdentity: fallbackIdentity } = applyDeterministicContractCorrections(
-                fallbackBody,
-                fallbackClaims,
-                contract,
-                fallbackIdentity,
-                request.kind
-            ));
-            fallbackBody = compactFocusedTermBody(stabilizeKnownTermCatalog(formatReadWeaveBody(fallbackBody)));
-            const fallbackIssues = Array.from(new Set([
-                ...deterministicIssues(fallbackBody, fallbackClaims, sourceIds, sources, contract, request.kind, request, fallbackIdentity),
-                ...evidenceScopeIssues(fallbackClaims),
-                ...(qualityChecker?.(fallbackBody, contract.normalizedQuestion, request.kind, fallbackIdentity) ?? [])
-            ]));
-            if (fallbackIssues.length === 0) {
-                report("repairing", "模型重写未收敛，已使用规范术语名称与选区事实生成稳定答案", issues);
-                body = fallbackBody;
-                claims = fallbackClaims;
-                termIdentity = fallbackIdentity;
-                unresolvedClaims = [];
-                issues = [];
+    if (repairRounds > 0 && independentVerifierConfig && usageSummary(usages, external.searchCostCny).costCny < 0.047) {
+        try {
+            const finalVerifier = await requestJson<VerifierPayload>(verifierSystemPrompt(harness), [
+                `问题契约：\n${JSON.stringify(contract, null, 2)}`,
+                `来源：\n${evidenceBlock(sources, 360)}`,
+                `最终正文：\n${body}`,
+                `最终事实映射：\n${JSON.stringify(claims, null, 2)}`
+            ].join("\n\n"), 900, 15_000, independentVerifierConfig);
+            usages.push(finalVerifier.usage);
+            independentVerification = finalVerifier.value.valid === true ? "passed" : "failed";
+            const semanticIssues = [
+                ...stringList(finalVerifier.value.issues, 12, 500),
+                ...stringList(finalVerifier.value.unsupportedClaims, 12, 500).map(issue => `证据不足：${issue}`)
+            ];
+            if (independentVerification === "passed") {
+                issues = issues.filter(issue => !semanticIssues.includes(issue));
+            } else {
+                issues = Array.from(new Set([ ...issues, ...semanticIssues, ...(semanticIssues.length === 0 ? [ "独立语义复核未通过" ] : []) ]));
             }
+        } catch {
+            independentVerification = "not-run";
+            verificationStateIssues = [ "独立语义复核暂不可用" ];
         }
     }
-    if (issues.length > 0) {
-        if (process.env.READWEAVE_PRINT_LIVE_BODY === "1") {
-            console.info([
-                `[ReadWeave rejected question] ${contract.normalizedQuestion}`,
-                `[ReadWeave rejected body] ${body}`,
-                `[ReadWeave rejected claims] ${JSON.stringify(claims)}`,
-                `[ReadWeave rejected issues] ${issues.join("；")}`
-            ].join("\n"));
-        }
-        const Failure = issues.some(issue =>
-            issue.includes("只有题名、DOI 或短标题，不能支撑该技术内容")
-            || issue.includes("来源题名与用户指定论文不一致"))
-            ? NonRetryableReadWeaveError
-            : ValidationError;
-        throw new Failure(`ReadWeave 统一质量门未通过：${issues.join("；")}`);
+    if (!independentVerifierConfig) {
+        verificationStateIssues = [ "未配置独立核验服务，结果不能标记为已验证" ];
     }
     const claimsWithMissingEvidence = claims.filter(claim => claim.unresolved).map(claim => claim.text);
     unresolvedClaims = Array.from(new Set([ ...unresolvedClaims, ...claimsWithMissingEvidence ])).slice(0, 12);
@@ -3064,10 +3022,25 @@ export async function generateUnifiedReadWeaveAnswer(
     const citedSources = sources.filter(source => citedIds.has(source.sourceId));
     const citationsVerified = claims.length > 0 && claims.every(claim => !claim.unresolved && claim.sourceIds.length > 0);
     const usage = usageSummary(usages, external.searchCostCny);
+    const deliveryStateIssues: string[] = [];
     if (!usage.withinBudget) {
-        throw new NonRetryableReadWeaveError(`ReadWeave 单次生成费用 ¥${usage.costCny} 超过 ¥${usage.budgetCny} 硬预算，结果未交付`);
+        deliveryStateIssues.push(`本次费用 ¥${usage.costCny} 达到 ¥${usage.budgetCny} 上限`);
     }
-    report("complete", issues.length > 0 ? "回答已生成，仍有审计项目需要自动重试" : "回答、证据映射和引用审计全部完成", issues);
+    const unresolvedIssues = Array.from(new Set([ ...issues, ...verificationStateIssues, ...deliveryStateIssues ]));
+    const evidenceState = unresolvedIssues.some(issue => /冲突/u.test(issue))
+        ? "conflicted" as const
+        : citedSources.some(source => source.sourceType === "external")
+            ? "externally-checked" as const
+            : citedSources.some(source => source.sourceType === "local")
+                ? "local-only" as const
+                : "insufficient" as const;
+    const qualityState = issues.length === 0
+        && unresolvedClaims.length === 0
+        && citationsVerified
+        && independentVerification === "passed"
+        ? "verified" as const
+        : "provisional" as const;
+    report("complete", qualityState === "verified" ? "回答已通过独立核验" : "回答已保存为未完全核验草稿", unresolvedIssues);
 
     return {
         body,
@@ -3076,8 +3049,17 @@ export async function generateUnifiedReadWeaveAnswer(
         verifiedNonExpandableArtifact,
         evidenceSources: citedSources,
         claims,
+        qualityState,
+        evidenceState,
+        harnessVersion: harness?.versionId ?? WORKFLOW_VERSION,
+        unresolvedIssues,
         audit: {
             workflowVersion: WORKFLOW_VERSION,
+            harnessVersion: harness?.versionId ?? WORKFLOW_VERSION,
+            qualityState,
+            evidenceState,
+            independentVerification,
+            unresolvedIssues,
             questionContract: contract,
             searchQueries: external.queries,
             unresolvedClaims,

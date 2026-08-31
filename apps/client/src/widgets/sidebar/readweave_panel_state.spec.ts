@@ -6,6 +6,7 @@ import {
     createReadWeaveReviewIssueBaseline,
     hasActiveReadWeaveGenerationJobs,
     isReadWeaveGenerationDisabled,
+    isReadWeaveJobAutoRestoreAllowed,
     isReadWeaveReviewSaveAllowed,
     mergeReadWeaveGenerationJobSnapshot,
     normalizeReadWeaveReadableMath,
@@ -23,6 +24,7 @@ import {
 function generationJob(overrides: Partial<ReadWeaveGenerationJob> = {}): ReadWeaveGenerationJob {
     return {
         jobId: "job-1",
+        draftId: "draft-1",
         articleId: "article-1",
         anchorId: "anchor-1",
         anchorType: "range",
@@ -30,6 +32,10 @@ function generationJob(overrides: Partial<ReadWeaveGenerationJob> = {}): ReadWea
         title: "问题",
         sourceExcerpt: "锚点",
         status: "complete",
+        qualityState: "verified",
+        harnessVersion: "legacy",
+        evidenceState: "not-checked",
+        unresolvedIssues: [],
         unread: false,
         progress: [],
         createdAt: "2026-07-22T00:00:00.000Z",
@@ -91,12 +97,34 @@ describe("ReadWeave panel state", () => {
         ])).toBe(true);
     });
 
+    it("does not replace a new same-anchor question with an older background job", () => {
+        expect(isReadWeaveJobAutoRestoreAllowed({
+            hasSelection: true,
+            selectionPending: false,
+            generationJobId: undefined,
+            newQuestionDraft: true
+        })).toBe(false);
+        expect(isReadWeaveJobAutoRestoreAllowed({
+            hasSelection: true,
+            selectionPending: false,
+            generationJobId: undefined,
+            newQuestionDraft: false
+        })).toBe(true);
+        expect(isReadWeaveJobAutoRestoreAllowed({
+            hasSelection: true,
+            selectionPending: false,
+            generationJobId: "job-1",
+            newQuestionDraft: false
+        })).toBe(false);
+    });
+
     it("keeps exact-range emphasis only while a status indicator is present", () => {
         expect(readWeaveGenerationVisualState({ status: "queued", unread: false })).toBe("running");
         expect(readWeaveGenerationVisualState({ status: "running", unread: false })).toBe("running");
         expect(readWeaveGenerationVisualState({ status: "failed", unread: false })).toBe("error");
-        expect(readWeaveGenerationVisualState({ status: "complete", unread: true })).toBe("unread");
-        expect(readWeaveGenerationVisualState({ status: "complete", unread: false })).toBeUndefined();
+        expect(readWeaveGenerationVisualState({ status: "complete", unread: true, qualityState: "verified" })).toBe("unread");
+        expect(readWeaveGenerationVisualState({ status: "complete", unread: false, qualityState: "verified" })).toBeUndefined();
+        expect(readWeaveGenerationVisualState({ status: "complete", unread: false, qualityState: "provisional" })).toBe("paused");
     });
 
     it("removes terminal sentence punctuation from compact status and log rows", () => {

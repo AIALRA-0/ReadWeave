@@ -72,6 +72,8 @@ describe("ReadWeave repository", () => {
             });
 
             expect(second.objectId).toBe(first.objectId);
+            expect(first.qualityState).toBe("legacy-unverified");
+            expect(second.qualityState).toBe("legacy-unverified");
             expect(getReadWeaveImpact(first.objectId)).toMatchObject({ linkCount: 2, articleCount: 2 });
 
             editReadWeaveLink(first.linkId, {

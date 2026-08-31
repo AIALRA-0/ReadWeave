@@ -172,6 +172,11 @@
     color: #28a745;
 }
 
+.readweave-anchor-status-paused::before {
+    content: "●";
+    color: var(--admonition-warning-accent-color);
+}
+
 .readweave-anchor-status-error::before {
     content: "●";
     color: var(--admonition-caution-accent-color);
@@ -244,6 +249,7 @@
 
 .readweave-readable-body {
     min-width: 0;
+    background: transparent;
     color: var(--main-text-color);
     font-size: 0.96rem;
     line-height: 1.68;
@@ -969,6 +975,122 @@
 
 .readweave-generation-state.complete { background: #28a745; }
 .readweave-generation-state.failed { background: var(--admonition-caution-accent-color); }
+.readweave-generation-state.paused { background: var(--admonition-warning-accent-color); }
+.readweave-generation-state.cancelled { background: var(--muted-text-color); }
+
+.readweave-anchor-job-list {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+}
+
+.readweave-anchor-job-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.readweave-new-question {
+    flex: 0 0 auto;
+    margin: -0.2rem 0;
+    padding: 0.2rem 0.35rem;
+    font-size: 0.72rem;
+    font-weight: 650;
+}
+
+.readweave-background-job-list {
+    margin-block: 0.55rem;
+    border-block: 1px solid var(--main-border-color);
+    padding-block: 0.45rem;
+}
+
+.readweave-background-job-list > summary {
+    cursor: pointer;
+    font-weight: 650;
+}
+
+.readweave-background-job-list > div {
+    display: grid;
+    gap: 0.25rem;
+    margin-top: 0.4rem;
+}
+
+.readweave-background-job {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 0.25rem;
+    align-items: center;
+}
+
+.readweave-background-job > button:first-child {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 0.4rem;
+    align-items: center;
+    min-width: 0;
+    border: 0;
+    border-radius: 0.35rem;
+    padding: 0.35rem 0.45rem;
+    background: transparent;
+    color: inherit;
+    text-align: start;
+}
+
+.readweave-background-job > button:first-child:hover {
+    background: var(--hover-item-background-color, var(--accented-background-color));
+}
+
+.readweave-background-job > button:first-child > span:nth-child(2) {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.readweave-background-job small {
+    color: var(--muted-text-color);
+}
+
+.readweave-background-cancel {
+    border: 0;
+    background: transparent;
+    color: var(--muted-text-color);
+    padding: 0.3rem;
+}
+
+.readweave-anchor-job-list > div:last-child {
+    display: flex;
+    gap: 5px;
+    overflow-x: auto;
+    padding-block-end: 2px;
+}
+
+.readweave-anchor-job-list button {
+    display: grid;
+    grid-template-columns: auto minmax(5.5rem, 1fr);
+    align-items: center;
+    gap: 5px;
+    min-width: 8rem;
+    max-width: 14rem;
+    padding: 5px 7px;
+    border: 1px solid var(--main-border-color);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--main-text-color);
+    font-size: 0.72rem;
+    text-align: start;
+}
+
+.readweave-anchor-job-list button.active {
+    border-color: var(--main-text-color);
+    background: color-mix(in srgb, var(--accented-background-color) 78%, transparent);
+}
+
+.readweave-anchor-job-list button > span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 
 .readweave-generation-detail {
     max-height: 0;

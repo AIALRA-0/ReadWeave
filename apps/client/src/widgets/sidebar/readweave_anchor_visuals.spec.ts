@@ -6,6 +6,7 @@ import { applyReadWeaveGenerationVisual } from "./readweave_anchor_visuals.js";
 function job(overrides: Partial<ReadWeaveGenerationJob> = {}): ReadWeaveGenerationJob {
     return {
         jobId: "job-1",
+        draftId: "draft-1",
         articleId: "article-1",
         anchorId: "inner",
         anchorType: "range",
@@ -13,6 +14,10 @@ function job(overrides: Partial<ReadWeaveGenerationJob> = {}): ReadWeaveGenerati
         title: "问题",
         sourceExcerpt: "3D堆叠ML",
         status: "queued",
+        qualityState: "verified",
+        harnessVersion: "legacy",
+        evidenceState: "not-checked",
+        unresolvedIssues: [],
         unread: false,
         progress: [],
         createdAt: "2026-07-22T00:00:00.000Z",

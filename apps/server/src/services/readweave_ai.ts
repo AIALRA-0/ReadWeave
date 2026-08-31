@@ -20,6 +20,7 @@ import { getReadWeaveRuntimeConfig } from "./readweave_settings.js";
 import { HUMAN_READABLE_CHINESE_STYLE_CONTRACT } from "./readweave_style_contract.js";
 import { KNOWN_ENTITY_NAMING_NOTES, KNOWN_PRODUCT_CANONICAL_FORMS } from "./readweave_term_catalog.js";
 import { generateUnifiedReadWeaveAnswer } from "./readweave_unified_ai.js";
+import { getPublishedReadWeaveHarnessProfile } from "./readweave_harness.js";
 
 interface ChatCompletionResponse {
     model?: string;
@@ -447,6 +448,7 @@ const MAX_PLAIN_DEFINITION_OPENING_CHARACTERS = 110;
 const MAX_READABLE_CLAUSE_CHARACTERS = 180;
 const MAX_REPAIR_ROUNDS = 3;
 export const READWEAVE_COST_BUDGET_CNY = 0.05;
+export const READWEAVE_COST_TARGET_CNY = 0.01;
 const READWEAVE_BUDGET_MODEL = "deepseek-v4-flash";
 const READWEAVE_BUDGET_CONTEXT_CHARACTERS = 2_200;
 const READWEAVE_BUDGET_MAX_OUTPUT_TOKENS = 768;
@@ -663,7 +665,9 @@ export function calculateReadWeaveUsageSummary(
         outputTokens,
         totalTokens: inputTokens + outputTokens,
         costCny,
+        targetCny: READWEAVE_COST_TARGET_CNY,
         budgetCny,
+        withinTarget: costCny <= READWEAVE_COST_TARGET_CNY,
         withinBudget: costCny < budgetCny
     };
 }
@@ -686,6 +690,7 @@ export function mergeReadWeaveUsageSummaries(
 ): ReadWeaveUsageSummary {
     const present = summaries.filter((summary): summary is ReadWeaveUsageSummary => !!summary);
     const costCny = present.reduce((sum, summary) => sum + summary.costCny, 0);
+    const targetCny = present[0]?.targetCny ?? READWEAVE_COST_TARGET_CNY;
     const budgetCny = present[0]?.budgetCny ?? READWEAVE_COST_BUDGET_CNY;
     const inputTokens = present.reduce((sum, summary) => sum + summary.inputTokens, 0);
     const outputTokens = present.reduce((sum, summary) => sum + summary.outputTokens, 0);
@@ -697,7 +702,9 @@ export function mergeReadWeaveUsageSummaries(
         outputTokens,
         totalTokens: inputTokens + outputTokens,
         costCny,
+        targetCny,
         budgetCny,
+        withinTarget: costCny <= targetCny,
         withinBudget: costCny < budgetCny
     };
 }
@@ -7413,6 +7420,10 @@ async function generateLowCostReadWeaveAnswer(
         optimizedTitle,
         termIdentity,
         verifiedNonExpandableArtifact,
+        qualityState: "provisional",
+        evidenceState: searchEvidence.used ? "externally-checked" : "not-checked",
+        harnessVersion: "legacy-single-pass",
+        unresolvedIssues: [ "该结果由旧版单次质量门生成，尚未经过独立语义复核" ],
         context: {
             ...selected.decision,
             characterBudget: requestedBudget,
@@ -7526,31 +7537,22 @@ export async function generateReadWeaveAnswer(
             context: { ...selected.decision, expansionLevel: 0, attemptedBudgets: [ budgets[0] ] },
             workflow: { generationAttempts: 1, validationPasses: 1, contextExpansions: 0, repairRounds: 0, unchangedSegmentsVerified: true },
             provider: "readweave-test",
-            model: "deterministic-mock"
+            model: "deterministic-mock",
+            qualityState: reviewIssues?.length ? "provisional" : "verified",
+            evidenceState: reviewIssues?.length ? "not-checked" : "externally-checked",
+            harnessVersion: "deterministic-test",
+            unresolvedIssues: reviewIssues ?? []
         };
     }
 
     if (process.env.READWEAVE_ENABLE_LEGACY_REPLAY !== "1") {
-        return generateUnifiedReadWeaveAnswer(request, onProgress, (body, objective, kind, termIdentity, verifiedNonExpandableArtifact) => {
-            const profile = buildReadWeaveTaskProfile(kind, objective);
-            const auditedSubject = kind === "term"
-                ? request.title.normalize("NFKC").trim().replace(/^[“”"']+|[“”"']+$/gu, "")
-                : profile.subject;
-            try {
-                return findReadWeaveQualityIssues(body, objective, {
-                    kind,
-                    subject: auditedSubject,
-                    knowledgeScope: profile.knowledgeScope,
-                    termIdentity,
-                    verifiedNonExpandableArtifact
-                });
-            } catch (error) {
-                // Optional model metadata is repairable output, not a reason to
-                // expose an English schema exception to the user or discard the
-                // otherwise valid draft before the automatic repair pass.
-                return [ `术语身份结构格式无效：${error instanceof Error ? error.message : "未知格式错误"}` ];
-            }
-        });
+        const harness = getPublishedReadWeaveHarnessProfile();
+        // The legacy checker contains historical term catalogs and fixture-specific
+        // rules.  Reusing it here would let the writer and checker share the same
+        // assumptions, which is exactly the circular validation the quality-closure
+        // workflow is designed to remove.  The unified workflow owns deterministic
+        // format checks and uses a separately configured verifier for semantic gates.
+        return generateUnifiedReadWeaveAnswer(request, onProgress, undefined, harness);
     }
 
     // Explicitly isolated migration replay only; production and normal tests never enter this branch.
@@ -7752,7 +7754,11 @@ export async function generateReadWeaveAnswer(
                         },
                         provider: new URL(getReadWeaveRuntimeConfig().baseUrl).hostname,
                         model: lastModel,
-                        webCalibration: { used: true, sourceCount: webCalibration.sourceCount, model: webCalibration.model }
+                        webCalibration: { used: true, sourceCount: webCalibration.sourceCount, model: webCalibration.model },
+                        qualityState: "provisional",
+                        evidenceState: "externally-checked",
+                        harnessVersion: "legacy-replay",
+                        unresolvedIssues: [ "该结果由旧版同源检查器生成，尚未经过独立语义复核", ...uniqueReviewIssues ]
                     };
                 }
                 lastFailure = verification.issues.join("；") || "检查点要求补充上下文";
@@ -7879,6 +7885,10 @@ export async function generateReadWeaveAnswer(
             termIdentity,
             verifiedNonExpandableArtifact,
             reviewIssues: finalReviewIssues,
+            qualityState: "provisional",
+            evidenceState: "conflicted",
+            harnessVersion: "legacy-replay",
+            unresolvedIssues: finalReviewIssues,
             context: {
                 ...lastContextDecision,
                 expansionLevel: lastExpansionLevel,

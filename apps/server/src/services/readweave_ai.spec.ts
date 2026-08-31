@@ -674,6 +674,8 @@ describe("ReadWeave AI quality harness", () => {
             modelCalls: 1,
             inputTokens: 4_674,
             outputTokens: 165,
+            targetCny: 0.01,
+            withinTarget: true,
             withinBudget: true
         });
         expect(calculateReadWeaveUsageSummary("deepseek-v4-flash", {

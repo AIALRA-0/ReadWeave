@@ -21,6 +21,7 @@ const FREE_SEARCH_PROVIDERS = [
     "Wikipedia"
 ] as const;
 type ReadWeaveSecretOptionName =
+    | "readWeaveVerifierApiKey"
     | "readWeaveSerperApiKey"
     | "readWeaveTavilyApiKey"
     | "readWeaveBraveApiKey"
@@ -39,6 +40,12 @@ export interface ReadWeaveSearchRuntimeConfig {
     semanticScholarApiKey?: string;
     openAlexApiKey?: string;
     unpaywallEmail?: string;
+}
+
+export interface ReadWeaveModelRuntimeConfig {
+    apiKey: string;
+    baseUrl: string;
+    model: string;
 }
 
 interface ModelsPayload {
@@ -79,6 +86,14 @@ function configuredApiKey(): { value?: string; source: ReadWeaveAiSettings["cred
     const stored = optionService.getOptionOrNull("readWeaveApiKey")?.trim();
     if (stored) return { value: stored, source: "settings" };
     const environment = process.env.READWEAVE_DEEPSEEK_API_KEY?.trim();
+    if (environment) return { value: environment, source: "environment" };
+    return { source: "missing" };
+}
+
+function configuredVerifierApiKey(): { value?: string; source: ReadWeaveAiSettings["credentialSource"] } {
+    const stored = optionService.getOptionOrNull("readWeaveVerifierApiKey")?.trim();
+    if (stored) return { value: stored, source: "settings" };
+    const environment = process.env.READWEAVE_VERIFIER_API_KEY?.trim();
     if (environment) return { value: environment, source: "environment" };
     return { source: "missing" };
 }
@@ -143,7 +158,7 @@ export function getReadWeaveSearchRuntimeConfig(): ReadWeaveSearchRuntimeConfig 
     };
 }
 
-export function getReadWeaveRuntimeConfig(): { apiKey: string; baseUrl: string; model: string } {
+export function getReadWeaveRuntimeConfig(): ReadWeaveModelRuntimeConfig {
     const credential = configuredApiKey();
     if (!credential.value) throw new ValidationError("ReadWeave API is not configured. Add an API key in Settings → AI / LLM → ReadWeave.");
     return {
@@ -157,13 +172,38 @@ export function getReadWeaveRuntimeConfig(): { apiKey: string; baseUrl: string; 
     };
 }
 
+export function getReadWeaveVerifierRuntimeConfig(): ReadWeaveModelRuntimeConfig | undefined {
+    const credential = configuredVerifierApiKey();
+    const baseUrl = optionService.getOptionOrNull("readWeaveVerifierBaseUrl")?.trim()
+        || process.env.READWEAVE_VERIFIER_API_BASE_URL?.trim();
+    const model = optionService.getOptionOrNull("readWeaveVerifierModel")?.trim()
+        || process.env.READWEAVE_VERIFIER_MODEL?.trim();
+    if (!credential.value || !baseUrl || !model) return undefined;
+
+    const writer = getReadWeaveRuntimeConfig();
+    const writerHost = new URL(writer.baseUrl).hostname.toLowerCase();
+    const verifierHost = new URL(baseUrl).hostname.toLowerCase();
+    if (writerHost === verifierHost) return undefined;
+    return { apiKey: credential.value, baseUrl, model };
+}
+
 export function getReadWeaveAiSettings(): ReadWeaveAiSettings {
     const credential = configuredApiKey();
+    const verifierCredential = configuredVerifierApiKey();
     const search = getReadWeaveSearchRuntimeConfig();
+    const verifierBaseUrl = optionService.getOptionOrNull("readWeaveVerifierBaseUrl")?.trim()
+        || process.env.READWEAVE_VERIFIER_API_BASE_URL?.trim()
+        || "";
+    const verifierModel = optionService.getOptionOrNull("readWeaveVerifierModel")?.trim()
+        || process.env.READWEAVE_VERIFIER_MODEL?.trim()
+        || "";
+    const writerBaseUrl = optionService.getOptionOrNull("readWeaveBaseUrl")?.trim()
+        || process.env.READWEAVE_API_BASE_URL?.trim()
+        || DEFAULT_BASE_URL;
+    const independent = !!verifierCredential.value && !!verifierBaseUrl && !!verifierModel
+        && new URL(verifierBaseUrl).hostname.toLowerCase() !== new URL(writerBaseUrl).hostname.toLowerCase();
     return {
-        baseUrl: optionService.getOptionOrNull("readWeaveBaseUrl")?.trim()
-            || process.env.READWEAVE_API_BASE_URL?.trim()
-            || DEFAULT_BASE_URL,
+        baseUrl: writerBaseUrl,
         model: optionService.getOptionOrNull("readWeaveModel")?.trim()
             || process.env.READWEAVE_DEEPSEEK_MODEL?.trim()
             || DEFAULT_MODEL,
@@ -172,6 +212,15 @@ export function getReadWeaveAiSettings(): ReadWeaveAiSettings {
         credentialSource: credential.source,
         searchMode: search.mode,
         searchBudgetCny: search.budgetCny,
+        mathShortcut: optionService.getOptionOrNull("readWeaveMathShortcut")?.trim() || "Alt+=",
+        verifier: {
+            baseUrl: verifierBaseUrl,
+            model: verifierModel,
+            hasApiKey: !!verifierCredential.value,
+            maskedApiKey: verifierCredential.value ? maskApiKey(verifierCredential.value) : undefined,
+            credentialSource: verifierCredential.source,
+            independent
+        },
         search: {
             freeProviders: [ ...FREE_SEARCH_PROVIDERS ],
             hasSerperApiKey: !!search.serperApiKey,
@@ -198,6 +247,14 @@ export function updateReadWeaveAiSettings(request: ReadWeaveAiSettingsUpdate): R
     optionService.setOption("readWeaveBaseUrl", baseUrl);
     optionService.setOption("readWeaveModel", model);
 
+    if (request.verifierBaseUrl !== undefined) {
+        optionService.setOption("readWeaveVerifierBaseUrl", request.verifierBaseUrl.trim() ? normalizeBaseUrl(request.verifierBaseUrl) : "");
+    }
+    if (request.verifierModel !== undefined) {
+        optionService.setOption("readWeaveVerifierModel", request.verifierModel.trim() ? normalizeModel(request.verifierModel) : "");
+    }
+    updateOptionalSecret(request, "verifierApiKey", "clearVerifierApiKey", "readWeaveVerifierApiKey", "ReadWeave verifier API key");
+
     if (request.clearApiKey) {
         optionService.setOption("readWeaveApiKey", "");
     } else if (request.apiKey !== undefined) {
@@ -218,6 +275,13 @@ export function updateReadWeaveAiSettings(request: ReadWeaveAiSettingsUpdate): R
             throw new ValidationError("The ReadWeave search budget must be between 0 and 1 CNY.");
         }
         optionService.setOption("readWeaveSearchBudgetCny", request.searchBudgetCny.toFixed(4));
+    }
+    if (request.mathShortcut !== undefined) {
+        if (typeof request.mathShortcut !== "string" || !/^(?:Alt|Ctrl|Meta|Shift)(?:\+(?:Alt|Ctrl|Meta|Shift))*\+[^+\s]+$/u.test(request.mathShortcut.trim())
+            || request.mathShortcut.trim().length > 64) {
+            throw new ValidationError("The ReadWeave math shortcut is invalid.");
+        }
+        optionService.setOption("readWeaveMathShortcut", request.mathShortcut.trim());
     }
     updateOptionalSecret(request, "serperApiKey", "clearSerperApiKey", "readWeaveSerperApiKey", "Serper API key");
     updateOptionalSecret(request, "tavilyApiKey", "clearTavilyApiKey", "readWeaveTavilyApiKey", "Tavily API key");

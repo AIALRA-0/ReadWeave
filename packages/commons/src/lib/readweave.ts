@@ -7,6 +7,9 @@ export type ReadWeaveEditMode = "global" | "article-variant" | "display-only";
 export type ReadWeaveAnchorType = "paragraph" | "range";
 export type ReadWeaveCalloutType = "note" | "tip" | "important" | "warning" | "caution";
 export type ReadWeaveContextRole = "selected" | "heading" | "previous" | "next" | "section" | "document";
+export type ReadWeaveQualityState = "legacy-unverified" | "verified" | "provisional";
+export type ReadWeaveEvidenceState = "not-checked" | "local-only" | "externally-checked" | "conflicted" | "insufficient";
+export type ReadWeaveFailureClass = "format" | "semantic" | "evidence" | "transport" | "budget" | "cancelled";
 
 export interface ReadWeaveTermIdentity {
     abbreviation?: string;
@@ -50,7 +53,9 @@ export interface ReadWeaveUsageSummary {
     outputTokens: number;
     totalTokens: number;
     costCny: number;
+    targetCny: number;
     budgetCny: number;
+    withinTarget: boolean;
     withinBudget: boolean;
 }
 
@@ -83,7 +88,12 @@ export interface ReadWeaveClaim {
 }
 
 export interface ReadWeaveGenerationAudit {
-    workflowVersion: "unified-evidence-v1";
+    workflowVersion: "unified-evidence-v1" | "quality-closure-v2";
+    harnessVersion?: string;
+    qualityState?: ReadWeaveQualityState;
+    evidenceState?: ReadWeaveEvidenceState;
+    independentVerification?: "passed" | "failed" | "not-run";
+    unresolvedIssues?: string[];
     questionContract: ReadWeaveQuestionContract;
     searchQueries: string[];
     unresolvedClaims: string[];
@@ -93,7 +103,7 @@ export interface ReadWeaveGenerationAudit {
     manuallyEdited?: boolean;
 }
 
-export type ReadWeaveGenerationStage = "queued" | "optimizing" | "gathering-context" | "drafting" | "checking" | "repairing" | "expanding-context" | "complete" | "failed";
+export type ReadWeaveGenerationStage = "queued" | "optimizing" | "gathering-context" | "drafting" | "checking" | "repairing" | "expanding-context" | "complete" | "paused" | "cancelled" | "failed";
 
 export type ReadWeaveGenerationIssueCategory = "format" | "entity" | "evidence" | "integrity" | "other";
 
@@ -120,6 +130,7 @@ export interface ReadWeaveGenerationProgress {
 
 export interface ReadWeaveGenerationJob {
     jobId: string;
+    draftId: string;
     savedLinkId?: string;
     articleId: string;
     anchorId: string;
@@ -128,7 +139,12 @@ export interface ReadWeaveGenerationJob {
     parentLinkId?: string;
     title: string;
     sourceExcerpt: string;
-    status: "queued" | "running" | "complete" | "failed";
+    status: "queued" | "running" | "complete" | "paused" | "cancelled" | "failed";
+    qualityState: ReadWeaveQualityState;
+    harnessVersion: string;
+    evidenceState: ReadWeaveEvidenceState;
+    failureClass?: ReadWeaveFailureClass;
+    unresolvedIssues: string[];
     unread: boolean;
     feedback?: string;
     progress: ReadWeaveGenerationProgress[];
@@ -151,6 +167,7 @@ export interface ReadWeaveObject {
     evidenceSources?: ReadWeaveEvidenceSource[];
     claims?: ReadWeaveClaim[];
     audit?: ReadWeaveGenerationAudit;
+    qualityState?: ReadWeaveQualityState;
     revision: number;
     sourceArticleId: string;
     sourceAnchorId: string;
@@ -197,6 +214,7 @@ export interface ReadWeaveResolvedEntry {
     evidenceSources?: ReadWeaveEvidenceSource[];
     claims?: ReadWeaveClaim[];
     audit?: ReadWeaveGenerationAudit;
+    qualityState: ReadWeaveQualityState;
     canonicalTitle: string;
     canonicalBody: string;
     canonicalCalloutType: ReadWeaveCalloutType;
@@ -258,6 +276,10 @@ export interface ReadWeaveGenerateResponse {
     evidenceSources?: ReadWeaveEvidenceSource[];
     claims?: ReadWeaveClaim[];
     audit?: ReadWeaveGenerationAudit;
+    qualityState?: ReadWeaveQualityState;
+    evidenceState?: ReadWeaveEvidenceState;
+    harnessVersion?: string;
+    unresolvedIssues?: string[];
     reviewIssues?: string[];
     context: ReadWeaveContextDecision;
     workflow: ReadWeaveWorkflowSummary;
@@ -289,6 +311,7 @@ export interface ReadWeaveSaveRequest {
     evidenceSources?: ReadWeaveEvidenceSource[];
     claims?: ReadWeaveClaim[];
     audit?: ReadWeaveGenerationAudit;
+    qualityState?: ReadWeaveQualityState;
     reuseObjectId?: string;
 }
 
@@ -302,6 +325,7 @@ export interface ReadWeaveEditRequest {
     evidenceSources?: ReadWeaveEvidenceSource[];
     claims?: ReadWeaveClaim[];
     audit?: ReadWeaveGenerationAudit;
+    qualityState?: ReadWeaveQualityState;
 }
 
 export interface ReadWeaveDeleteResult {
@@ -322,6 +346,15 @@ export interface ReadWeaveAiSettings {
     credentialSource: "settings" | "environment" | "missing";
     searchMode: "off" | "automatic" | "always";
     searchBudgetCny: number;
+    mathShortcut: string;
+    verifier: {
+        baseUrl: string;
+        model: string;
+        hasApiKey: boolean;
+        maskedApiKey?: string;
+        credentialSource: "settings" | "environment" | "missing";
+        independent: boolean;
+    };
     search: {
         freeProviders: string[];
         hasSerperApiKey: boolean;
@@ -348,6 +381,11 @@ export interface ReadWeaveAiSettingsUpdate {
     clearApiKey?: boolean;
     searchMode?: "off" | "automatic" | "always";
     searchBudgetCny?: number;
+    mathShortcut?: string;
+    verifierBaseUrl?: string;
+    verifierModel?: string;
+    verifierApiKey?: string;
+    clearVerifierApiKey?: boolean;
     serperApiKey?: string;
     clearSerperApiKey?: boolean;
     tavilyApiKey?: string;
@@ -382,6 +420,53 @@ export interface ReadWeaveSearchTestResult {
 
 export interface ReadWeaveModelInfo {
     id: string;
+}
+
+export type ReadWeaveHarnessStatus = "draft" | "trial" | "published" | "archived";
+
+export interface ReadWeaveHarnessModules {
+    questionNormalization: string;
+    evidencePolicy: string;
+    answerWriting: string;
+    semanticRubric: string;
+    formatRules: string;
+}
+
+export interface ReadWeaveHarnessCase {
+    caseId: string;
+    category: string;
+    question: string;
+    context?: string;
+    expectedFacts: string[];
+    forbiddenClaims: string[];
+    critical: boolean;
+    expectedIntent?: "identity" | "definition" | "form" | "mechanism" | "reason" | "comparison" | "calculation" | "boundary";
+    badAnswer?: string;
+    referenceAnswer?: string;
+}
+
+export interface ReadWeaveHarnessProfile {
+    versionId: string;
+    name: string;
+    status: ReadWeaveHarnessStatus;
+    parentVersionId?: string;
+    modules: ReadWeaveHarnessModules;
+    cases: ReadWeaveHarnessCase[];
+    createdAt: string;
+    updatedAt: string;
+    publishedAt?: string;
+    lastTrial?: ReadWeaveHarnessTrialResult;
+}
+
+export interface ReadWeaveHarnessTrialResult {
+    versionId: string;
+    passed: boolean;
+    totalCases: number;
+    passedCases: number;
+    visibleCases: number;
+    hiddenCases: number;
+    hiddenFailedCases: number;
+    failedCases: Array<{ caseId: string; issues: string[] }>;
 }
 
 export interface ReadWeaveExport {

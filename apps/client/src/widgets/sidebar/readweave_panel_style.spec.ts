@@ -18,7 +18,7 @@ describe("ReadWeave generation monitor disclosure", () => {
     it("renders finished answers as spaced natural paragraphs instead of a read-only textarea", () => {
         expect(css).toMatch(/\.readweave-readable-body\s+p\s*\+\s*p/u);
         expect(css).toMatch(/line-height:\s*1\.68/u);
-        expect(css).toMatch(/background:\s*(?:transparent|#0000|0\s+0)/u);
+        expect(css).toMatch(/\.readweave-readable-body\s*\{[^}]*background:\s*(?:transparent|#0000|0\s+0|none)/su);
         expect(css).not.toContain("textarea.readweave-body-readonly");
     });
 

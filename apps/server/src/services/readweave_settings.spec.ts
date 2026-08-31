@@ -2,6 +2,7 @@ import { cls, hidden_subtree as hiddenSubtreeService } from "@triliumnext/core";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
     getReadWeaveAiSettings,
+    getReadWeaveVerifierRuntimeConfig,
     updateReadWeaveAiSettings
 } from "./readweave_settings.js";
 import sqlInit from "./sql_init.js";
@@ -65,6 +66,47 @@ describe("ReadWeave settings", () => {
                 model: "deepseek-v4-flash",
                 clearSerperApiKey: true,
                 clearUnpaywallEmail: true
+            });
+        });
+    });
+
+    it("accepts a verifier only when it uses a different service origin", () => {
+        cls.init(() => {
+            const writerSecret = "writer-not-a-real-secret-1234";
+            const verifierSecret = "verifier-not-a-real-secret-5678";
+            let settings = updateReadWeaveAiSettings({
+                baseUrl: "https://api.deepseek.com",
+                model: "deepseek-v4-flash",
+                apiKey: writerSecret,
+                verifierBaseUrl: "https://api.deepseek.com/v1",
+                verifierModel: "deepseek-verifier",
+                verifierApiKey: verifierSecret
+            });
+
+            expect(settings.verifier.independent).toBe(false);
+            expect(getReadWeaveVerifierRuntimeConfig()).toBeUndefined();
+
+            settings = updateReadWeaveAiSettings({
+                baseUrl: "https://api.deepseek.com",
+                model: "deepseek-v4-flash",
+                verifierBaseUrl: "https://independent.example.com/v1",
+                verifierModel: "independent-verifier"
+            });
+            expect(settings.verifier.independent).toBe(true);
+            expect(settings.verifier.maskedApiKey).toMatch(/^ver.*5678$/);
+            expect(JSON.stringify(settings)).not.toContain(verifierSecret);
+            expect(getReadWeaveVerifierRuntimeConfig()).toMatchObject({
+                baseUrl: "https://independent.example.com/v1",
+                model: "independent-verifier"
+            });
+
+            updateReadWeaveAiSettings({
+                baseUrl: "https://api.deepseek.com",
+                model: "deepseek-v4-flash",
+                clearApiKey: true,
+                clearVerifierApiKey: true,
+                verifierBaseUrl: "",
+                verifierModel: ""
             });
         });
     });

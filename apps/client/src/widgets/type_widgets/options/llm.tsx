@@ -1,6 +1,13 @@
 import "./llm.css";
 
-import type { ReadWeaveAiSettings, ReadWeaveModelInfo, ReadWeaveSearchTestResult } from "@triliumnext/commons";
+import type {
+    ReadWeaveAiSettings,
+    ReadWeaveHarnessModules,
+    ReadWeaveHarnessProfile,
+    ReadWeaveHarnessTrialResult,
+    ReadWeaveModelInfo,
+    ReadWeaveSearchTestResult
+} from "@triliumnext/commons";
 import { useCallback, useEffect, useMemo, useState } from "preact/hooks";
 
 import dialog from "../../../services/dialog";
@@ -36,6 +43,7 @@ export default function LlmSettings() {
     return (
         <>
             <ReadWeaveSettings />
+            <ReadWeaveHarnessSettings />
             <OptionsPageHeader
                 helpUrl="GBBMSlVSOIGP"
                 actions={
@@ -68,8 +76,12 @@ function ReadWeaveSettings() {
     const [baseUrl, setBaseUrl] = useState("");
     const [model, setModel] = useState("");
     const [apiKey, setApiKey] = useState("");
+    const [verifierBaseUrl, setVerifierBaseUrl] = useState("");
+    const [verifierModel, setVerifierModel] = useState("");
+    const [verifierApiKey, setVerifierApiKey] = useState("");
     const [searchMode, setSearchMode] = useState<ReadWeaveAiSettings["searchMode"]>("automatic");
     const [searchBudgetCny, setSearchBudgetCny] = useState("0.009");
+    const [mathShortcut, setMathShortcut] = useState("Alt+=");
     const [searchKeys, setSearchKeys] = useState({
         serperApiKey: "",
         tavilyApiKey: "",
@@ -100,6 +112,9 @@ function ReadWeaveSettings() {
             setModel(value.model);
             setSearchMode(value.searchMode);
             setSearchBudgetCny(value.searchBudgetCny.toString());
+            setMathShortcut(value.mathShortcut);
+            setVerifierBaseUrl(value.verifier.baseUrl);
+            setVerifierModel(value.verifier.model);
         }).catch(() => setStatus(t("readweave_settings.load_failed")));
     }, []);
 
@@ -115,6 +130,10 @@ function ReadWeaveSettings() {
                 clearApiKey,
                 searchMode,
                 searchBudgetCny: Number.isFinite(parsedSearchBudget) ? parsedSearchBudget : 0.009,
+                mathShortcut,
+                verifierBaseUrl,
+                verifierModel,
+                ...(verifierApiKey.trim() ? { verifierApiKey: verifierApiKey.trim() } : {}),
                 ...Object.fromEntries(Object.entries(searchKeys).filter(([, key]) => key.trim())),
                 ...(clearSearchKeys ? {
                     clearSerperApiKey: true,
@@ -131,6 +150,10 @@ function ReadWeaveSettings() {
             setModel(value.model);
             setSearchMode(value.searchMode);
             setSearchBudgetCny(value.searchBudgetCny.toString());
+            setMathShortcut(value.mathShortcut);
+            setVerifierBaseUrl(value.verifier.baseUrl);
+            setVerifierModel(value.verifier.model);
+            setVerifierApiKey("");
             setApiKey("");
             setSearchKeys({
                 serperApiKey: "",
@@ -243,6 +266,47 @@ function ReadWeaveSettings() {
             {status && <p className="form-text mb-0" role="status">{status}</p>}
             <p className="form-text mb-0">{t("readweave_settings.security_note")}</p>
             <hr />
+            <h5>独立质量核验</h5>
+            <p className="form-text">
+                只有配置了不同服务来源的第二模型并通过复核，答案才会显示绿色；未配置时答案会保存为黄色待核验，不会误标为正确
+            </p>
+            <OptionsRow name="readweave-verifier-base-url" label="核验服务地址" description="必须与生成服务使用不同域名" stacked>
+                <input
+                    type="url"
+                    className="form-control"
+                    value={verifierBaseUrl}
+                    placeholder="https://api.openai.com/v1"
+                    onInput={event => setVerifierBaseUrl(event.currentTarget.value)}
+                    data-testid="readweave-verifier-base-url"
+                />
+            </OptionsRow>
+            <OptionsRow name="readweave-verifier-model" label="核验模型" description="用于事实、命题命中和内部一致性复核" stacked>
+                <input
+                    type="text"
+                    className="form-control"
+                    value={verifierModel}
+                    placeholder="独立核验模型名称"
+                    onInput={event => setVerifierModel(event.currentTarget.value)}
+                    data-testid="readweave-verifier-model"
+                />
+            </OptionsRow>
+            <OptionsRow name="readweave-verifier-api-key" label="核验服务密钥" description={settings?.verifier.hasApiKey
+                ? `已配置 ${settings.verifier.maskedApiKey ?? "••••••••"}`
+                : "尚未配置"} stacked>
+                <input
+                    type="password"
+                    className="form-control"
+                    value={verifierApiKey}
+                    autocomplete="new-password"
+                    placeholder={settings?.verifier.hasApiKey ? "留空则保留现有密钥" : "输入核验服务密钥"}
+                    onInput={event => setVerifierApiKey(event.currentTarget.value)}
+                    data-testid="readweave-verifier-api-key"
+                />
+            </OptionsRow>
+            <p className={`form-text mb-0 ${settings?.verifier.independent ? "text-success" : "text-warning"}`}>
+                {settings?.verifier.independent ? "独立核验已启用" : "独立核验未启用，答案不会显示绿色"}
+            </p>
+            <hr />
             <h5>{t("readweave_settings.search_title")}</h5>
             <p className="form-text">{t("readweave_settings.search_description", {
                 providers: settings?.search.freeProviders.join("、") ?? "Crossref、DBLP、OpenAlex、Semantic Scholar"
@@ -269,6 +333,15 @@ function ReadWeaveSettings() {
                     value={searchBudgetCny}
                     onInput={event => setSearchBudgetCny(event.currentTarget.value)}
                     data-testid="readweave-search-budget"
+                />
+            </OptionsRow>
+            <OptionsRow name="readweave-math-shortcut" label="公式快捷键" description="默认 Alt+=，可改为其他包含修饰键的组合" stacked>
+                <input
+                    type="text"
+                    className="form-control"
+                    value={mathShortcut}
+                    onInput={event => setMathShortcut(event.currentTarget.value)}
+                    data-testid="readweave-math-shortcut"
                 />
             </OptionsRow>
             <details>
@@ -349,6 +422,262 @@ function ReadWeaveSettings() {
                     )}
                 </div>
             )}
+        </OptionsSection>
+    );
+}
+
+const HARNESS_MODULE_LABELS: Array<[ keyof ReadWeaveHarnessModules, string ]> = [
+    [ "questionNormalization", "问题归一化" ],
+    [ "evidencePolicy", "证据规则" ],
+    [ "answerWriting", "回答提示词" ],
+    [ "semanticRubric", "语义评分规则" ],
+    [ "formatRules", "格式规则" ]
+];
+
+function ReadWeaveHarnessSettings() {
+    const [profiles, setProfiles] = useState<ReadWeaveHarnessProfile[]>([]);
+    const [selectedId, setSelectedId] = useState("");
+    const [draft, setDraft] = useState<ReadWeaveHarnessProfile>();
+    const [casesJson, setCasesJson] = useState("[]");
+    const [trial, setTrial] = useState<ReadWeaveHarnessTrialResult>();
+    const [caseQuestion, setCaseQuestion] = useState("");
+    const [caseBadAnswer, setCaseBadAnswer] = useState("");
+    const [caseReferenceAnswer, setCaseReferenceAnswer] = useState("");
+    const [caseExpectedFacts, setCaseExpectedFacts] = useState("");
+    const [caseForbiddenClaims, setCaseForbiddenClaims] = useState("");
+    const [caseIntent, setCaseIntent] = useState<ReadWeaveHarnessProfile["cases"][number]["expectedIntent"]>("definition");
+    const [busy, setBusy] = useState(false);
+    const [status, setStatus] = useState("");
+
+    const loadProfiles = useCallback(async (preferredId?: string) => {
+        const response = await server.get<{ profiles: ReadWeaveHarnessProfile[] }>("readweave/harness");
+        setProfiles(response.profiles);
+        const nextId = preferredId || selectedId || response.profiles.find(item => item.status === "published")?.versionId || response.profiles[0]?.versionId || "";
+        setSelectedId(nextId);
+        const selected = response.profiles.find(item => item.versionId === nextId);
+        setDraft(selected ? structuredClone(selected) : undefined);
+        setCasesJson(JSON.stringify(selected?.cases ?? [], null, 2));
+        setTrial(selected?.lastTrial);
+    }, [selectedId]);
+
+    useEffect(() => {
+        void loadProfiles().catch(() => setStatus("质量控制中心加载失败"));
+    }, []);
+
+    function chooseProfile(versionId: string) {
+        setSelectedId(versionId);
+        const selected = profiles.find(item => item.versionId === versionId);
+        setDraft(selected ? structuredClone(selected) : undefined);
+        setCasesJson(JSON.stringify(selected?.cases ?? [], null, 2));
+        setTrial(selected?.lastTrial);
+    }
+
+    async function createDraft() {
+        setBusy(true);
+        try {
+            const response = await server.post<{ profile: ReadWeaveHarnessProfile }>("readweave/harness", { sourceVersionId: selectedId || undefined });
+            await loadProfiles(response.profile.versionId);
+            setStatus("已创建可编辑草稿");
+        } catch {
+            setStatus("创建草稿失败");
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function saveDraft(): Promise<boolean> {
+        if (!draft || (draft.status !== "draft" && draft.status !== "trial")) return false;
+        setBusy(true);
+        try {
+            const cases = JSON.parse(casesJson) as ReadWeaveHarnessProfile["cases"];
+            const response = await server.put<{ profile: ReadWeaveHarnessProfile }>(`readweave/harness/${encodeURIComponent(draft.versionId)}`, {
+                name: draft.name,
+                modules: draft.modules,
+                cases
+            });
+            setDraft(response.profile);
+            setCasesJson(JSON.stringify(response.profile.cases, null, 2));
+            setTrial(undefined);
+            setStatus("草稿已保存，发布前必须重新试跑");
+            await loadProfiles(response.profile.versionId);
+            return true;
+        } catch {
+            setStatus("保存失败，请检查案例 JSON 和模块内容");
+            return false;
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function runTrial() {
+        if (!draft) return;
+        setBusy(true);
+        setStatus("正在用当前草稿运行真实回归案例");
+        try {
+            if (!await saveDraft()) return;
+            const response = await server.post<{ trial: ReadWeaveHarnessTrialResult }>(`readweave/harness/${encodeURIComponent(draft.versionId)}/trial`, {});
+            setTrial(response.trial);
+            await loadProfiles(draft.versionId);
+            setStatus(response.trial.passed ? "全部案例通过，可以发布" : `${response.trial.totalCases - response.trial.passedCases} 个案例未通过，禁止发布`);
+        } catch {
+            setStatus("试跑未完成，当前版本不能发布");
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function publishDraft() {
+        if (!draft || draft.status !== "trial" || !trial?.passed) return;
+        setBusy(true);
+        try {
+            await server.post(`readweave/harness/${encodeURIComponent(draft.versionId)}/publish`, {});
+            await loadProfiles(draft.versionId);
+            setStatus("Harness 已发布，新任务将记录该版本");
+        } catch {
+            setStatus("发布失败，必须先通过全部关键案例");
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function addCase() {
+        if (!draft || !caseQuestion.trim()) return;
+        setBusy(true);
+        try {
+            if (!await saveDraft()) return;
+            const response = await server.post<{ profile: ReadWeaveHarnessProfile }>(`readweave/harness/${encodeURIComponent(draft.versionId)}/cases`, {
+                question: caseQuestion.trim(),
+                category: "用户反馈",
+                expectedIntent: caseIntent,
+                badAnswer: caseBadAnswer.trim() || undefined,
+                referenceAnswer: caseReferenceAnswer.trim() || undefined,
+                expectedFacts: caseExpectedFacts.split(/\r?\n/u).map(item => item.trim()).filter(Boolean),
+                forbiddenClaims: caseForbiddenClaims.split(/\r?\n/u).map(item => item.trim()).filter(Boolean),
+                critical: true
+            });
+            setDraft(response.profile);
+            setCasesJson(JSON.stringify(response.profile.cases, null, 2));
+            setTrial(undefined);
+            setCaseQuestion("");
+            setCaseBadAnswer("");
+            setCaseReferenceAnswer("");
+            setCaseExpectedFacts("");
+            setCaseForbiddenClaims("");
+            await loadProfiles(response.profile.versionId);
+            setStatus("案例已加入回归集，发布前需要重新试跑");
+        } catch {
+            setStatus("案例加入失败，请检查问题与验收内容");
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function rollbackProfile() {
+        if (!draft || draft.status !== "archived") return;
+        setBusy(true);
+        try {
+            await server.post(`readweave/harness/${encodeURIComponent(draft.versionId)}/rollback`, {});
+            await loadProfiles(draft.versionId);
+            setStatus("已回滚到所选版本");
+        } catch {
+            setStatus("回滚失败");
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function archiveProfile() {
+        if (!draft || draft.status === "published") return;
+        setBusy(true);
+        try {
+            await server.post(`readweave/harness/${encodeURIComponent(draft.versionId)}/archive`, {});
+            await loadProfiles();
+            setStatus("版本已归档");
+        } catch {
+            setStatus("归档失败");
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    const editable = draft?.status === "draft" || draft?.status === "trial";
+    const parentProfile = draft?.parentVersionId ? profiles.find(profile => profile.versionId === draft.parentVersionId) : undefined;
+    const changedModules = draft && parentProfile
+        ? HARNESS_MODULE_LABELS.filter(([ key ]) => draft.modules[key] !== parentProfile.modules[key]).map(([, label ]) => label)
+        : [];
+    return (
+        <OptionsSection title="ReadWeave 质量控制中心" description="查看并修改实际生效的提示词、证据规则、评分规则和回归案例；未通过试跑的草稿不能发布">
+            <OptionsRow name="readweave-harness-version" label="Harness 版本" stacked>
+                <select className="form-select" value={selectedId} onChange={event => chooseProfile(event.currentTarget.value)}>
+                    {profiles.map(profile => <option value={profile.versionId} key={profile.versionId}>{profile.name} · {profile.status}</option>)}
+                </select>
+            </OptionsRow>
+            {draft && <>
+                <OptionsRow name="readweave-harness-name" label="版本名称" stacked>
+                    <input className="form-control" value={draft.name} disabled={!editable} onInput={event => setDraft({ ...draft, name: event.currentTarget.value })} />
+                </OptionsRow>
+                {HARNESS_MODULE_LABELS.map(([ key, label ]) => (
+                    <OptionsRow name={`readweave-harness-${key}`} label={label} stacked>
+                        <textarea
+                            className="form-control"
+                            rows={6}
+                            value={draft.modules[key]}
+                            disabled={!editable}
+                            onInput={event => setDraft({ ...draft, modules: { ...draft.modules, [key]: event.currentTarget.value } })}
+                        />
+                    </OptionsRow>
+                ))}
+                <OptionsRow name="readweave-harness-cases" label={`真实测试案例（${draft.cases.length}）`} description="JSON 可直接人工审核；案例不会写入生成提示词" stacked>
+                    <textarea className="form-control font-monospace" rows={14} value={casesJson} disabled={!editable} onInput={event => setCasesJson(event.currentTarget.value)} />
+                </OptionsRow>
+                {editable && <details className="mb-3">
+                    <summary>把当前错误加入回归集</summary>
+                    <div className="d-grid gap-2 mt-2">
+                        <input className="form-control" value={caseQuestion} onInput={event => setCaseQuestion(event.currentTarget.value)} placeholder="用户问题" />
+                        <select className="form-select" value={caseIntent} onChange={event => setCaseIntent(event.currentTarget.value as typeof caseIntent)}>
+                            <option value="identity">人物身份</option>
+                            <option value="definition">定义</option>
+                            <option value="form">形态</option>
+                            <option value="mechanism">机制</option>
+                            <option value="reason">原因</option>
+                            <option value="comparison">比较</option>
+                            <option value="calculation">计算</option>
+                            <option value="boundary">边界</option>
+                        </select>
+                        <textarea className="form-control" rows={4} value={caseBadAnswer} onInput={event => setCaseBadAnswer(event.currentTarget.value)} placeholder="错误答案" />
+                        <textarea className="form-control" rows={4} value={caseReferenceAnswer} onInput={event => setCaseReferenceAnswer(event.currentTarget.value)} placeholder="人工修正版" />
+                        <textarea className="form-control" rows={3} value={caseExpectedFacts} onInput={event => setCaseExpectedFacts(event.currentTarget.value)} placeholder="必须包含的事实，每行一项；可用 || 表示同义选项" />
+                        <textarea className="form-control" rows={3} value={caseForbiddenClaims} onInput={event => setCaseForbiddenClaims(event.currentTarget.value)} placeholder="禁止出现的断言，每行一项" />
+                        <button type="button" className="btn btn-outline-primary" disabled={busy || !caseQuestion.trim()} onClick={addCase}>加入回归集</button>
+                    </div>
+                </details>}
+                {parentProfile && <details className="mb-3">
+                    <summary>与上级版本的差异</summary>
+                    <p className="form-text mb-1">变更模块：{changedModules.length ? changedModules.join("、") : "无"}</p>
+                    <p className="form-text mb-0">案例数量：{parentProfile.cases.length} → {draft.cases.length}</p>
+                    {HARNESS_MODULE_LABELS.filter(([ key ]) => draft.modules[key] !== parentProfile.modules[key]).map(([ key, label ]) => <details className="mt-2" key={key}>
+                        <summary>{label}</summary>
+                        <div className="row g-2 mt-1">
+                            <div className="col-md-6"><strong>上级版本</strong><pre className="small text-wrap mt-1">{parentProfile.modules[key]}</pre></div>
+                            <div className="col-md-6"><strong>当前版本</strong><pre className="small text-wrap mt-1">{draft.modules[key]}</pre></div>
+                        </div>
+                    </details>)}
+                </details>}
+                <div className="d-flex flex-wrap gap-2">
+                    <button type="button" className="btn btn-secondary" disabled={busy} onClick={createDraft}>复制为草稿</button>
+                    <button type="button" className="btn btn-primary" disabled={busy || !editable} onClick={saveDraft}>保存草稿</button>
+                    <button type="button" className="btn btn-warning" disabled={busy || !editable} onClick={runTrial}>真实试跑</button>
+                    <button type="button" className="btn btn-success" disabled={busy || draft.status !== "trial" || !trial?.passed} onClick={publishDraft}>发布</button>
+                    <button type="button" className="btn btn-outline-warning" disabled={busy || draft.status !== "archived"} onClick={rollbackProfile}>回滚到此版本</button>
+                    <button type="button" className="btn btn-outline-danger" disabled={busy || draft.status === "published"} onClick={archiveProfile}>归档</button>
+                </div>
+                {status && <p className="form-text mt-2" role="status">{status}</p>}
+                {trial && !trial.passed && <details className="mt-2">
+                    <summary>{trial.totalCases - trial.passedCases} 个失败案例</summary>
+                    <ul>{trial.failedCases.map(item => <li key={item.caseId}><strong>{item.caseId}</strong>：{item.issues.join("；")}</li>)}</ul>
+                    {trial.hiddenFailedCases > 0 && <p>隐藏保留集有 {trial.hiddenFailedCases} 个案例未通过；题目和判据不会显示在客户端</p>}
+                </details>}
+            </>}
         </OptionsSection>
     );
 }

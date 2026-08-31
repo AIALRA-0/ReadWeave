@@ -10,7 +10,7 @@ import type {
 export const READWEAVE_CANDIDATE_MIN_CONFIDENCE = 0.55;
 export const READWEAVE_CANDIDATE_LIMIT = 3;
 
-export type ReadWeaveGenerationVisualState = "running" | "unread" | "error";
+export type ReadWeaveGenerationVisualState = "running" | "unread" | "paused" | "error";
 
 export interface ReadWeaveReviewIssueBaseline {
     body: string;
@@ -54,7 +54,7 @@ export function isReadWeaveGenerationDisabled(input: {
     definitionExists: boolean;
     hasSelection: boolean;
     hasTitle: boolean;
-    jobStatus?: "queued" | "running" | "complete" | "failed";
+    jobStatus?: ReadWeaveGenerationJob["status"];
     selectionPending: boolean;
 }): boolean {
     return input.busy
@@ -78,13 +78,31 @@ export function hasActiveReadWeaveGenerationJobs(
 }
 
 /**
+ * A deliberately blank question draft must not be replaced by the newest job
+ * for the same anchor when the background job snapshot refreshes.
+ */
+export function isReadWeaveJobAutoRestoreAllowed(input: {
+    hasSelection: boolean;
+    selectionPending: boolean;
+    generationJobId?: string;
+    newQuestionDraft: boolean;
+}): boolean {
+    return input.hasSelection
+        && !input.selectionPending
+        && !input.generationJobId
+        && !input.newQuestionDraft;
+}
+
+/**
  * Only a job with a visible status indicator keeps its source range emphasized.
  * A completed, already-viewed draft remains recoverable in the side panel, but
  * its underline goes back to the normal hover/lock interaction.
  */
-export function readWeaveGenerationVisualState(job: Pick<ReadWeaveGenerationJob, "status" | "unread">): ReadWeaveGenerationVisualState | undefined {
+export function readWeaveGenerationVisualState(job: Pick<ReadWeaveGenerationJob, "status" | "unread"> & { qualityState?: ReadWeaveGenerationJob["qualityState"] }): ReadWeaveGenerationVisualState | undefined {
     if (job.status === "failed") return "error";
+    if (job.status === "paused") return "paused";
     if (job.status === "queued" || job.status === "running") return "running";
+    if (job.status === "complete" && job.qualityState !== "verified") return "paused";
     if (job.status === "complete" && job.unread) return "unread";
     return undefined;
 }
@@ -147,10 +165,13 @@ export function mergeReadWeaveGenerationJobSnapshot(
     current: ReadWeaveGenerationJob[],
     incoming: ReadWeaveGenerationJob[]
 ): ReadWeaveGenerationJob[] {
-    return incoming.map(job => {
+    const merged = incoming.map(job => {
         const existing = current.find(candidate => candidate.jobId === job.jobId);
         return existing && compareReadWeaveJobVersions(existing, job) > 0 ? existing : job;
-    }).toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+    });
+    const incomingIds = new Set(incoming.map(job => job.jobId));
+    const locallyNewerOrCrossArticle = current.filter(job => !incomingIds.has(job.jobId));
+    return [ ...merged, ...locallyNewerOrCrossArticle ].toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }
 
 /**

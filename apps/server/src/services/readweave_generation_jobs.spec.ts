@@ -13,6 +13,7 @@ vi.mock("./readweave_ai.js", async importOriginal => ({
 }));
 
 import {
+    cancelReadWeaveGenerationJob,
     discardReadWeaveGenerationJob,
     getReadWeaveGenerationEvents,
     getReadWeaveGenerationJob,
@@ -45,6 +46,10 @@ function result(body = "测试片段说明后台任务能够生成、检查并�
         : `${body.replace(/[。；\s]+$/u, "")}；保存后的内容能够在同一文字锚点重新打开，并继续编辑、重新生成或删除`;
     return {
         body: completeBody,
+        qualityState: "verified",
+        evidenceState: "externally-checked",
+        harnessVersion: "test-harness",
+        unresolvedIssues: [],
         context: { fragmentIds: [ "selected" ], characterCount: 4, characterBudget: 800, expansionLevel: 0, attemptedBudgets: [ 800 ] },
         workflow: { generationAttempts: 1, validationPasses: 1, contextExpansions: 0, repairRounds: 0, unchangedSegmentsVerified: true },
         provider: "test",
@@ -52,16 +57,24 @@ function result(body = "测试片段说明后台任务能够生成、检查并�
     };
 }
 
-async function waitForStatus(jobId: string, status: "complete" | "failed") {
-    for (let attempt = 0; attempt < 50; attempt++) {
+async function waitForStatus(jobId: string, status: "complete" | "paused" | "failed") {
+    for (let attempt = 0; attempt < 400; attempt++) {
         const job = getReadWeaveGenerationJob(jobId);
         if (job.status === status) return job;
         if (job.status === "failed") {
             throw new Error(`Job ${jobId} failed: ${job.error}; ${job.progress.flatMap(event => event.issues).join(" | ")}`);
         }
-        await new Promise(resolve => setTimeout(resolve, 5));
+        await new Promise(resolve => setTimeout(resolve, 10));
     }
     throw new Error(`Job ${jobId} did not reach ${status}.`);
+}
+
+async function waitUntil(predicate: () => boolean) {
+    for (let attempt = 0; attempt < 100; attempt++) {
+        if (predicate()) return;
+        await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    throw new Error("Condition was not reached");
 }
 
 describe("ReadWeave persisted generation jobs", () => {
@@ -109,6 +122,9 @@ describe("ReadWeave persisted generation jobs", () => {
         });
         const started = startReadWeaveGenerationJob(request);
         expect(started.sourceExcerpt).toBe("测试片段");
+        expect(started.qualityState).toBe("provisional");
+        expect(started.harnessVersion).toBe("quality-closure-v2.2.0");
+        expect(started.evidenceState).toBe("not-checked");
         const completed = await waitForStatus(started.jobId, "complete");
         expect(completed.unread).toBe(true);
         expect(completed.savedLinkId).toBeTruthy();
@@ -138,51 +154,115 @@ describe("ReadWeave persisted generation jobs", () => {
         expect(markReadWeaveGenerationJobViewed(started.jobId).unread).toBe(false);
     });
 
-    it("automatically regenerates an internally rejected draft and only completes with a clean result", async () => {
-        generateMock
-            .mockResolvedValueOnce({
-                ...result("这是仍含内部质量问题的首稿；"),
-                reviewIssues: [ "英文名称格式尚未通过" ]
-            })
-            .mockResolvedValueOnce(result("这是自动修复后通过全部检查的回答；"));
+    it("keeps three questions independent while running at most two model calls", async () => {
+        const releases: Array<(value: ReadWeaveGenerateResponse) => void> = [];
+        let active = 0;
+        let maximumActive = 0;
+        generateMock.mockImplementation(async () => {
+            active += 1;
+            maximumActive = Math.max(maximumActive, active);
+            return await new Promise<ReadWeaveGenerateResponse>(resolve => {
+                releases.push(value => {
+                    active -= 1;
+                    resolve(value);
+                });
+            });
+        });
+
+        const jobs = [ "a", "b", "c" ].map(suffix => startReadWeaveGenerationJob({
+            ...request,
+            anchorId: `range_jobs_${suffix}`,
+            title: `独立问题 ${suffix}`
+        }));
+        await waitUntil(() => releases.length === 2);
+
+        expect(new Set(jobs.map(job => job.jobId)).size).toBe(3);
+        expect(new Set(jobs.map(job => job.draftId)).size).toBe(3);
+        expect(maximumActive).toBe(2);
+        expect(getReadWeaveGenerationJob(jobs[2].jobId).status).toBe("queued");
+
+        releases.shift()?.(result("第一个并发任务独立完成"));
+        await waitUntil(() => releases.length === 2);
+        expect(maximumActive).toBe(2);
+        for (const release of releases.splice(0)) release(result("其余并发任务独立完成"));
+        await Promise.all(jobs.map(job => waitForStatus(job.jobId, "complete")));
+    });
+
+    it("keeps a cancelled job visible and ignores its late model result", async () => {
+        let release: ((value: ReadWeaveGenerateResponse) => void) | undefined;
+        generateMock.mockImplementationOnce(async () => await new Promise<ReadWeaveGenerateResponse>(resolve => { release = resolve; }));
+        const started = startReadWeaveGenerationJob({ ...request, anchorId: "range_jobs_cancel", title: "待取消问题" });
+        await waitUntil(() => getReadWeaveGenerationJob(started.jobId).status === "running");
+
+        const cancelled = cancelReadWeaveGenerationJob(started.jobId);
+        expect(cancelled.status).toBe("cancelled");
+        expect(cancelled.failureClass).toBe("cancelled");
+        expect(cancelled.progress.at(-1)?.stage).toBe("cancelled");
+
+        release?.(result("取消后才返回的结果不应覆盖状态"));
+        await new Promise(resolve => setTimeout(resolve, 20));
+        expect(getReadWeaveGenerationJob(started.jobId).status).toBe("cancelled");
+        expect(getReadWeaveGenerationJob(started.jobId).result).toBeUndefined();
+    });
+
+    it("persists an unresolved answer as a yellow draft without restarting the complete workflow", async () => {
+        generateMock.mockResolvedValueOnce({
+            ...result("这是仍含内部质量问题的首稿；"),
+            qualityState: "provisional",
+            unresolvedIssues: [ "核心事实尚未独立核验" ],
+            reviewIssues: [ "核心事实尚未独立核验" ]
+        });
 
         const started = startReadWeaveGenerationJob(request);
         const completed = await waitForStatus(started.jobId, "complete");
 
-        expect(generateMock).toHaveBeenCalledTimes(2);
-        expect(completed.result?.body).toContain("通过全部检查");
-        expect(completed.result?.reviewIssues).toBeUndefined();
-        expect(completed.progress.some(event => event.message.includes("正在自动重试第 2 次"))).toBe(true);
-        expect(generateMock.mock.calls[1][0].feedback).toContain("英文名称格式尚未通过");
+        expect(generateMock).toHaveBeenCalledTimes(1);
+        expect(completed.result?.qualityState).toBe("provisional");
+        expect(completed.result?.reviewIssues).toEqual([ "核心事实尚未独立核验" ]);
+        expect(completed.progress.some(event => event.message.includes("正在自动重试第 2 次"))).toBe(false);
     });
 
-    it("feeds a thrown internal protocol failure into the next automatic regeneration", async () => {
-        generateMock
-            .mockRejectedValueOnce(new Error("内部检查协议未能形成有效修复计划"))
-            .mockResolvedValueOnce(result("这是自动恢复后通过全部检查的回答；"));
+    it("never persists an answer that still has machine-fixable format issues", async () => {
+        generateMock.mockResolvedValueOnce({
+            ...result("这份草稿仍有格式问题"),
+            qualityState: "provisional",
+            unresolvedIssues: [ "回答包含乱码字符" ],
+            reviewIssues: [ "回答包含乱码字符" ]
+        });
+
+        const started = startReadWeaveGenerationJob({ ...request, anchorId: "range_jobs_format", title: "格式门测试" });
+        const paused = await waitForStatus(started.jobId, "paused");
+
+        expect(paused.failureClass).toBe("format");
+        expect(paused.savedLinkId).toBeUndefined();
+        expect(paused.result).toBeUndefined();
+        expect(getEntriesForAnchor(request.articleId, "range_jobs_format")).toHaveLength(0);
+    });
+
+    it("pauses a semantic protocol failure without replaying the whole workflow", async () => {
+        generateMock.mockRejectedValueOnce(new Error("内部检查协议未能形成有效修复计划"));
 
         const started = startReadWeaveGenerationJob(request);
-        const completed = await waitForStatus(started.jobId, "complete");
+        const paused = await waitForStatus(started.jobId, "paused");
 
-        expect(generateMock).toHaveBeenCalledTimes(2);
-        expect(completed.result?.body).toContain("自动恢复后通过");
-        expect(generateMock.mock.calls[1][0].feedback).toContain("内部检查协议未能形成有效修复计划");
-        expect(completed.progress.some(event => event.message.includes("正在自动恢复第 2 次"))).toBe(true);
-        expect(completed.progress.find(event => event.message.includes("正在自动恢复第 2 次"))?.issues)
-            .toEqual([ "内部检查协议未能形成有效修复计划" ]);
+        expect(generateMock).toHaveBeenCalledTimes(1);
+        expect(paused.failureClass).toBe("semantic");
+        expect(paused.error).toContain("内部检查协议未能形成有效修复计划");
+        expect(paused.progress.some(event => event.stage === "paused")).toBe(true);
     });
 
-    it("does not rerun a complete workflow when the available source is only bibliographic metadata", async () => {
+    it("pauses without replay when evidence is only bibliographic metadata", async () => {
         generateMock.mockRejectedValue(new NonRetryableReadWeaveError(
             "ReadWeave 统一质量门未通过：事实引用的来源只有题名、DOI 或短标题，不能支撑该技术内容"
         ));
 
         const started = startReadWeaveGenerationJob(request);
-        const failed = await waitForStatus(started.jobId, "failed");
+        const paused = await waitForStatus(started.jobId, "paused");
 
         expect(generateMock).toHaveBeenCalledTimes(1);
-        expect(failed.error).toContain("只有题名、DOI 或短标题");
-        expect(failed.progress.some(event => event.message.includes("自动恢复第 2 次"))).toBe(false);
+        expect(paused.error).toContain("只有题名、DOI 或短标题");
+        expect(paused.failureClass).toBe("evidence");
+        expect(paused.progress.some(event => event.message.includes("自动恢复第 2 次"))).toBe(false);
     });
 
     it("allows regeneration without feedback while retaining the previous result and resetting progress", async () => {

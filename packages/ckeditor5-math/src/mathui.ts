@@ -5,8 +5,6 @@ import { Plugin, ClickObserver, ButtonView, ContextualBalloon, clickOutsideHandl
 import { getBalloonPositionData } from './utils.js';
 import MathCommand from './mathcommand.js';
 
-const mathKeystroke = 'Ctrl+M';
-
 export default class MathUI extends Plugin {
 	public static get requires() {
 		return [ ContextualBalloon, MathEditing ] as const;
@@ -19,6 +17,7 @@ export default class MathUI extends Plugin {
 	private _previewUid = `math-preview-${ uid() }`;
 	private _balloon: ContextualBalloon = this.editor.plugins.get( ContextualBalloon );
 	public formView: MainFormView | null = null;
+	private _pendingDelimitedInput?: (committed: boolean) => void;
 
 	public init(): void {
 		const editor = this.editor;
@@ -55,9 +54,38 @@ export default class MathUI extends Plugin {
 
 		this._balloon.showStack( 'main' );
 
-		requestAnimationFrame( () => {
-			this.formView?.mathInputView.focus();
-		} );
+		this._focusFormInputAfterMount();
+	}
+
+	public _showPrefilledUI( equation: string, display: boolean, onFinalize: ( committed: boolean ) => void ): void {
+		this._pendingDelimitedInput?.( false );
+		this._pendingDelimitedInput = onFinalize;
+		this._showUI();
+		if ( this.formView ) {
+			this.formView.equation = equation;
+			this.formView.displayButtonView.isOn = display;
+			this._focusFormInputAfterMount();
+		}
+	}
+
+	private _focusFormInputAfterMount(): void {
+		const focusInput = () => {
+			const formView = this.formView;
+			if ( !formView || !this._isFormInPanel ) {
+				return;
+			}
+
+			formView.mathInputView.focus();
+			if ( formView.element && !formView.element.contains( document.activeElement ) ) {
+				formView.mathInputView.latexTextAreaView.focus();
+			}
+		};
+
+		// The editor applies its model selection after the input event that opens
+		// this panel. Waiting for two paint frames prevents that update from
+		// stealing focus back from the newly mounted form.
+		requestAnimationFrame( () => requestAnimationFrame( focusInput ) );
+		setTimeout( focusInput, 50 );
 	}
 
 	private _createFormView() {
@@ -105,17 +133,22 @@ export default class MathUI extends Plugin {
 
 		// Listen to submit button click
 		this.listenTo( formView, 'submit', () => {
+			const finalize = this._pendingDelimitedInput;
+			this._pendingDelimitedInput = undefined;
 			editor.execute( 'math', formView.equation, formView.displayButtonView.isOn, mathConfig.outputType, mathConfig.forceOutputType );
+			finalize?.( true );
 			this._closeFormView();
 		} );
 
 		// Listen to cancel button click
 		this.listenTo( formView, 'cancel', () => {
+			this._cancelDelimitedInput();
 			this._closeFormView();
 		} );
 
 		// Close plugin ui, if esc is pressed (while ui is focused)
 		formView.keystrokes.set( 'esc', ( _data, cancel ) => {
+			this._cancelDelimitedInput();
 			this._closeFormView();
 			cancel();
 		} );
@@ -196,6 +229,12 @@ export default class MathUI extends Plugin {
 		}
 	}
 
+	private _cancelDelimitedInput() {
+		const finalize = this._pendingDelimitedInput;
+		this._pendingDelimitedInput = undefined;
+		finalize?.( false );
+	}
+
 	private _removeFormView() {
 		if ( this._isFormInPanel && this.formView ) {
 			// Hide virtual keyboard before removing the form
@@ -226,7 +265,8 @@ export default class MathUI extends Plugin {
 		}
 		const t = editor.t;
 
-		// Handle the `Ctrl+M` keystroke and show the panel.
+		const mathKeystroke = editor.config.get( 'math' )?.keystroke || 'Alt+=';
+		// Handle the configured keystroke and show the panel.
 		editor.keystrokes.set( mathKeystroke, ( _keyEvtData, cancel ) => {
 			// Prevent focusing the search bar in FF and opening new tab in Edge. #153, #154.
 			cancel();
@@ -269,6 +309,7 @@ export default class MathUI extends Plugin {
 		// Close the panel on the Esc key press when the editable has focus and the balloon is visible.
 		editor.keystrokes.set( 'Esc', ( _data, cancel ) => {
 			if ( this._isUIVisible ) {
+				this._cancelDelimitedInput();
 				this._hideUI();
 				cancel();
 			}
@@ -280,7 +321,10 @@ export default class MathUI extends Plugin {
 				emitter: this.formView,
 				activator: () => !!this._isFormInPanel,
 				contextElements: this._balloon.view.element ? [ this._balloon.view.element ] : [],
-				callback: () => { this._hideUI(); }
+				callback: () => {
+					this._cancelDelimitedInput();
+					this._hideUI();
+				}
 			} );
 		} else {
 			throw new Error( 'missing form view' );

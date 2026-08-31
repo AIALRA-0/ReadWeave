@@ -1,14 +1,14 @@
 import type { ReadWeaveGenerateRequest } from "@triliumnext/commons";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { searchMock } = vi.hoisted(() => ({ searchMock: vi.fn(async () => ({
+const { searchMock } = vi.hoisted(() => ({ searchMock: vi.fn(async (options: { query: string }) => ({
     used: true,
-    query: "direct evidence",
+    query: options.query,
     sources: [ {
         provider: "Official documentation",
-        title: "Authoritative source",
+        title: `Authoritative source for ${options.query}`,
         url: "https://example.org/official",
-        snippet: "This source directly supports the requested fact",
+        snippet: `This source directly supports ${options.query}`,
         publishedAt: "2026-08-01",
         score: 100
     } ],
@@ -26,15 +26,19 @@ vi.mock("./readweave_settings.js", () => ({
         baseUrl: "https://api.deepseek.com",
         model: "deepseek-v4-flash",
         apiKey: "placeholder"
+    }),
+    getReadWeaveVerifierRuntimeConfig: () => ({
+        baseUrl: "https://independent-verifier.example.com",
+        model: "independent-verifier",
+        apiKey: "placeholder"
     })
 }));
 
-import { findReadWeaveQualityIssues } from "./readweave_ai.js";
 import {
-    applyKnownTermCatalog,
     calculateReadWeaveContextAnswer,
     formatReadWeaveBody,
-    generateUnifiedReadWeaveAnswer
+    generateUnifiedReadWeaveAnswer,
+    sourceMatchesReadWeaveEvidenceFocus
 } from "./readweave_unified_ai.js";
 
 function request(title: string, kind: ReadWeaveGenerateRequest["kind"] = "question"): ReadWeaveGenerateRequest {
@@ -54,7 +58,7 @@ function request(title: string, kind: ReadWeaveGenerateRequest["kind"] = "questi
 
 function installModel(
     searchQueries: string[] = [ "authoritative direct evidence" ],
-    generatedBody = "这是直接结论。它先说明对象本身，再解释必要机制与边界。",
+    generatedBody?: string,
     normalizedQuestion = "规范化后的原问题？",
     failVerifier = false
 ) {
@@ -75,8 +79,13 @@ function installModel(
             if (failVerifier) throw new Error("temporary verifier outage");
             result = { valid: true, issues: [], unsupportedClaims: [] };
         } else {
+            const body = generatedBody ?? (prompt.includes("Moongon Jung")
+                ? "Moongon Jung 是电子设计自动化领域的研究者。"
+                : prompt.includes("CXL.io") && prompt.includes("形态")
+                    ? "CXL.io 是一组逻辑协议事务与处理规则。"
+                    : "这是直接结论。它先说明对象本身，再解释必要机制与边界。");
             result = {
-                body: generatedBody,
+                body,
                 optimizedTitle: "规范化后的原问题？",
                 termIdentity: { abbreviation: "NPU", chineseName: "神经网络处理单元", englishName: "Neural Processing Unit" },
                 claims: [ { claimId: "C1", text: "这是受到公开证据支持的直接结论", sourceIds: [ "S1" ], confidence: "high" } ],
@@ -106,17 +115,73 @@ describe("ReadWeave unified evidence workflow", () => {
     ] as const)("uses the same contract, evidence, writer and verifier for %s", async (_label, title, kind) => {
         const result = await generateUnifiedReadWeaveAnswer(request(title, kind));
 
-        expect(result.audit?.workflowVersion).toBe("unified-evidence-v1");
+        expect(result.audit?.workflowVersion).toBe("quality-closure-v2");
         expect(result.audit?.questionContract.objective).toBe("直接回答用户明确询问的命题");
         expect(result.body).not.toContain("。");
-        expect(result.body).toContain("直接结论");
+        if (title.includes("Moongon Jung")) expect(result.body).toContain("Moongon Jung 是");
+        else if (title.includes("CXL.io")) expect(result.body).toContain("CXL.io 是一组逻辑协议");
+        else expect(result.body).toContain("直接结论");
         expect(result.evidenceSources).toEqual(expect.arrayContaining([
             expect.objectContaining({ sourceId: "S1", url: "https://example.org/official" })
         ]));
         expect(result.claims?.[0].sourceIds).toEqual([ "S1" ]);
-        expect(result.reviewIssues).toBeUndefined();
+        if (title.includes("CXL.io")) {
+            expect(result.qualityState).toBe("provisional");
+            expect(result.reviewIssues?.join("\n")).toContain("CXL");
+        } else {
+            expect(result.reviewIssues).toBeUndefined();
+        }
+        expect(result.usage?.targetCny).toBe(0.01);
+        expect(result.usage?.withinTarget).toBe(true);
         expect(result.usage?.withinBudget).toBe(true);
         expect(searchMock).toHaveBeenCalled();
+    });
+
+    it.each([
+        [
+            "accepts an exact person identity",
+            { title: "Moongon Jung faculty profile", url: "https://example.org/moongon-jung", snippet: "Moongon Jung is a researcher" },
+            "Moongon Jung 是谁？",
+            "Moongon Jung official profile",
+            true
+        ],
+        [
+            "rejects a different person sharing only the surname",
+            { title: "James Jung faculty profile", url: "https://example.org/james-jung", snippet: "James Jung is a researcher" },
+            "Moongon Jung 是谁？",
+            "Moongon Jung official profile",
+            false
+        ],
+        [
+            "accepts a verified abbreviation expansion",
+            { title: "Gaussian process regression", url: "https://example.org/gpr", snippet: "Gaussian process regression is a probabilistic regression method" },
+            "GPR 是什么？",
+            "GPR Gaussian process regression definition",
+            true
+        ],
+        [
+            "rejects an unrelated generic result",
+            { title: "General machine learning overview", url: "https://example.org/ml", snippet: "An introduction to model training" },
+            "GPR 是什么？",
+            "GPR Gaussian process regression definition",
+            false
+        ],
+        [
+            "accepts an exact DOI",
+            { title: "Publication record", url: "https://doi.org/10.1000/test.123", snippet: "DOI 10.1000/test.123" },
+            "10.1000/test.123 对应哪篇论文？",
+            "10.1000/test.123",
+            true
+        ]
+    ])("filters evidence by subject: %s", (_label, source, question, query, expected) => {
+        expect(sourceMatchesReadWeaveEvidenceFocus(source, {
+            normalizedQuestion: question,
+            objective: `直接回答“${question}”`,
+            answerRequirements: [ "给出直接结论" ],
+            exclusions: [],
+            searchQueries: [ query ],
+            requiresCurrentEvidence: false
+        }, query)).toBe(expected);
     });
 
     it("repairs punctuation and paragraph length deterministically before saving", async () => {
@@ -124,6 +189,17 @@ describe("ReadWeave unified evidence workflow", () => {
 
         expect(result.body).not.toMatch(/。|&#x|&#\d/u);
         expect(result.audit?.citationsVerified).toBe(true);
+    });
+
+    it("requires one calculation direction for gains, formulas and sign explanations", async () => {
+        await generateUnifiedReadWeaveAnswer(request("顶点交换增益如何计算？"));
+
+        const prompts = vi.mocked(fetch).mock.calls.map(([, init]) => {
+            const payload = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+            return payload.messages.map(message => message.content).join("\n");
+        });
+        expect(prompts.some(prompt => prompt.includes("先明确计算方向")
+            && prompt.includes("公式、正负号和文字结论"))).toBe(true);
     });
 
     it("removes a repeated explanatory line before returning the answer", async () => {
@@ -178,19 +254,21 @@ describe("ReadWeave unified evidence workflow", () => {
             "保持时间检查关注同一捕获时钟沿之后的短时间窗口；过快的数据路径会让新数据过早到达",
             [ "同一捕获时钟沿", "不会改变", "增加数据路径延迟" ]
         ]
-    ])("uses a reviewed local-evidence answer for unstable engineering boundaries", async (title, selected, expected) => {
-        installModel([ "authoritative direct evidence" ], "模型返回的不稳定草稿", title);
+    ])("does not replace an unverified engineering answer with a hidden fixture", async (title, selected, _expected) => {
+        installModel([ "authoritative direct evidence" ], "模型返回的不稳定草稿", title, true);
         const input = request(title);
         input.fragments = [ { id: "selected", role: "selected", text: selected } ];
 
         const result = await generateUnifiedReadWeaveAnswer(input);
 
-        for (const phrase of expected) expect(result.body).toContain(phrase);
-        expect(result.body).not.toContain("模型返回的不稳定草稿");
+        expect(result.body).toContain("模型返回的不稳定草稿");
+        expect(result.qualityState).toBe("provisional");
+        expect(result.reviewIssues?.length).toBeGreaterThan(0);
+        expect(result.unresolvedIssues).toContain("独立语义复核暂不可用");
         expect(result.body).not.toContain("。");
     });
 
-    it("falls back to the reviewed canonical name and selected fact for any known term", async () => {
+    it("does not inject a selected-fact fixture when the writer omits it", async () => {
         installModel(
             [ "authoritative direct evidence" ],
             "",
@@ -203,19 +281,10 @@ describe("ReadWeave unified evidence workflow", () => {
             text: "GPU 通过大量并行执行单元处理图形与数据并行工作负载"
         } ];
 
-        const result = await generateUnifiedReadWeaveAnswer(input);
-
-        expect(result.body).toContain("GPU 图形处理器（Graphics Processing Unit）");
-        expect(result.body).toContain("大量并行执行单元");
-        expect(result.body.match(/Graphics Processing Unit/gu)).toHaveLength(1);
-        expect(result.termIdentity).toEqual({
-            abbreviation: "GPU",
-            chineseName: "图形处理器",
-            englishName: "Graphics Processing Unit"
-        });
+        await expect(generateUnifiedReadWeaveAnswer(input)).rejects.toThrow("没有生成可审核正文");
     });
 
-    it("does not let a temporary verifier outage fail a known term", async () => {
+    it("keeps a known term yellow when independent verification is unavailable", async () => {
         installModel(
             [ "authoritative direct evidence" ],
             "GIS 地理信息系统（Geographic Information System）用于采集、管理、分析和展示带有空间位置的数据",
@@ -233,10 +302,12 @@ describe("ReadWeave unified evidence workflow", () => {
 
         expect(result.body).toContain("GIS 地理信息系统（Geographic Information System）");
         expect(result.body).toContain("空间位置的数据");
+        expect(result.qualityState).toBe("provisional");
         expect(result.reviewIssues).toBeUndefined();
+        expect(result.unresolvedIssues).toContain("独立语义复核暂不可用");
     });
 
-    it("uses selected facts when verification of a multi-term comparison is temporarily unavailable", async () => {
+    it("keeps a multi-term comparison yellow instead of injecting selected facts", async () => {
         const title = "CAD、CFD 与 FEA 在机械设计流程中分别做什么？";
         installModel(
             [ "authoritative direct evidence" ],
@@ -253,11 +324,10 @@ describe("ReadWeave unified evidence workflow", () => {
 
         const result = await generateUnifiedReadWeaveAnswer(input);
 
-        expect(result.body).toContain("CAD 计算机辅助设计（Computer-Aided Design）");
-        expect(result.body).toContain("CFD 计算流体力学（Computational Fluid Dynamics）");
-        expect(result.body).toContain("FEA 有限元分析（Finite Element Analysis）");
-        expect(result.body).toContain("流动和传热");
-        expect(result.reviewIssues).toBeUndefined();
+        expect(result.body).toContain("模型草稿等待复核");
+        expect(result.qualityState).toBe("provisional");
+        expect(result.reviewIssues).toEqual(expect.arrayContaining([ "比较回答没有明确给出比较维度和差异" ]));
+        expect(result.unresolvedIssues).toContain("独立语义复核暂不可用");
     });
 
     it.each([
@@ -293,7 +363,7 @@ describe("ReadWeave unified evidence workflow", () => {
         const result = await generateUnifiedReadWeaveAnswer(request("代理客户端如何切换？"));
 
         expect(result.body).toContain("代理客户端（Hiddify）需要单独启用");
-        expect(result.body).toContain("代理客户端退出后再切换其他代理");
+        expect(result.body).toContain("Hiddify 退出后再切换其他代理");
         expect(result.body).not.toMatch(/[（(][^（）()\n]{0,100}[（(]/u);
     });
 
@@ -318,12 +388,11 @@ describe("ReadWeave unified evidence workflow", () => {
         );
 
         const result = await generateUnifiedReadWeaveAnswer(
-            request("跨文章引用为什么应该按 UUID 而不是显示名称索引？"),
-            undefined,
-            (body) => findReadWeaveQualityIssues(body, "跨文章引用为什么应该按 UUID 而不是显示名称索引？")
+            request("跨文章引用为什么应该按 UUID 而不是显示名称索引？")
         );
 
-        expect(result.body).toContain("UUID 通用唯一标识符（Universally Unique Identifier）");
+        expect(result.body).not.toContain("Universally Unique Identifier");
+        expect(result.qualityState).toBe("provisional");
         expect(result.body).not.toContain("统计");
     });
 
@@ -363,7 +432,7 @@ describe("ReadWeave unified evidence workflow", () => {
             .map(([ options ]) => options);
         expect(calls.filter(call => call.allowPaid === false)).toHaveLength(3);
         expect(calls.filter(call => call.allowPaid === true)).toEqual([
-            expect.objectContaining({ query: "primary authority" })
+            expect.objectContaining({ query: expect.stringContaining("primary authority") })
         ]);
     });
 
@@ -384,7 +453,7 @@ describe("ReadWeave unified evidence workflow", () => {
         expect(failure?.cause).toBe(transportError);
     });
 
-    it("does not release medium-confidence facts as a finished answer", async () => {
+    it("saves medium-confidence facts only as a yellow draft", async () => {
         vi.stubGlobal("fetch", vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
             const payload = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
             const prompt = payload.messages.map(message => message.content).join("\n");
@@ -411,11 +480,12 @@ describe("ReadWeave unified evidence workflow", () => {
             });
         }));
 
-        await expect(generateUnifiedReadWeaveAnswer(request("这个对象是谁？")))
-            .rejects.toThrow("未达到高置信度");
+        const result = await generateUnifiedReadWeaveAnswer(request("这个对象是谁？"));
+        expect(result.qualityState).toBe("provisional");
+        expect(result.reviewIssues).toContain("正文混入了未达到高置信度的事实，应删除该事实或取得直接证据后再写入");
     });
 
-    it("does not treat title-and-DOI metadata as technical evidence", async () => {
+    it("keeps a technical answer yellow when the source contains only title-and-DOI metadata", async () => {
         const metadataOnlyResult = {
             used: true,
             query: "Gaussian process regression definition",
@@ -466,8 +536,9 @@ describe("ReadWeave unified evidence workflow", () => {
             });
         }));
 
-        await expect(generateUnifiedReadWeaveAnswer(request("GPR 是什么？")))
-            .rejects.toThrow("只有题名、DOI 或短标题");
+        const result = await generateUnifiedReadWeaveAnswer(request("GPR 是什么？"));
+        expect(result.qualityState).toBe("provisional");
+        expect(result.reviewIssues?.some(issue => issue.includes("只有题名、DOI 或短标题"))).toBe(true);
     });
 
     it("allows title-and-DOI metadata to support an exact bibliographic answer", async () => {
@@ -617,8 +688,7 @@ describe("ReadWeave unified evidence workflow", () => {
 
         const result = await generateUnifiedReadWeaveAnswer(request("CXL.io 具体是什么形态？"));
 
-        expect(result.body).toContain("具体形态是一组在链路上传输的输入/输出事务报文及其处理规则");
-        expect(result.body).toContain("不是独立设备、芯片、插槽、线缆或物理接口");
+        expect(result.body).toContain("CXL.io 是一种逻辑协议");
         expect(result.body).not.toContain("0xFFFF");
         expect(result.claims?.every(claim => !claim.text.includes("0xFFFF"))).toBe(true);
     });
@@ -706,7 +776,7 @@ describe("ReadWeave unified evidence workflow", () => {
                     requiresCurrentEvidence: true
                 }
                 : prompt.includes("统一质量审计器")
-                    ? { valid: true, issues: [], unsupportedClaims: [] }
+                    ? { valid: false, issues: [ "事实错误或答非所问" ], unsupportedClaims: [ scenario.generated ] }
                     : {
                         body: scenario.generated,
                         claims: [ { claimId: "C1", text: scenario.generated, sourceIds: [ "S1" ], confidence: "high" } ],
@@ -720,17 +790,13 @@ describe("ReadWeave unified evidence workflow", () => {
         }));
 
         const result = await generateUnifiedReadWeaveAnswer(request(scenario.title));
-        for (const expected of scenario.mustContain) expect(result.body).toContain(expected);
-        for (const forbidden of scenario.mustNotContain) expect(result.body).not.toContain(forbidden);
-        if (scenario.title === "Sung Kyu Lim 是谁？") {
-            expect(result.body).toContain("院长讲席教授（Dean's Professor）\n\n他的研究属于");
-            expect(result.body).not.toContain("Professor）他的研究");
-        }
+        expect(result.qualityState).toBe("provisional");
+        expect(result.reviewIssues).toEqual(expect.arrayContaining([ "事实错误或答非所问" ]));
         expect(result.body).not.toContain("。");
         expect(result.usage?.withinBudget).toBe(true);
     });
 
-    it("fails closed before writing when every public evidence query is empty", async () => {
+    it("keeps a reviewable yellow draft when every public evidence query is empty", async () => {
         searchMock.mockResolvedValueOnce({
             used: false,
             query: "missing evidence",
@@ -754,8 +820,10 @@ describe("ReadWeave unified evidence workflow", () => {
             searchCostCny: 0
         });
 
-        await expect(generateUnifiedReadWeaveAnswer(request("完全无法核验的对象是什么？")))
-            .rejects.toThrow("未取得可核验的公开来源");
+        const result = await generateUnifiedReadWeaveAnswer(request("完全无法核验的对象是什么？"));
+        expect(result.qualityState).toBe("provisional");
+        expect(result.evidenceState).toBe("insufficient");
+        expect(result.reviewIssues).toEqual(expect.arrayContaining([ "回答核心结论缺少独立公开来源" ]));
     });
 });
 
@@ -806,43 +874,6 @@ describe("ReadWeave natural paragraph formatting", () => {
         expect(answer).toBeTruthy();
         for (const item of expected) expect(answer).toContain(item);
         expect(answer).not.toContain("。");
-    });
-
-    it.each([
-        [
-            "EDA 电子设计自动化（Electronic Design Automation）是工程领域",
-            "EDA 电子设计自动化（Electronic Design Automation）是工程领域"
-        ],
-        [
-            "CPU（Central Processing Unit）是执行通用程序指令的处理器",
-            "CPU 中央处理器（Central Processing Unit）是执行通用程序指令的处理器"
-        ],
-        [
-            "中央处理器（CPU）是执行通用程序指令的处理器",
-            "CPU 中央处理器（Central Processing Unit）是执行通用程序指令的处理器"
-        ],
-        [
-            "TLS（Transport Layer Security）（传输层安全协议）用于保护通信",
-            "TLS 传输层安全协议（Transport Layer Security）用于保护通信"
-        ],
-        [
-            "dB（Decibel）（分贝）以对数尺度表示比值",
-            "dB 分贝（Decibel）以对数尺度表示比值"
-        ]
-    ])("canonicalizes model-made bilingual name variants without duplication", (input, expected) => {
-        const normalized = applyKnownTermCatalog(formatReadWeaveBody(input));
-        expect(normalized).toBe(expected);
-        expect(applyKnownTermCatalog(normalized)).toBe(normalized);
-    });
-
-    it("does not mistake another term's parentheses for a later acronym expansion", () => {
-        const normalized = formatReadWeaveBody(applyKnownTermCatalog(
-            "SRAM 静态随机存取存储器（Static Random-Access Memory）与 DRAM 动态随机存取存储器（Dynamic Random-Access Memory）先比较；随后 SRAM 用于缓存，DRAM 用于主存"
-        ));
-
-        expect(normalized).toContain("随后静态随机存取存储器用于缓存，动态随机存取存储器用于主存");
-        expect(normalized.match(/\bSRAM\b/gu)).toHaveLength(1);
-        expect(normalized.match(/\bDRAM\b/gu)).toHaveLength(1);
     });
 
     it("splits long connected clauses into readable semantic paragraphs", () => {

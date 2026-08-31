@@ -12,15 +12,28 @@ import type { Request } from "express";
 import { generateReadWeaveAnswer } from "../../services/readweave_ai.js";
 import { findReadWeaveCandidates } from "../../services/readweave_engine.js";
 import {
+    cancelReadWeaveGenerationJob,
     discardReadWeaveGenerationJob,
     discardReadWeaveGenerationJobsForSavedLinks,
     getReadWeaveGenerationEvents,
     getReadWeaveGenerationJob,
     listReadWeaveGenerationJobs,
+    listReadWeaveGenerationJobsGlobal,
     markReadWeaveGenerationJobViewed,
     regenerateReadWeaveGenerationJob,
     startReadWeaveGenerationJob
 } from "../../services/readweave_generation_jobs.js";
+import {
+    addReadWeaveHarnessCase,
+    archiveReadWeaveHarnessProfile,
+    createReadWeaveHarnessDraft,
+    getReadWeaveHarnessProfile,
+    listReadWeaveHarnessProfiles,
+    publishReadWeaveHarnessProfile,
+    rollbackReadWeaveHarnessProfile,
+    trialReadWeaveHarnessProfile,
+    updateReadWeaveHarnessDraft
+} from "../../services/readweave_harness.js";
 import {
     deleteReadWeaveLink,
     editReadWeaveLink,
@@ -95,6 +108,10 @@ function listGenerationJobs(req: Request<{ articleId: string }>) {
     return { jobs: listReadWeaveGenerationJobs(req.params.articleId) };
 }
 
+function listGlobalGenerationJobs() {
+    return { jobs: listReadWeaveGenerationJobsGlobal() };
+}
+
 function getGenerationEvents(req: Request<{ jobId: string }>) {
     const after = typeof req.query.after === "string" ? Number.parseInt(req.query.after, 10) : 0;
     const cursor = Number.isFinite(after) ? after : 0;
@@ -125,6 +142,10 @@ function discardGenerationJob(req: Request<{ jobId: string }>) {
     return discardReadWeaveGenerationJob(req.params.jobId);
 }
 
+function cancelGenerationJob(req: Request<{ jobId: string }>) {
+    return { job: cancelReadWeaveGenerationJob(req.params.jobId) };
+}
+
 function exportIndex(req: Request) {
     const articleId = typeof req.query.articleId === "string" ? req.query.articleId : undefined;
     return exportReadWeave(articleId);
@@ -150,6 +171,42 @@ async function testSearch(req: Request) {
     return await testReadWeaveSearch(query);
 }
 
+function listHarnessProfiles() {
+    return { profiles: listReadWeaveHarnessProfiles() };
+}
+
+function getHarnessProfile(req: Request<{ versionId: string }>) {
+    return { profile: getReadWeaveHarnessProfile(req.params.versionId) };
+}
+
+function createHarnessDraft(req: Request) {
+    return { profile: createReadWeaveHarnessDraft(req.body ?? {}) };
+}
+
+function updateHarnessDraft(req: Request<{ versionId: string }>) {
+    return { profile: updateReadWeaveHarnessDraft(req.params.versionId, req.body ?? {}) };
+}
+
+function addHarnessCase(req: Request<{ versionId: string }>) {
+    return { profile: addReadWeaveHarnessCase(req.params.versionId, req.body ?? {}) };
+}
+
+async function trialHarness(req: Request<{ versionId: string }>) {
+    return { trial: await trialReadWeaveHarnessProfile(req.params.versionId, req.body ?? {}) };
+}
+
+function publishHarness(req: Request<{ versionId: string }>) {
+    return { profile: publishReadWeaveHarnessProfile(req.params.versionId) };
+}
+
+function rollbackHarness(req: Request<{ versionId: string }>) {
+    return { profile: rollbackReadWeaveHarnessProfile(req.params.versionId) };
+}
+
+function archiveHarness(req: Request<{ versionId: string }>) {
+    return { profile: archiveReadWeaveHarnessProfile(req.params.versionId) };
+}
+
 export default {
     getEntries,
     getAnchors,
@@ -163,13 +220,24 @@ export default {
     startGenerationJob,
     getGenerationJob,
     listGenerationJobs,
+    listGlobalGenerationJobs,
     getGenerationEvents,
     markGenerationJobViewed,
     regenerateGenerationJob,
     discardGenerationJob,
+    cancelGenerationJob,
     exportIndex,
     getSettings,
     updateSettings,
     getModels,
-    testSearch
+    testSearch,
+    listHarnessProfiles,
+    getHarnessProfile,
+    createHarnessDraft,
+    updateHarnessDraft,
+    addHarnessCase,
+    trialHarness,
+    publishHarness,
+    rollbackHarness,
+    archiveHarness
 };

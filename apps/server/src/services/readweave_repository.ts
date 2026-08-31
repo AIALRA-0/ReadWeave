@@ -11,6 +11,7 @@ import {
     type ReadWeaveImpact,
     type ReadWeaveLink,
     type ReadWeaveObject,
+    type ReadWeaveQualityState,
     type ReadWeaveResolvedEntry,
     type ReadWeaveSaveRequest,
     type ReadWeaveTermIdentity,
@@ -112,6 +113,9 @@ function parseObject(note: BNote): ReadWeaveObject | null {
     return {
         ...value,
         schemaVersion: READWEAVE_SCHEMA_VERSION,
+        qualityState: value.qualityState === "verified" || value.qualityState === "provisional"
+            ? value.qualityState
+            : "legacy-unverified",
         title,
         normalizedTitle: normalizeReadWeaveTitle(title),
         calloutType: requireCalloutType(value.calloutType, value.kind),
@@ -210,6 +214,7 @@ function resolveLink(link: ReadWeaveLink): ReadWeaveResolvedEntry | null {
         evidenceSources: object.evidenceSources,
         claims: object.claims,
         audit: object.audit,
+        qualityState: object.qualityState ?? "legacy-unverified",
         canonicalTitle: object.title,
         canonicalBody: object.body,
         canonicalCalloutType: object.calloutType,
@@ -259,7 +264,7 @@ export function getAnchorSummaries(articleIdValue: unknown): ReadWeaveAnchorSumm
     }).toSorted((left, right) => left.anchorId.localeCompare(right.anchorId));
 }
 
-function normalizeObjectInput(request: Pick<ReadWeaveSaveRequest, "kind" | "title" | "body" | "calloutType" | "termIdentity" | "verifiedNonExpandableArtifact" | "evidenceSources" | "claims" | "audit">) {
+function normalizeObjectInput(request: Pick<ReadWeaveSaveRequest, "kind" | "title" | "body" | "calloutType" | "termIdentity" | "verifiedNonExpandableArtifact" | "evidenceSources" | "claims" | "audit" | "qualityState">) {
     const kind = request.kind;
     if (kind !== "question" && kind !== "term") throw new ValidationError("kind must be question or term.");
     const rawIdentity = request.termIdentity && typeof request.termIdentity === "object"
@@ -299,8 +304,12 @@ function normalizeObjectInput(request: Pick<ReadWeaveSaveRequest, "kind" | "titl
         claims,
         audit: request.audit
     } : {};
+    const qualityState: ReadWeaveQualityState = request.qualityState === "verified" || request.qualityState === "provisional"
+        ? request.qualityState
+        : "legacy-unverified";
     return {
         kind,
+        qualityState,
         termIdentity,
         title,
         body,

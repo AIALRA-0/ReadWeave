@@ -42,6 +42,7 @@ export async function buildConfig(opts: BuildEditorOptions): Promise<EditorConfi
             },
             forceOutputType: false, // forces output to use outputType
             enablePreview: true, // Enable preview view
+            keystroke: options.get("readWeaveMathShortcut") || "Alt+=",
             // Map MathLive-only commands (e.g. \differentialD) onto KaTeX equivalents so
             // formulas produced by the visual editor render instead of erroring out (#9523).
             katexRenderOptions: { macros: KATEX_MACROS }
