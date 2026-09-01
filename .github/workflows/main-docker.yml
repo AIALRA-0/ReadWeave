@@ -73,7 +73,7 @@ jobs:
       - name: Validate container run output
         run: |
           cp packages/trilium-core/src/test/fixtures/document.db apps/server/spec/db/document.db
-          CONTAINER_ID=$(docker run -d --log-driver=journald --rm --network=host -e TRILIUM_PORT=8082 -e READWEAVE_TEST_AI=mock --volume ./apps/server/spec/db:/home/node/trilium-data --name trilium_local ${{ env.TEST_TAG }})
+          CONTAINER_ID=$(docker run -d --log-driver=journald --rm --network=host -e TRILIUM_PORT=8082 -e TRILIUM_INTEGRATION_TEST=memory -e READWEAVE_TEST_AI=mock --volume ./apps/server/spec/db:/home/node/trilium-data --name trilium_local ${{ env.TEST_TAG }})
           echo "Container ID: $CONTAINER_ID"
 
       - name: Wait for the healthchecks to pass

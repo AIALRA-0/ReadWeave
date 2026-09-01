@@ -204,9 +204,9 @@ export default function EditableText({ note, parentComponent, ntxId, noteContext
                 });
             }
         },
-        async saveNoteDetailNowCommand() {
+        async saveNoteDetailNowCommand({ forceSnapshot = false }: { forceSnapshot?: boolean } = {}) {
             // used by cutToNote in CKEditor build
-            await spacedUpdate.updateNowIfNecessary();
+            await (forceSnapshot ? spacedUpdate.forceUpdateNow() : spacedUpdate.updateNowIfNecessary());
         }
     });
 
