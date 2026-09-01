@@ -131,6 +131,71 @@ describe("SpacedUpdate", () => {
         });
     });
 
+    describe("forceUpdateNow", () => {
+        it("snapshots and commits the live state without a preceding change notification", async () => {
+            const editor = { content: "programmatic repair" };
+            const commits: string[] = [];
+            const spacedUpdate = new SpacedUpdate<string>({
+                key: "A",
+                prepare: () => editor.content,
+                commit: async (data) => {
+                    commits.push(data);
+                }
+            }, 50);
+
+            await spacedUpdate.forceUpdateNow();
+
+            expect(commits).toEqual(["programmatic repair"]);
+        });
+
+        it("waits for an active save and commits the newer forced snapshot", async () => {
+            let releaseFirstCommit: () => void = () => {};
+            const firstCommitBlocked = new Promise<void>((resolve) => {
+                releaseFirstCommit = resolve;
+            });
+            const editor = { content: "v1" };
+            const commits: string[] = [];
+            const spacedUpdate = new SpacedUpdate<string>({
+                key: "A",
+                prepare: () => editor.content,
+                commit: async (data) => {
+                    if (data === "v1") {
+                        await firstCommitBlocked;
+                    }
+                    commits.push(data);
+                }
+            }, 50);
+
+            spacedUpdate.scheduleUpdate();
+            const firstFlush = spacedUpdate.updateNowIfNecessary();
+            editor.content = "v2";
+            const forcedFlush = spacedUpdate.forceUpdateNow();
+            releaseFirstCommit();
+
+            await Promise.all([ firstFlush, forcedFlush ]);
+            expect(commits).toEqual(["v1", "v2"]);
+        });
+
+        it("keeps the forced snapshot queued for the existing retry path after a failure", async () => {
+            const commits: string[] = [];
+            let shouldFail = true;
+            const spacedUpdate = new SpacedUpdate<string>({
+                key: "A",
+                prepare: () => "recovered anchor",
+                commit: async (data) => {
+                    if (shouldFail) throw new Error("offline");
+                    commits.push(data);
+                }
+            }, 50);
+
+            await expect(spacedUpdate.forceUpdateNow()).rejects.toThrow("offline");
+            shouldFail = false;
+            await spacedUpdate.updateNowIfNecessary();
+
+            expect(commits).toEqual(["recovered anchor"]);
+        });
+    });
+
     describe("isAllSavedAndTriggerUpdate", () => {
         it("returns false and flushes pending changes when there are changes", async () => {
             const updater = vi.fn(async () => {});

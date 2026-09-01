@@ -2804,18 +2804,9 @@ function normalizedAnchorText(value: string): string {
 }
 
 function persistReconciledReadWeaveAnchor(root: HTMLElement) {
-    // CKEditor emits its data-change notification after the model batch that
-    // restores a missing server job anchor. Flushing in the same call stack can
-    // therefore observe a still-clean spaced update and leave the recovered
-    // marker visible only in memory. Defer the flush, then retry once after the
-    // change notification has had a chance to schedule its normal save.
-    const flush = () => {
-        if (!root.isConnected) return;
-        void Promise.resolve(glob.getComponentByEl(root)?.triggerCommand("saveNoteDetailNow"))
-            .catch(() => undefined);
-    };
-    window.setTimeout(flush, 0);
-    window.setTimeout(flush, 250);
+    if (!root.isConnected) return;
+    void Promise.resolve(glob.getComponentByEl(root)?.triggerCommand("saveNoteDetailNow", { forceSnapshot: true }))
+        .catch(() => undefined);
 }
 
 function defaultQuestionForExcerpt(excerpt: string): string {
@@ -3413,7 +3404,7 @@ async function persistReadWeaveAnchor(noteContext: ReturnType<typeof useActiveNo
     const editor = await noteContext?.getTextEditor().catch(() => null);
     const root = editor?.editing.view.getDomRoot() as HTMLElement | null;
     if (!root) return;
-    await glob.getComponentByEl(root)?.triggerCommand("saveNoteDetailNow");
+    await glob.getComponentByEl(root)?.triggerCommand("saveNoteDetailNow", { forceSnapshot: true });
 }
 
 async function readWeaveAnchorIsPresent(noteContext: ReturnType<typeof useActiveNoteContext>["noteContext"], anchorId: string): Promise<boolean> {

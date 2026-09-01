@@ -59,9 +59,8 @@ test("Displays math popup", async ({ page, context }) => {
     await expect(noteContent.locator("p")).toBeVisible();
     await noteContent.focus();
     await noteContent.fill("Hello world");
-    // The math plugin intentionally registers the literal Ctrl+M keystroke on
-    // every platform (rather than the platform's primary modifier).
-    await noteContent.press("Control+M");
+    // Match the configurable ReadWeave math shortcut's authoritative default.
+    await noteContent.press("Alt+=");
 
     const mathForm = page.locator(".ck-math-form");
     await expect(mathForm).toBeVisible();

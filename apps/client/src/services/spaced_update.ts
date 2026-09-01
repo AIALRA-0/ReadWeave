@@ -116,6 +116,18 @@ export default class SpacedUpdate<T = void> {
         return this.drain();
     }
 
+    /**
+     * Persists the current live state even when the caller's programmatic mutation did not emit
+     * a schedulable change notification. The second drain closes the narrow window where an
+     * already-running drain has finished its loop but has not released its shared promise yet.
+     */
+    async forceUpdateNow(): Promise<void> {
+        this.changed = true;
+        this.onStateChanged("unsaved");
+        await this.drain();
+        await this.drain();
+    }
+
     isAllSavedAndTriggerUpdate() {
         const allSaved = !this.changed
             && this.pendingCommits.size === 0

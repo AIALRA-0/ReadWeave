@@ -36,7 +36,8 @@ const emailPattern = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 const windowsUserPathPattern = /[A-Za-z]:[\\/]Users[\\/][^\\/\s"'<>]+/gi;
 const unixUserPathPattern = /\/(?:Users|home)\/([^/\s"'<>]+)/gi;
 const allowedUnixUsers = new Set(["node", "user", "username", "example", "runner", "root"]);
-const localUserName = path.basename(os.homedir()).toLowerCase();
+const detectedLocalUserName = path.basename(os.homedir()).toLowerCase();
+const localUserName = allowedUnixUsers.has(detectedLocalUserName) ? "" : detectedLocalUserName;
 
 const findings = [];
 const changedFiles = getChangedFiles();
