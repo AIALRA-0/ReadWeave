@@ -157,7 +157,9 @@ async function requestJson<T>(
     signal?: AbortSignal
 ): Promise<ModelCallResult<T>> {
     const config = runtimeConfig ?? getReadWeaveRuntimeConfig();
-    const isDeepSeek = /(^|\.)deepseek\.com$/iu.test(new URL(config.baseUrl).hostname);
+    const providerHost = new URL(config.baseUrl).hostname;
+    const isDeepSeek = /(^|\.)deepseek\.com$/iu.test(providerHost);
+    const isKimiCode = providerHost === "api.kimi.com";
     let lastError: unknown;
     // Each background job already retries the complete workflow. Retrying one
     // internal model stage four times made a single stalled request occupy the
@@ -176,7 +178,7 @@ async function requestJson<T>(
                 body: JSON.stringify({
                     model: config.model,
                     stream: false,
-                    temperature: 0,
+                    temperature: isKimiCode ? 1 : 0,
                     max_tokens: maxTokens,
                     ...(isDeepSeek ? {
                         response_format: { type: "json_object" },
