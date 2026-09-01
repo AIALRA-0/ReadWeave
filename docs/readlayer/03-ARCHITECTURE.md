@@ -28,7 +28,7 @@ flowchart LR
     O --> D["索引对象领域服务"]
     D --> T["Trilium 原生笔记、属性、关系与修订"]
     D --> I["可重建的检索索引"]
-    O --> K["浏览器草稿检查点"]
+    O --> K["服务端持久生成任务与审核草稿"]
     T --> X["备份与独立 JSON 导出"]
 ```
 
@@ -145,25 +145,29 @@ flowchart LR
 
 “只改显示”只能修改 `display`；“全局修改”修改 `IndexObject`；“本文变体”复制为新 `objectId`，然后只把当前 `linkId` 改指向新对象。
 
-### 4.5 草稿检查点 `DraftCheckpoint`
+### 4.5 持久生成任务与审核草稿 `ReadWeaveGenerationJob`
 
-草稿检查点只存在于当前浏览器标签页的 `sessionStorage` 中，实际保存结构为：
+生成任务、检查进度和待审核结果持久化在服务端数据库中；浏览器 `sessionStorage` 只保存尚未同步的界面编辑缓冲。任务的核心并发与恢复字段为：
 
 ```json
 {
-  "kind": "question",
-  "title": "用户问题",
-  "body": "尚未提交的模型回答",
-  "reuseObjectId": "optional-object-id"
+  "jobId": "stable-job-id",
+  "draftId": "stable-draft-id",
+  "stateVersion": 7,
+  "activeAttemptId": null,
+  "status": "ready-for-review",
+  "savedLinkId": null
 }
 ```
 
 规则：
 
-- 未提交草稿按 `articleId + anchorId` 隔离；切换文章或刷新当前标签页后可以恢复，关闭标签页或清理会话数据后不再保证保留。
-- 草稿不写入 Trilium 正式笔记，不参与备份承诺；界面必须明确标记“未保存”。
-- 提交时服务端重新校验权限、锚点、相似候选和内容格式，然后以一个原子用例创建对象与连接。
-- 丢弃、过期或浏览器数据清除都会删除草稿；不能把它描述为永久保存。
+- 未提交草稿按 `articleId + anchorId + draftId` 隔离；刷新、服务重启或重新选择锚点后可从服务端恢复。
+- 状态按 `ready-for-review → saving → saved` 流转；`stateVersion` 提供乐观并发控制，`activeAttemptId` 防止旧尝试覆盖新结果。
+- 草稿不是 Trilium 正式知识，不参与相似对象搜索、全局引用或独立索引导出；界面必须明确标记“待审核/未保存”。
+- 提交必须调用显式 commit endpoint；服务端重新校验权限、锚点、相似候选和内容格式，并以一个原子用例创建对象与连接。相同提交重试返回同一 `savedLinkId`。
+- 取消采用持久请求和尝试身份校验；重启时可恢复安全任务，已取消或过期尝试不能回写结果。
+- 丢弃会写入增量同步 tombstone；仅清理浏览器会话数据不会删除服务端草稿。
 
 ## 5. Trilium 物理映射与权限
 

@@ -17,13 +17,14 @@ import LoadResults from "../services/load_results";
 import server from "../services/server";
 import toast from "../services/toast";
 import tree from "../services/tree";
-import { createImageSrcUrl, openInAppHelpFromUrl } from "../services/utils";
+import { createImageSrcUrl, isElectron, openInAppHelpFromUrl } from "../services/utils";
 import { ViewTypeOptions } from "./collections/interface";
 import ActionButton, { ActionButtonProps } from "./react/ActionButton";
 import { ButtonGroup } from "./react/Button";
-import { useIsNoteReadOnly, useNoteLabel, useNoteLabelBoolean, useTriliumEvent, useTriliumOption, useWindowSize } from "./react/hooks";
+import { useEffectiveReadOnly, useIsNoteReadOnly, useNoteLabel, useNoteLabelBoolean, useTriliumEvent, useTriliumOption, useWindowSize } from "./react/hooks";
 import NoteLink from "./react/NoteLink";
 import RawHtml from "./react/RawHtml";
+import { isSplitEditorForcedReadOnly, resolveDisplayMode } from "./type_widgets/helpers/split_editor_mode";
 
 export interface FloatingButtonContext {
     parentComponent: Component;
@@ -56,10 +57,12 @@ export const DESKTOP_FLOATING_BUTTONS: FloatingButtonsList = [
     ShowHighlightsListWidgetButton,
     RunActiveNoteButton,
     OpenTriliumApiDocsButton,
+    OpenElectronApiDocsButton,
     SaveToNoteButton,
     RelationMapButtons,
     CopyImageReferenceButton,
     ExportImageButtons,
+    ExportSpreadsheetButton,
     InAppHelpButton,
     Backlinks
 ];
@@ -110,12 +113,14 @@ function ToggleReadOnlyButton({ note, isDefaultViewMode }: FloatingButtonContext
     />;
 }
 
-function DisplayModeSwitcher({ note, isDefaultViewMode }: FloatingButtonContext) {
+function DisplayModeSwitcher({ note, noteContext, isDefaultViewMode }: FloatingButtonContext) {
     const [ displayMode, setDisplayMode ] = useNoteLabel(note, "displayMode");
-    const isEnabled = (note.isMarkdown() || note.type === "mermaid") && note.isContentAvailable() && isDefaultViewMode;
+    const readOnly = useEffectiveReadOnly(note, noteContext);
+    const isEnabled = (note.isMarkdown() || note.type === "mermaid" || note.isIconPack()) && note.isContentAvailable() && isDefaultViewMode;
     if (!isEnabled) return false;
 
-    const mode = displayMode === "source" || displayMode === "preview" ? displayMode : "split";
+    // Mirror SplitEditor's mode resolution so the active button matches the actual pane.
+    const mode = resolveDisplayMode(displayMode, readOnly || isSplitEditorForcedReadOnly(note));
     const buttons: Array<{ value: "source" | "split" | "preview"; icon: string; text: string }> = [
         { value: "source", icon: "bx bx-code", text: t("display_mode.source") },
         { value: "split", icon: "bx bxs-dock-left", text: t("display_mode.split") },
@@ -211,6 +216,15 @@ function OpenTriliumApiDocsButton({ note }: FloatingButtonContext) {
         icon="bx bx-help-circle"
         text={t("code_buttons.trilium_api_docs_button_title")}
         onClick={() => openInAppHelpFromUrl(note.mime.endsWith("frontend") ? "Q2z6av6JZVWm" : "MEtfsqa5VwNi")}
+    />;
+}
+
+function OpenElectronApiDocsButton({ note }: FloatingButtonContext) {
+    const isEnabled = note.mime === "application/javascript;env=frontend" && isElectron();
+    return isEnabled && <FloatingButton
+        icon="bx bx-window-alt"
+        text={t("code_buttons.electron_api_docs_button_title")}
+        onClick={() => openInAppHelpFromUrl("GFXVHyblVN3d")}
     />;
 }
 
@@ -313,6 +327,24 @@ function ExportImageButtons({ note, triggerEvent, isDefaultViewMode }: FloatingB
                 icon="bx bxs-file-png"
                 text={t("png_export_button.button_title")}
                 onClick={() => triggerEvent("exportPng")}
+            />
+        </>
+    );
+}
+
+function ExportSpreadsheetButton({ note, triggerEvent, isDefaultViewMode }: FloatingButtonContext) {
+    const isEnabled = note?.type === "spreadsheet" && note?.isContentAvailable() && isDefaultViewMode;
+    return isEnabled && (
+        <>
+            <FloatingButton
+                icon="bx bxs-spreadsheet"
+                text={t("spreadsheet.export-xlsx")}
+                onClick={() => triggerEvent("exportXlsx")}
+            />
+            <FloatingButton
+                icon="bx bxs-spreadsheet"
+                text={t("spreadsheet.export-csv")}
+                onClick={() => triggerEvent("exportCsv")}
             />
         </>
     );

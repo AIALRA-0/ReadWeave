@@ -1,8 +1,88 @@
-import { Marked, Renderer, type Tokens } from "marked";
+import { Marked, type MarkedOptions, Renderer, type Token, type Tokens } from "marked";
 import markedFootnote from "marked-footnote";
+
+import { DEFAULT_TASK_STATES, type TaskStateDef } from "./task_states.js";
+
+type TaskListItem = Tokens.ListItem & { _taskState?: string };
+
+function escapeForCharClass(char: string): string {
+    return char.replace(/[^\w]/g, (c) => `\\${c}`);
+}
+
+function stripTaskMarkerFromTokens(tokens: Token[] | undefined, stripPattern: RegExp): void {
+    /* v8 ignore start -- defensive: renderToHtml always passes a non-empty token array */
+    if (!tokens || tokens.length === 0) {
+        return;
+    }
+    /* v8 ignore stop */
+    const first = tokens[0] as Token & { text?: string; raw?: string; tokens?: Token[] };
+    /* v8 ignore start -- defensive: the marker-bearing first token always has string text/raw */
+    if (typeof first.text === "string") {
+        first.text = first.text.replace(stripPattern, "");
+    }
+    if (typeof first.raw === "string") {
+        first.raw = first.raw.replace(stripPattern, "");
+    }
+    /* v8 ignore stop */
+    if (Array.isArray(first.tokens)) {
+        stripTaskMarkerFromTokens(first.tokens, stripPattern);
+    }
+}
+
+/**
+ * Builds a marked `walkTokens` hook that recognises non-standard task markers
+ * (e.g. `[/]`, `[-]`, `[?]`) derived from the configured task states — marked
+ * itself only understands `[x]`/`[ ]`. A matched item is converted into a task
+ * item with `_taskState` carrying the resolved state name for downstream rendering.
+ */
+function createTaskStateDetector(states: TaskStateDef[]): (token: Token) => void {
+    const symbolToName = new Map<string, string>();
+    for (const state of states) {
+        const symbol = state.markdownSymbol;
+        // `x` and ` ` are the native checked/unchecked markers handled by marked.
+        if (symbol.length === 1 && symbol !== "x" && symbol !== " ") {
+            symbolToName.set(symbol, state.name);
+        }
+    }
+
+    if (symbolToName.size === 0) {
+        return () => {};
+    }
+
+    const charClass = [...symbolToName.keys()].map(escapeForCharClass).join("");
+    const rawPattern = new RegExp(`^[ \\t]*[-*+]\\s+\\[([${charClass}])\\]\\s?`);
+    const stripPattern = new RegExp(`^\\[[${charClass}]\\]\\s?`);
+
+    return (token: Token): void => {
+        if (token.type !== "list_item") {
+            return;
+        }
+        const item = token as TaskListItem;
+        if (item.task) {
+            return;
+        }
+        const match = rawPattern.exec(item.raw);
+        if (!match) {
+            return;
+        }
+        const name = symbolToName.get(match[1]);
+        /* v8 ignore start -- defensive: match[1] is always a symbolToName key */
+        if (!name) {
+            return;
+        }
+        /* v8 ignore stop */
+        item.task = true;
+        item.checked = false;
+        item._taskState = name;
+        item.text = item.text.replace(stripPattern, "");
+        stripTaskMarkerFromTokens(item.tokens, stripPattern);
+    };
+}
 
 import { getMimeTypeFromMarkdownName, MIME_TYPE_AUTO, normalizeMimeTypeForCKEditor } from "./mime_type.js";
 import {
+    createCommentExtension,
+    createHighlightExtension,
     createTransclusionExtension,
     createWikiLinkExtension,
     transclusionExtension,
@@ -22,6 +102,46 @@ export const ADMONITION_TYPE_MAPPINGS: Record<string, string> = {
     important: "IMPORTANT",
     caution: "CAUTION",
     warning: "WARNING"
+};
+
+/**
+ * Obsidian ships a much larger set of callout types than the five admonition
+ * types Trilium's editor supports. Each extra type (and its Obsidian aliases) is
+ * mapped onto the nearest native type. Types that already share a name with a
+ * native type (`note`, `tip`, `important`, `caution`, `warning`) are handled by
+ * {@link ADMONITION_TYPE_MAPPINGS} and intentionally omitted here.
+ *
+ * Only consulted when the `obsidian` option is enabled — generic Markdown import
+ * keeps GitHub's five-type behaviour.
+ */
+export const OBSIDIAN_CALLOUT_ALIASES: Record<string, string> = {
+    // Neutral / informational
+    abstract: "note",
+    summary: "note",
+    tldr: "note",
+    info: "note",
+    todo: "note",
+    quote: "note",
+    cite: "note",
+    // Advice / positive outcomes
+    hint: "tip",
+    success: "tip",
+    check: "tip",
+    done: "tip",
+    question: "tip",
+    help: "tip",
+    faq: "tip",
+    // Emphasis
+    example: "important",
+    // Mild warnings
+    attention: "warning",
+    // Errors / severe warnings
+    failure: "caution",
+    fail: "caution",
+    missing: "caution",
+    danger: "caution",
+    error: "caution",
+    bug: "caution"
 };
 
 /** Options for {@link renderToHtml}. */
@@ -57,6 +177,18 @@ export interface RenderToHtmlOptions {
      * marked attaches a parser to the renderer during parsing.
      */
     renderer?: Renderer;
+    /**
+     * Configured todo task states, used to recognise non-standard task markers
+     * (e.g. `[/]`) in list items. Defaults to {@link DEFAULT_TASK_STATES}.
+     */
+    taskStates?: TaskStateDef[];
+    /**
+     * Enable Obsidian-specific Markdown syntax: `==highlight==` → `<mark>` and
+     * `%% comment %%` → an HTML comment. Off by default so generic Markdown import,
+     * paste and the live editor preview are unaffected — only the Obsidian importer
+     * opts in.
+     */
+    obsidian?: boolean;
 }
 
 function escapeHtml(str: string): string {
@@ -99,20 +231,66 @@ function getNormalizedMimeFromMarkdownLanguage(language: string | undefined): st
     return MIME_TYPE_AUTO;
 }
 
-function handleH1(content: string, title: string): string {
-    let isFirstH1Handled = false;
+/** Decodes HTML entities in heading text; supplied by each {@link demoteHeadings} caller. */
+export type EntityDecoder = (str: string) => string;
 
-    return content.replace(/<h1[^>]*>([^<]*)<\/h1>/gi, (match, text: string) => {
-        text = unescapeHtml(text);
-        const convertedContent = `<h2>${text}</h2>`;
+/**
+ * Trilium reserves `<h1>` for the note title and the editor only supports
+ * `<h2>`–`<h6>`. When rendered/imported content starts its hierarchy at `<h1>`,
+ * naively demoting every `<h1>` to `<h2>` while leaving `<h2>`–`<h6>` untouched
+ * collapses distinct levels onto the same `<h2>`, flattening the nesting (#8383).
+ *
+ * This strips the leading `<h1>` if it duplicates the title, then — if a content
+ * `<h1>` still remains — shifts the whole hierarchy down one level so the author's
+ * structure is preserved.
+ *
+ * The entity decoder is injected so each call-site keeps its own `unescapeHtml`
+ * semantics: the markdown renderer (here) decodes numeric/hex/named entities, while
+ * the HTML importer decodes only the five basic ones (matching `api.unescapeHtml`).
+ */
+export function demoteHeadings(
+    content: string,
+    title: string,
+    unescapeHtml: EntityDecoder
+): string {
+    content = stripDuplicateTitleHeading(content, title, unescapeHtml);
 
-        if (!isFirstH1Handled) {
-            isFirstH1Handled = true;
-            return title.trim() === text.trim() ? "" : convertedContent;
-        }
+    // If a content <h1> still remains, the hierarchy starts at level 1: shift every
+    // heading down one level (clamping at <h6>) so nesting is preserved instead of
+    // collapsing distinct <h1>/<h2> levels onto the same <h2>.
+    if (/<h1[^>]*>[\s\S]*?<\/h1>/i.test(content)) {
+        content = shiftHeadingsDown(content, unescapeHtml);
+    }
 
-        return convertedContent;
-    });
+    return content;
+}
+
+/** Removes the first `<h1>` when its (decoded) text equals the note title. */
+function stripDuplicateTitleHeading(
+    content: string,
+    title: string,
+    unescapeHtml: EntityDecoder
+): string {
+    // No `g` flag: only the very first <h1> is a title candidate. `[\s\S]*?` (not
+    // `[^<]*`) so headings with inline markup or attributes still match.
+    return content.replace(/<h1[^>]*>([\s\S]*?)<\/h1>/i, (match, text: string) =>
+        unescapeHtml(text).trim() === title.trim() ? "" : match
+    );
+}
+
+/**
+ * Shifts `<h2>`–`<h5>` to `<h3>`–`<h6>` and the remaining `<h1>` to `<h2>`
+ * (preserving attributes and decoding text). `<h6>` stays put — there is no `<h7>`.
+ */
+function shiftHeadingsDown(content: string, unescapeHtml: EntityDecoder): string {
+    // Shift the sub-headings first so the <h1>→<h2> demotion below isn't re-shifted.
+    // `[\s\S]*?` matches headings containing inline markup; the captured attributes
+    // are carried over to the demoted <h2>.
+    return content
+        .replace(/<(\/?)h([2-5])\b([^>]*)>/gi, (_match, slash, level, rest) =>
+            `<${slash}h${Number(level) + 1}${rest}>`)
+        .replace(/<h1([^>]*)>([\s\S]*?)<\/h1>/gi, (_match, attrs, text) =>
+            `<h2${attrs}>${unescapeHtml(text)}</h2>`);
 }
 
 export function extractCodeBlocks(text: string): { processedText: string; placeholderMap: Map<string, string> } {
@@ -120,8 +298,13 @@ export function extractCodeBlocks(text: string): { processedText: string; placeh
     let id = 0;
     const timestamp = Date.now();
 
+    // `(?:>[ \t]*)*` allows blockquote prefixes on the fence lines so that fenced
+    // code blocks nested in a blockquote (`> ``` `) are still shielded. Otherwise their
+    // contents leak into formula extraction, which mangles `$…$` runs like `${VAR}` (#10268).
+    // The whole match is restored verbatim before marked parses, so the prefixes are
+    // preserved and the blockquote still renders correctly.
     text = text
-        .replace(/^[ \t]*```[^\n]*\n[\s\S]*?^[ \t]*```[ \t]*$/gm, (m) => {
+        .replace(/^[ \t]*(?:>[ \t]*)*```[^\n]*\n[\s\S]*?^[ \t]*(?:>[ \t]*)*```[ \t]*$/gm, (m) => {
             const key = `<!--CODE_BLOCK_${timestamp}_${id++}-->`;
             codeMap.set(key, m);
             return key;
@@ -142,15 +325,19 @@ function extractFormulas(text: string): { processedText: string; placeholderMap:
     let id = 0;
     const timestamp = Date.now();
 
+    // Delimiters must be lone `$` (inline) / `$$` (block) runs — i.e. not adjacent to
+    // another `$` — and the body may not contain a `$`. This mirrors GitHub: mismatched
+    // runs like `$$e=mc^2$` stay literal text rather than producing a malformed formula
+    // (a stray `$` inside the body would otherwise crash KaTeX with "Can't use '$'").
     let processedText = noCodeText
-        .replace(/(?<!\\)\$\$((?:(?!\n{2,})[\s\S])+?)\$\$/g, (_, formula: string) => {
+        .replace(/(?<![\\$])\$\$(?!\$)((?:(?!\n{2,})[^$])+?)\$\$(?!\$)/g, (_, formula: string) => {
             const key = `<!--FORMULA_BLOCK_${timestamp}_${id++}-->`;
-            formulaMap.set(key, `<span class="math-tex">\\[${formula}\\]</span>`);
+            formulaMap.set(key, `<span class="math-tex">\\[${escapeMathFormula(formula)}\\]</span>`);
             return key;
         })
-        .replace(/(?<!\\)\$(.+?)\$/g, (_, formula: string) => {
+        .replace(/(?<![\\$])\$(?!\$)([^$\n]+?)\$(?!\$)/g, (_, formula: string) => {
             const key = `<!--FORMULA_INLINE_${timestamp}_${id++}-->`;
-            formulaMap.set(key, `<span class="math-tex">\\(${formula}\\)</span>`);
+            formulaMap.set(key, `<span class="math-tex">\\(${escapeMathFormula(formula)}\\)</span>`);
             return key;
         });
 
@@ -159,11 +346,28 @@ function extractFormulas(text: string): { processedText: string; placeholderMap:
     return { processedText, placeholderMap: formulaMap };
 }
 
+/**
+ * Escapes the HTML-significant characters (`&`, `<`, `>`) in a math formula body.
+ *
+ * The formula is restored into the HTML string *before* sanitization, so a raw `<`
+ * (e.g. `k<K`) would be parsed as the start of an HTML tag and the sanitizer would
+ * strip everything after it, truncating the equation (#10418). Escaping matches how
+ * CKEditor serializes the equation (a text node, so quotes are intentionally left
+ * untouched) and round-trips cleanly back into the editor.
+ */
+function escapeMathFormula(formula: string): string {
+    return formula
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+}
+
 function restoreFromMap(text: string, map: Map<string, string>): string {
     if (map.size === 0) return text;
     const pattern = [ ...map.keys() ]
         .map((k) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
         .join("|");
+    /* v8 ignore next -- defensive: every regex match is a map key, so the ?? fallback is unreachable */
     return text.replace(new RegExp(pattern, "g"), (match) => map.get(match) ?? match);
 }
 
@@ -175,6 +379,26 @@ function restoreFromMap(text: string, map: Map<string, string>): string {
  * {@link RenderToHtmlOptions.renderer}.
  */
 export class CustomMarkdownRenderer extends Renderer {
+
+    /** Whether to recognise Obsidian's extended callout types, inline titles and fold markers. */
+    readonly #obsidianCallouts: boolean;
+
+    /**
+     * Configured state name → definition. Consulted by {@link listitem} to attach
+     * the state's `title` (human-readable name) as an HTML `title` attribute on
+     * the emitted `<li>`, matching the CKEditor data downcast — so shared,
+     * read-only and exported HTML all show the same native tooltip on the
+     * task item ("Doing", "Cancelled", …) when hovered.
+     */
+    readonly #stateByName: Map<string, TaskStateDef>;
+
+    constructor(options?: MarkedOptions & { obsidianCallouts?: boolean; taskStates?: TaskStateDef[] }) {
+        super(options);
+        this.#obsidianCallouts = options?.obsidianCallouts ?? false;
+        this.#stateByName = new Map(
+            (options?.taskStates ?? DEFAULT_TASK_STATES).map((state) => [state.name, state])
+        );
+    }
 
     override heading(data: Tokens.Heading): string {
         if (data.depth === 1) {
@@ -219,6 +443,15 @@ export class CustomMarkdownRenderer extends Renderer {
 
     override listitem(item: Tokens.ListItem): string {
         if (item.task) {
+            const taskState = (item as TaskListItem)._taskState;
+            const dataAttr = taskState ? ` data-trilium-task-state="${taskState}"` : "";
+            // Native hover tooltip on the `<li>` — matches the CKEditor data
+            // downcast, so shared / read-only / exported HTML all surface the
+            // state's human-readable title when the task item is hovered.
+            // Skipped when the state has no definition in the current config.
+            const stateDef = taskState ? this.#stateByName.get(taskState) : undefined;
+            const titleText = stateDef?.title || stateDef?.name;
+            const titleAttr = titleText ? ` title="${escapeHtml(titleText)}"` : "";
             let itemBody = "";
             const checkbox = this.checkbox({ checked: !!item.checked, raw: "- [ ]", type: "checkbox" });
             if (item.loose) {
@@ -241,7 +474,7 @@ export class CustomMarkdownRenderer extends Renderer {
             }
 
             itemBody += `<span class="todo-list__label__description">${this.parser.parse(item.tokens.filter((t) => t.type !== "checkbox"))}</span>`;
-            return `<li><label class="todo-list__label">${itemBody}</label></li>`;
+            return `<li${dataAttr}${titleAttr}><label class="todo-list__label">${itemBody}</label></li>`;
         }
 
         return super.listitem(item).trimEnd();
@@ -251,23 +484,80 @@ export class CustomMarkdownRenderer extends Renderer {
         return super.image(token).replace(` alt=""`, "");
     }
 
+    override table(token: Tokens.Table): string {
+        // CKEditor wraps every table in `<figure class="table">`, and its content CSS
+        // (`.ck-content .table`) styles that wrapper rather than a bare `<table>`. Without
+        // it, imported tables render unstyled in read-only mode until the note is opened in
+        // the editor — which re-wraps them on save (#10270). Emit the wrapper here so
+        // imported markdown matches CKEditor's structure up front.
+        return `<figure class="table">${super.table(token).trimEnd()}</figure>`;
+    }
+
     override blockquote({ tokens }: Tokens.Blockquote): string {
         const body = this.parser.parse(tokens);
 
-        const admonitionMatch = /^<p>\[\!([A-Z]+)\]/.exec(body);
-        if (Array.isArray(admonitionMatch) && admonitionMatch.length === 2) {
-            const type = admonitionMatch[1].toLowerCase();
-
-            if (ADMONITION_TYPE_MAPPINGS[type]) {
-                const bodyWithoutHeader = body
-                    .replace(/^<p>\[\!([A-Z]+)\]\s*/, "<p>")
-                    .replace(/^<p><\/p>/, "");
-
-                return `<aside class="admonition ${type}">${bodyWithoutHeader.trim()}</aside>`;
-            }
+        const callout = this.#parseCallout(body);
+        if (callout) {
+            // Trilium admonitions have no dedicated title slot, so an Obsidian inline
+            // title is rendered as a bold lead paragraph.
+            const titleHtml = callout.title ? `<p><strong>${callout.title}</strong></p>` : "";
+            // Empty admonition (`> [!NOTE]` with no body) — keep a non-breaking space
+            // so the callout still renders its title/icon row instead of collapsing.
+            const inner = (titleHtml + callout.body) || "&nbsp;";
+            return `<aside class="admonition ${callout.type}">${inner}</aside>`;
         }
 
         return `<blockquote>${body}</blockquote>`;
+    }
+
+    /**
+     * Detects a `[!type]` callout at the start of a rendered blockquote. Matches the
+     * type case-insensitively, drops Obsidian's fold marker (`+`/`-`), and splits off
+     * an optional inline title from the body. Returns `null` for plain blockquotes and
+     * for callout types that don't resolve to a supported admonition.
+     */
+    #parseCallout(body: string): { type: string; title: string; body: string } | null {
+        const marker = /^<p>\[!([a-zA-Z]+)\]([-+]?)[ \t]*/.exec(body);
+        if (!marker) {
+            return null;
+        }
+
+        const type = this.#resolveAdmonitionType(marker[1].toLowerCase());
+        if (!type) {
+            return null;
+        }
+
+        const rest = body.slice(marker[0].length);
+        const newlineIdx = rest.indexOf("\n");
+        const paragraphEndIdx = rest.indexOf("</p>");
+
+        let title: string;
+        let inner: string;
+        if (paragraphEndIdx !== -1 && (newlineIdx === -1 || paragraphEndIdx < newlineIdx)) {
+            // The marker paragraph holds only an (optional) title; the body follows it.
+            title = rest.slice(0, paragraphEndIdx);
+            inner = rest.slice(paragraphEndIdx + "</p>".length);
+        } else if (newlineIdx !== -1) {
+            // A soft line break splits the title from the body within the marker paragraph.
+            title = rest.slice(0, newlineIdx);
+            inner = `<p>${rest.slice(newlineIdx + 1)}`;
+        } else {
+            title = rest;
+            inner = "";
+        }
+
+        return { type, title: title.trim(), body: inner.trim() };
+    }
+
+    /** Resolves a lowercase callout keyword to a supported admonition type, or `null`. */
+    #resolveAdmonitionType(type: string): string | null {
+        if (ADMONITION_TYPE_MAPPINGS[type]) {
+            return type;
+        }
+        if (this.#obsidianCallouts) {
+            return OBSIDIAN_CALLOUT_ALIASES[type] ?? null;
+        }
+        return null;
     }
 
     override codespan({ text }: Tokens.Codespan): string {
@@ -282,29 +572,33 @@ export class CustomMarkdownRenderer extends Renderer {
  * delegated to the caller so this works in both Node and the browser.
  */
 export function renderToHtml(content: string, title: string, options: RenderToHtmlOptions): string {
-    // Double-escape slashes in math expressions — otherwise the parser consumes them.
-    content = content.replaceAll("\\$", "\\\\$");
-
     const { processedText, placeholderMap: formulaMap } = extractFormulas(content);
 
     const marked = new Marked({ async: false, gfm: true });
     marked.use(markedFootnote());
-    marked.use({
-        // Order is important, especially for wikilinks.
-        extensions: [
-            options.transclusion ? createTransclusionExtension(options.transclusion) : transclusionExtension,
-            options.wikiLink ? createWikiLinkExtension(options.wikiLink) : wikiLinkExtension
-        ]
-    });
+    marked.use({ walkTokens: createTaskStateDetector(options.taskStates ?? DEFAULT_TASK_STATES) });
+    // Order is important, especially for wikilinks.
+    const extensions = [
+        options.transclusion ? createTransclusionExtension(options.transclusion) : transclusionExtension,
+        options.wikiLink ? createWikiLinkExtension(options.wikiLink) : wikiLinkExtension
+    ];
+    if (options.obsidian) {
+        extensions.push(createHighlightExtension(), createCommentExtension());
+    }
+    marked.use({ extensions });
 
-    const renderer = options.renderer ?? new CustomMarkdownRenderer({ async: false });
+    const renderer = options.renderer ?? new CustomMarkdownRenderer({
+        async: false,
+        obsidianCallouts: options.obsidian,
+        taskStates: options.taskStates
+    });
     let html = marked.parse(processedText, { async: false, renderer }) as string;
 
     html = restoreFromMap(html, formulaMap);
 
     // h1 handling needs to come before sanitization.
     if (options.demoteH1 !== false) {
-        html = handleH1(html, title);
+        html = demoteHeadings(html, title, unescapeHtml);
     }
     html = options.sanitize(html);
 

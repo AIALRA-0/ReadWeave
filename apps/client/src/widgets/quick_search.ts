@@ -147,6 +147,8 @@ interface QuickSearchResponse {
     error: string;
 }
 
+type QuickSearchResult = NonNullable<QuickSearchResponse["searchResults"]>[number];
+
 export default class QuickSearchWidget extends BasicWidget {
 
     private dropdown!: bootstrap.Dropdown;
@@ -154,7 +156,7 @@ export default class QuickSearchWidget extends BasicWidget {
     private $dropdownMenu!: JQuery<HTMLElement>;
 
     // State for infinite scrolling
-    private allSearchResults: Array<any> = [];
+    private allSearchResults: QuickSearchResult[] = [];
     private allSearchResultNoteIds: string[] = [];
     private currentDisplayedCount: number = 0;
     private isLoadingMore: boolean = false;
@@ -173,6 +175,12 @@ export default class QuickSearchWidget extends BasicWidget {
         });
 
         this.$widget.find(".input-group-prepend").on("shown.bs.dropdown", () => this.search());
+
+        this.$searchString.on("input", () => {
+            if (!String(this.$searchString.val()).trim()) {
+                this.clearSearchResults();
+            }
+        });
 
         // Add scroll event listener for infinite scrolling
         this.$dropdownMenu.on("scroll", () => {
@@ -226,7 +234,7 @@ export default class QuickSearchWidget extends BasicWidget {
         const searchString = String(this.$searchString.val())?.trim();
 
         if (!searchString) {
-            this.dropdown.hide();
+            this.clearSearchResults();
             return;
         }
 
@@ -244,6 +252,10 @@ export default class QuickSearchWidget extends BasicWidget {
             </span>`);
 
         const { searchResultNoteIds, searchResults, error } = await server.get<QuickSearchResponse>(`quick-search/${encodeURIComponent(searchString)}`);
+
+        if (String(this.$searchString.val()).trim() !== searchString) {
+            return;
+        }
 
         if (error) {
             const tooltip = new Tooltip(this.$searchString[0], {
@@ -273,6 +285,15 @@ export default class QuickSearchWidget extends BasicWidget {
         this.addShowInFullSearchButton();
 
         this.dropdown.update();
+    }
+
+    private clearSearchResults() {
+        this.allSearchResults = [];
+        this.allSearchResultNoteIds = [];
+        this.currentDisplayedCount = 0;
+        this.isLoadingMore = false;
+        this.$dropdownMenu.empty();
+        this.dropdown.hide();
     }
 
     private async displayMoreResults(batchSize: number) {

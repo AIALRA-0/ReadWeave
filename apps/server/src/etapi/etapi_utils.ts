@@ -1,12 +1,11 @@
 import type { NextFunction, Request, RequestHandler, Response, Router } from "express";
 import type { ParamsDictionary } from "express-serve-static-core";
 
-import becca from "../becca/becca.js";
+import { becca, cls, getLog } from "@triliumnext/core";
+import { namespace } from "../cls_provider.js";
 import type { ApiRequestHandler, SyncRouteRequestHandler } from "../routes/route_api.js";
-import cls from "../services/cls.js";
 import config from "../services/config.js";
 import etapiTokenService from "../services/etapi_tokens.js";
-import log from "../services/log.js";
 import sql from "../services/sql.js";
 import type { ValidatorMap } from "./etapi-interface.js";
 const GENERIC_CODE = "GENERIC";
@@ -48,8 +47,8 @@ function checkEtapiAuth(req: Request, res: Response, next: NextFunction) {
 
 function processRequest<P extends ParamsDictionary>(req: Request<P>, res: Response, routeHandler: ApiRequestHandler<P>, next: NextFunction, method: string, path: string) {
     try {
-        cls.namespace.bindEmitter(req);
-        cls.namespace.bindEmitter(res);
+        namespace.bindEmitter(req);
+        namespace.bindEmitter(res);
 
         cls.init(() => {
             cls.set("componentId", "etapi");
@@ -59,11 +58,12 @@ function processRequest<P extends ParamsDictionary>(req: Request<P>, res: Respon
 
             return sql.transactional(cb);
         });
-    } catch (e: any) {
-        log.error(`${method} ${path} threw exception ${e.message} with stacktrace: ${e.stack}`);
+    } catch (error: unknown) {
+        const detail = error instanceof Error ? error : new Error(String(error));
+        getLog().error(`${method} ${path} threw exception ${detail.message} with stacktrace: ${detail.stack}`);
 
-        if (e instanceof EtapiError) {
-            sendError(res, e.statusCode, e.code, e.message);
+        if (detail instanceof EtapiError) {
+            sendError(res, detail.statusCode, detail.code, detail.message);
         } else {
             sendError(res, 500, GENERIC_CODE, "Internal server error");
         }
@@ -85,6 +85,7 @@ function getAndCheckNote(noteId: string) {
         return note;
     }
     throw new EtapiError(404, "NOTE_NOT_FOUND", `Note '${noteId}' not found.`);
+
 }
 
 function getAndCheckAttachment(attachmentId: string) {
@@ -94,6 +95,7 @@ function getAndCheckAttachment(attachmentId: string) {
         return attachment;
     }
     throw new EtapiError(404, "ATTACHMENT_NOT_FOUND", `Attachment '${attachmentId}' not found.`);
+
 }
 
 function getAndCheckBranch(branchId: string) {
@@ -103,6 +105,7 @@ function getAndCheckBranch(branchId: string) {
         return branch;
     }
     throw new EtapiError(404, "BRANCH_NOT_FOUND", `Branch '${branchId}' not found.`);
+
 }
 
 function getAndCheckAttribute(attributeId: string) {
@@ -112,6 +115,7 @@ function getAndCheckAttribute(attributeId: string) {
         return attribute;
     }
     throw new EtapiError(404, "ATTRIBUTE_NOT_FOUND", `Attribute '${attributeId}' not found.`);
+
 }
 
 function getAndCheckRevision(revisionId: string) {
@@ -123,13 +127,19 @@ function getAndCheckRevision(revisionId: string) {
     throw new EtapiError(404, "REVISION_NOT_FOUND", `Revision '${revisionId}' not found.`);
 }
 
-function validateAndPatch(target: any, source: any, allowedProperties: ValidatorMap) {
-    for (const key of Object.keys(source)) {
+function validateAndPatch<T extends object>(target: T, source: unknown, allowedProperties: ValidatorMap) {
+    if (!source || typeof source !== "object" || Array.isArray(source)) {
+        throw new EtapiError(400, "PROPERTY_VALIDATION_ERROR", "Request body must be an object.");
+    }
+
+    const sourceRecord = source as Record<string, unknown>;
+
+    for (const key of Object.keys(sourceRecord)) {
         if (!(key in allowedProperties)) {
             throw new EtapiError(400, "PROPERTY_NOT_ALLOWED", `Property '${key}' is not allowed for this method.`);
         } else {
             for (const validator of allowedProperties[key]) {
-                const validationResult = validator(source[key]);
+                const validationResult = validator(sourceRecord[key]);
 
                 if (validationResult) {
                     throw new EtapiError(400, "PROPERTY_VALIDATION_ERROR", `Validation failed on property '${key}': ${validationResult}.`);
@@ -139,9 +149,7 @@ function validateAndPatch(target: any, source: any, allowedProperties: Validator
     }
 
     // validation passed, let's patch
-    for (const propName of Object.keys(source)) {
-        target[propName] = source[propName];
-    }
+    Object.assign(target, sourceRecord);
 }
 
 export default {

@@ -14,14 +14,18 @@ import IndentBlockShortcutPlugin from "./plugins/indent_block_shortcut.js";
 import MarkdownImportPlugin from "./plugins/markdownimport.js";
 import MentionCustomization from "./plugins/mention_customization.js";
 import IncludeNote from "./plugins/includenote.js";
+import LinkEmbed from "./plugins/link_embed/link_embed.js";
 import Uploadfileplugin from "./plugins/file_upload/uploadfileplugin.js";
 import SyntaxHighlighting from "./plugins/syntax_highlighting/index.js";
 import { Kbd } from "@triliumnext/ckeditor5-keyboard-marker";
 import { Mermaid } from "@triliumnext/ckeditor5-mermaid";
 import { Admonition } from "@triliumnext/ckeditor5-admonition";
+import { Collapsible } from "@triliumnext/ckeditor5-collapsible";
 import { Footnotes } from "@triliumnext/ckeditor5-footnotes";
 import { Math, AutoformatMath } from "@triliumnext/ckeditor5-math";
 import CopyAnchorLinkButton from "./plugins/copy_anchor_link.js";
+import CopyLinkUrlButton from "./plugins/copy_link_url.js";
+import ImageActions from "./plugins/image_actions.js";
 
 // import "@triliumnext/ckeditor5-mermaid/index.css";
 // import "@triliumnext/ckeditor5-admonition/index.css";
@@ -29,6 +33,7 @@ import CopyAnchorLinkButton from "./plugins/copy_anchor_link.js";
 // import "@triliumnext/ckeditor5-math/index.css";
 import CodeBlockToolbar from "./plugins/code_block_toolbar.js";
 import CodeBlockLanguageDropdown from "./plugins/code_block_language_dropdown.js";
+import CodeBlockInsertParagraph from "./plugins/code_block_insert_paragraph.js";
 import MoveBlockUpDownPlugin from "./plugins/move_block_updown.js";
 import ScrollOnUndoRedoPlugin from "./plugins/scroll_on_undo_redo.js"
 import InlineCodeNoSpellcheck from "./plugins/inline_code_no_spellcheck.js";
@@ -38,6 +43,10 @@ import AdmonitionToolbar from "./plugins/admonition_toolbar.js";
 import IncludeNoteBoxSizeDropdown from "./plugins/include_note_box_size_dropdown.js";
 import IncludeNoteToolbar from "./plugins/include_note_toolbar.js";
 import ReadWeaveAnchor from "./plugins/readweave_anchor.js";
+import LinkEmbedToolbar from "./plugins/link_embed/link_embed_toolbar.js";
+import TodoListMultistate from "./plugins/todo_list_multistate/todo_list_multistate.js";
+import TodoListUncheckOnEnter from "./plugins/todo_list_uncheck_on_enter.js";
+import CollapsibleListItems from "./plugins/collapsible_list_items.js";
 
 /**
  * Plugins that are specific to Trilium and not part of the CKEditor 5 core, included in both text editors but not in the attribute editor.
@@ -53,10 +62,12 @@ const TRILIUM_PLUGINS: typeof Plugin[] = [
     IndentBlockShortcutPlugin,
     MarkdownImportPlugin,
     IncludeNote,
+    LinkEmbed,
     Uploadfileplugin,
     SyntaxHighlighting,
     CodeBlockLanguageDropdown,
     CodeBlockToolbar,
+    CodeBlockInsertParagraph,
     MoveBlockUpDownPlugin,
     ScrollOnUndoRedoPlugin,
     InlineCodeNoSpellcheck,
@@ -65,8 +76,13 @@ const TRILIUM_PLUGINS: typeof Plugin[] = [
     AdmonitionToolbar,
     IncludeNoteBoxSizeDropdown,
     IncludeNoteToolbar,
+    LinkEmbedToolbar,
+    TodoListMultistate,
+    CollapsibleListItems,
     CopyAnchorLinkButton,
     ReadWeaveAnchor,
+    CopyLinkUrlButton,
+    ImageActions,
 ];
 
 /**
@@ -76,6 +92,7 @@ const EXTERNAL_PLUGINS: typeof Plugin[] = [
     Kbd,
     Mermaid,
     Admonition,
+    Collapsible,
     Footnotes,
     Math,
 	AutoformatMath
@@ -93,6 +110,21 @@ export const CORE_PLUGINS: typeof Plugin[] = [
     // Trilium plugins
     MentionCustomization,
     ReferenceLink
+];
+
+/**
+ * Lightweight formatting plugins for a minimal reply input (e.g. the AI chat) — added on top of an
+ * {@link AttributeEditor} instance via `extraPlugins` to enable markdown **autoformatting** for block
+ * quotes, fenced code blocks, lists and links, without a toolbar. Kept out of {@link CORE_PLUGINS} so
+ * the plain attribute/relation editor stays plain.
+ */
+export const CHAT_INPUT_PLUGINS: typeof Plugin[] = [
+    Autoformat,
+    BlockQuote,
+    CodeBlock,
+    List,
+    Link,
+    AutoLink
 ];
 
 /**
@@ -136,6 +168,7 @@ export const COMMON_PLUGINS: typeof Plugin[] = [
 	List,
 	ListProperties,
 	TodoList,
+	TodoListUncheckOnEnter,
 	PasteFromOffice,
 	PictureEditing,
 	Table,

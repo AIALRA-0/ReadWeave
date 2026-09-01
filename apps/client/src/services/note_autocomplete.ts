@@ -282,6 +282,18 @@ function initNoteAutocomplete($el: JQuery<HTMLElement>, options?: Options) {
             fullTextSearch($el, options);
         }
     });
+    $el.on("keydown", (event) => {
+        const isPlainEnter = event.key === "Enter"
+            && !event.ctrlKey && !event.shiftKey && !event.altKey && !event.metaKey;
+        // autocomplete.js empties its suggestion list only a tick after closing it, and its
+        // Enter handler selects from the closed-but-not-yet-emptied dropdown — so a fast second
+        // Enter after a selection consumes a stale row (#5669). Enter must never select from a
+        // dropdown the user cannot see; the library keeps aria-expanded in sync with open/close.
+        if (isPlainEnter && $el.attr("aria-expanded") !== "true") {
+            // Stop autocomplete from seeing the keypress, but leave form submission intact.
+            event.stopImmediatePropagation();
+        }
+    });
 
     $el.autocomplete(
         {
@@ -315,7 +327,7 @@ function initNoteAutocomplete($el: JQuery<HTMLElement>, options?: Options) {
                     suggestion: (suggestion) => {
                         if (suggestion.action === "command") {
                             let html = `<div class="command-suggestion">`;
-                            html += `<span class="command-icon ${suggestion.icon || "bx bx-terminal"}"></span>`;
+                            html += `<span class="command-icon ${escapeHtml(suggestion.icon || "bx bx-terminal")}"></span>`;
                             html += `<div class="command-content">`;
                             html += `<div class="command-name">${suggestion.highlightedNotePathTitle}</div>`;
                             if (suggestion.commandDescription) {
@@ -363,8 +375,8 @@ function initNoteAutocomplete($el: JQuery<HTMLElement>, options?: Options) {
         ]
     );
 
-    // TODO: Types fail due to "autocomplete:selected" not being registered in type definitions.
-    ($el as any).on("autocomplete:selected", async (event: Event, suggestion: Suggestion) => {
+    //@ts-expect-error The `autocomplete:selected` handler takes an extra `suggestion` argument that jQuery's `.on()` typings don't model.
+    $el.on("autocomplete:selected", async (event: Event, suggestion: Suggestion) => {
         if (suggestion.action === "command") {
             $el.autocomplete("close");
             $el.trigger("autocomplete:commandselected", [suggestion]);
@@ -452,6 +464,7 @@ function init() {
 
         const chunks = notePath.split("/");
 
+        /* v8 ignore next -- String.split always yields at least one element, so the `: null` branch is unreachable */
         return chunks.length >= 1 ? chunks[chunks.length - 1] : null;
     };
 

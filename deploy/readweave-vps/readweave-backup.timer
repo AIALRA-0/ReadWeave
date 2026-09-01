@@ -1,0 +1,11 @@
+[Unit]
+Description=Create the daily ReadWeave recovery snapshot
+
+[Timer]
+OnCalendar=*-*-* 03:40:00
+Persistent=true
+RandomizedDelaySec=10m
+Unit=readweave-backup.service
+
+[Install]
+WantedBy=timers.target

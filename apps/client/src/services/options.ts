@@ -1,15 +1,18 @@
 import { OptionNames } from "@triliumnext/commons";
 import server from "./server.js";
+import { isAuthenticatedAppReady } from "./startup_state.js";
 import { isShare } from "./utils.js";
 
 export type OptionValue = number | string;
 
 class Options {
     initializedPromise: Promise<void>;
-    private arr!: Record<string, OptionValue>;
+    private arr: Record<string, OptionValue> = {};
 
     constructor() {
-        if (!isShare) {
+        // The login bundle imports shared UI components that eventually reach
+        // this singleton. Do not start protected startup traffic until login.
+        if (!isShare && isAuthenticatedAppReady()) {
             this.initializedPromise = server.get<Record<string, OptionValue>>("options").then((data) => this.load(data));
         } else {
             this.initializedPromise = Promise.resolve();
@@ -35,7 +38,7 @@ class Options {
         }
         try {
             return JSON.parse(value);
-        } catch (e) {
+        } catch {
             return null;
         }
     }
@@ -46,7 +49,7 @@ class Options {
             return value;
         }
         if (typeof value == "string") {
-            return parseInt(value);
+            return parseInt(value, 10);
         }
         console.warn("Attempting to read int for unsupported value: ", value);
         return null;

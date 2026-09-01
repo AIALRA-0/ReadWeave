@@ -154,25 +154,30 @@ async function deleteNotes(branchIdsToDelete: string[], forceDeleteAllClones = f
 
 async function activateParentNotePath(branchIdsToDelete: string[]) {
     const activeContext = appContext.tabManager.getActiveContext();
-    const activeNotePath = activeContext?.notePathArray ?? [];
+    const noteContexts = appContext.tabManager.getNoteContexts?.()
+        ?? (activeContext ? [ activeContext ] : []);
 
-    // Find the deleted branch that appears earliest in the active note's path
-    let earliestIndex = activeNotePath.length;
-    for (const branchId of branchIdsToDelete) {
-        const branch = froca.getBranch(branchId);
-        if (branch) {
-            const index = activeNotePath.indexOf(branch.noteId);
-            if (index !== -1 && index < earliestIndex) {
-                earliestIndex = index;
+    // Move every open context away from a note that is about to disappear.
+    // Otherwise a background tab requests a deleted note when revisited.
+    for (const noteContext of noteContexts) {
+        const notePath = noteContext.notePathArray ?? [];
+        let earliestIndex = notePath.length;
+
+        for (const branchId of branchIdsToDelete) {
+            const branch = froca.getBranch(branchId);
+            if (branch) {
+                const index = notePath.indexOf(branch.noteId);
+                if (index !== -1 && index < earliestIndex) {
+                    earliestIndex = index;
+                }
             }
         }
-    }
 
-    // Navigate to the parent of the highest deleted ancestor
-    if (earliestIndex < activeNotePath.length) {
-        const parentPath = activeNotePath.slice(0, earliestIndex);
-        if (parentPath.length > 0) {
-            await activeContext?.setNote(parentPath.join("/"));
+        if (earliestIndex < notePath.length) {
+            const parentPath = notePath.slice(0, earliestIndex);
+            if (parentPath.length > 0) {
+                await noteContext.setNote(parentPath.join("/"));
+            }
         }
     }
 }
@@ -213,7 +218,6 @@ function filterRootNote(branchIds: string[]) {
 function makeToast(id: string, message: string): ToastOptionsWithRequiredId {
     return {
         id,
-        title: t("branches.delete-status"),
         message,
         icon: "trash"
     };

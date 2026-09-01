@@ -163,12 +163,13 @@ function StatusBarButton({ className, icon, text, title, active, ...restProps }:
 //#region Language Switcher
 function LanguageSwitcher({ note }: StatusBarContext) {
     const [ modalShown, setModalShown ] = useState(false);
+    const noteType = useNoteProperty(note, "type");
     const { locales, DEFAULT_LOCALE, currentNoteLanguage, setCurrentNoteLanguage } = useLanguageSwitcher(note);
     const { activeLocale, processedLocales } = useProcessedLocales(locales, DEFAULT_LOCALE, currentNoteLanguage ?? DEFAULT_LOCALE.id);
 
     return (
         <>
-            {note.type === "text" && <StatusBarDropdown
+            {noteType === "text" && <StatusBarDropdown
                 icon="bx bx-globe"
                 title={t("status_bar.language_title")}
                 text={<span dir={activeLocale?.rtl ? "rtl" : "ltr"}>{getLocaleName(activeLocale)}</span>}
@@ -373,6 +374,15 @@ function AttributesPane({ note, noteContext, attributesShown, setAttributesShown
     const parentComponent = useContext(ParentComponent);
     const api = useRef<AttributeEditorImperativeHandlers>(null);
 
+    // The attribute editor pulls in CKEditor, so it is only mounted once the panel has been
+    // opened (and stays mounted afterwards so the imperative handlers keep working).
+    const [ editorMounted, setEditorMounted ] = useState(false);
+    useEffect(() => {
+        if (attributesShown) {
+            setEditorMounted(true);
+        }
+    }, [ attributesShown ]);
+
     const context = parentComponent && {
         componentId: parentComponent.componentId,
         note,
@@ -408,11 +418,11 @@ function AttributesPane({ note, noteContext, attributesShown, setAttributesShown
                 <AutoLinkAttributesTab {...context} />
             </div>}
 
-            <AttributeEditor
+            {editorMounted && <AttributeEditor
                 {...context}
                 api={api}
                 ntxId={noteContext.ntxId}
-            />
+            />}
         </BottomPanel>
     );
 }
@@ -449,6 +459,7 @@ function NotePaths({ note, hoistedNoteId, notePath }: StatusBarContext) {
 const TAB_WIDTH_OPTIONS = [1, 2, 3, 4, 6, 8] as const;
 
 function TabWidthSwitcher({ note, noteContext }: StatusBarContext) {
+    const noteType = useNoteProperty(note, "type");
     const [ globalTabWidth ] = useTriliumOptionInt("codeNoteTabWidth");
     const [ globalUseTabs ] = useTriliumOptionBool("codeNoteIndentWithTabs");
     const [ noteTabWidth, setNoteTabWidth ] = useNoteLabelInt(note, "tabWidth");
@@ -477,7 +488,7 @@ function TabWidthSwitcher({ note, noteContext }: StatusBarContext) {
         ? t("status_bar.tab_width_tabs", { width: effectiveTabWidth })
         : t("status_bar.tab_width_spaces_short", { width: effectiveTabWidth });
 
-    return (note.type === "code" &&
+    return (noteType === "code" &&
         <StatusBarDropdown
             icon="bx bx-right-indent"
             text={statusText}
@@ -544,13 +555,14 @@ function TabWidthSwitcher({ note, noteContext }: StatusBarContext) {
 //#region Code note switcher
 function CodeNoteSwitcher({ note }: StatusBarContext) {
     const [ modalShown, setModalShown ] = useState(false);
+    const noteType = useNoteProperty(note, "type");
     const currentNoteMime = useNoteProperty(note, "mime");
-    const mimeTypes = useMimeTypes();
+    const { enabledMimeTypes, allMimeTypes } = useMimeTypes();
     const correspondingMimeType = useMemo(() => (
-        mimeTypes.find(m => m.mime === currentNoteMime)
-    ), [ mimeTypes, currentNoteMime ]);
+        allMimeTypes.find(m => m.mime === currentNoteMime)
+    ), [ allMimeTypes, currentNoteMime ]);
 
-    return (note.type === "code" &&
+    return (noteType === "code" &&
         <>
             <StatusBarDropdown
                 icon={correspondingMimeType?.icon ?? "bx bx-code-curly"}
@@ -560,7 +572,7 @@ function CodeNoteSwitcher({ note }: StatusBarContext) {
             >
                 <NoteTypeCodeNoteList
                     currentMimeType={currentNoteMime}
-                    mimeTypes={mimeTypes}
+                    mimeTypes={enabledMimeTypes}
                     changeNoteType={(type, mime) => server.put(`notes/${note.noteId}/type`, { type, mime })}
                     setModalShown={() => setModalShown(true)}
                 />

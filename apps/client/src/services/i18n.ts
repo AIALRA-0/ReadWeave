@@ -8,6 +8,12 @@ import { initReactI18next } from "react-i18next";
  */
 export const translationsInitializedPromise = $.Deferred();
 
+function getTranslationLoadPath() {
+    const clientBundleUrl = document.querySelector<HTMLScriptElement>('script[type="module"][src*="/src/index-"]')?.src;
+    const clientBuild = clientBundleUrl?.split("/").at(-1) ?? "development";
+    return `${window.glob.assetPath}/translations/{{lng}}/{{ns}}.json?client=${encodeURIComponent(clientBuild)}`;
+}
+
 export async function initLocale(locale: LOCALE_IDS = "en") {
 
     i18next.use(initReactI18next);
@@ -15,7 +21,7 @@ export async function initLocale(locale: LOCALE_IDS = "en") {
         lng: locale,
         fallbackLng: "en",
         backend: {
-            loadPath: `${window.glob.assetPath}/translations/{{lng}}/{{ns}}.json`
+            loadPath: getTranslationLoadPath()
         },
         returnEmptyString: false
     });

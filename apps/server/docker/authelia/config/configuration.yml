@@ -1,0 +1,80 @@
+# Minimal Authelia config for testing Trilium's OpenID Connect (OIDC) login.
+#
+# DEV ONLY. Run generate-dev-secrets.sh or generate-dev-secrets.ps1 before starting
+# the container. Generated credentials and certificates stay outside Git.
+#
+# This config deliberately reproduces https://github.com/TriliumNext/Trilium/issues/6387:
+# a spec-compliant provider only returns `name`/`email` from the UserInfo endpoint, NOT in
+# the ID token. To test the Authelia-side workaround instead, uncomment the `claims_policies`
+# block at the bottom and the `claims_policy:` line on the client.
+
+theme: "light"
+
+server:
+  address: "tcp://0.0.0.0:9091"
+  tls:
+    certificate: "/config/certs/public.crt"
+    key: "/config/certs/private.key"
+
+log:
+  level: "info"
+
+identity_validation:
+  reset_password:
+    jwt_secret: '{{ secret "/config/secrets/reset_jwt_secret" }}'
+
+# Single test user. Replace the example account before using this setup outside localhost.
+authentication_backend:
+  file:
+    path: "/config/users_database.yml"
+
+access_control:
+  default_policy: "one_factor"
+
+session:
+  secret: '{{ secret "/config/secrets/session_secret" }}'
+  cookies:
+    - domain: "example.com"
+      authelia_url: "https://auth.example.com:9091"
+
+storage:
+  encryption_key: '{{ secret "/config/secrets/storage_encryption_key" }}'
+  local:
+    path: "/data/db.sqlite3"
+
+notifier:
+  filesystem:
+    filename: "/data/notification.txt"
+
+identity_providers:
+  oidc:
+    hmac_secret: '{{ secret "/config/secrets/oidc_hmac_secret" }}'
+    jwks:
+      - key_id: "main"
+        algorithm: "RS256"
+        use: "sig"
+        # prettier-ignore
+        key: {{ secret "/config/secrets/oidc_jwks_private.pem" | mindent 10 "|" | msquote }}
+    clients:
+      - client_id: "trilium"
+        client_name: "Trilium"
+        client_secret: '{{ secret "/config/secrets/oidc_client_secret" }}'
+        public: false
+        authorization_policy: "one_factor"
+        require_pkce: false
+        redirect_uris:
+          - "http://localhost:8080/callback"
+        scopes:
+          - "openid"
+          - "profile"
+          - "email"
+        token_endpoint_auth_method: "client_secret_basic"
+
+        # --- WORKAROUND (issue #6387) ---------------------------------------
+        # Uncomment the next line AND the claims_policies block below to force
+        # name/email into the ID token, sidestepping the missing-claims bug.
+        # claims_policy: 'trilium'
+
+    # claims_policies:
+    #   trilium:
+    #     id_token: ['email', 'name']
