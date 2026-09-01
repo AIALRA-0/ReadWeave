@@ -124,7 +124,7 @@ describe("ReadWeave unified evidence workflow", () => {
 
     afterEach(() => vi.unstubAllGlobals());
 
-    it("uses the temperature required by Kimi Code without changing the writer", async () => {
+    it("uses the request shape required by Kimi Code without changing the writer", async () => {
         verifierConfig.current = {
             baseUrl: "https://api.kimi.com/coding/v1",
             model: "kimi-for-coding",
@@ -136,10 +136,17 @@ describe("ReadWeave unified evidence workflow", () => {
 
         const calls = vi.mocked(fetch).mock.calls.map(([ input, init ]) => ({
             url: String(input),
-            payload: JSON.parse(String(init?.body)) as { temperature: number }
+            payload: JSON.parse(String(init?.body)) as {
+                temperature: number;
+                max_tokens: number;
+                response_format?: { type: string };
+            }
         }));
-        expect(calls.filter(call => call.url.startsWith("https://api.kimi.com/"))).not.toHaveLength(0);
-        expect(calls.filter(call => call.url.startsWith("https://api.kimi.com/")).every(call => call.payload.temperature === 1)).toBe(true);
+        const kimiCalls = calls.filter(call => call.url.startsWith("https://api.kimi.com/"));
+        expect(kimiCalls).not.toHaveLength(0);
+        expect(kimiCalls.every(call => call.payload.temperature === 1)).toBe(true);
+        expect(kimiCalls.every(call => call.payload.max_tokens >= 4_096)).toBe(true);
+        expect(kimiCalls.every(call => call.payload.response_format?.type === "json_object")).toBe(true);
         expect(calls.filter(call => call.url.startsWith("https://api.deepseek.com/")).every(call => call.payload.temperature === 0)).toBe(true);
     });
 

@@ -160,6 +160,8 @@ async function requestJson<T>(
     const providerHost = new URL(config.baseUrl).hostname;
     const isDeepSeek = /(^|\.)deepseek\.com$/iu.test(providerHost);
     const isKimiCode = providerHost === "api.kimi.com";
+    const effectiveMaxTokens = isKimiCode ? Math.max(maxTokens, 4_096) : maxTokens;
+    const effectiveTimeoutMs = isKimiCode ? Math.max(timeoutMs, 30_000) : timeoutMs;
     let lastError: unknown;
     // Each background job already retries the complete workflow. Retrying one
     // internal model stage four times made a single stalled request occupy the
@@ -179,17 +181,17 @@ async function requestJson<T>(
                     model: config.model,
                     stream: false,
                     temperature: isKimiCode ? 1 : 0,
-                    max_tokens: maxTokens,
-                    ...(isDeepSeek ? {
+                    max_tokens: effectiveMaxTokens,
+                    ...(isDeepSeek || isKimiCode ? {
                         response_format: { type: "json_object" },
-                        ...(/^deepseek-v4(?:-|$)/iu.test(config.model) ? { thinking: { type: "disabled" } } : {})
+                        ...(isDeepSeek && /^deepseek-v4(?:-|$)/iu.test(config.model) ? { thinking: { type: "disabled" } } : {})
                     } : {}),
                     messages: [
                         { role: "system", content: system },
                         { role: "user", content: user }
                     ]
                 }),
-                signal: signal ? AbortSignal.any([ signal, AbortSignal.timeout(timeoutMs) ]) : AbortSignal.timeout(timeoutMs)
+                signal: signal ? AbortSignal.any([ signal, AbortSignal.timeout(effectiveTimeoutMs) ]) : AbortSignal.timeout(effectiveTimeoutMs)
             });
             const payload = await response.json() as CompletionResponse;
             if (!response.ok) throw new Error(`模型服务返回 ${response.status}：${payload.error?.message || "未知错误"}`);
