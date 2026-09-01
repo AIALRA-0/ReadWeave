@@ -11,7 +11,7 @@ const repositoryRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"]
 }).trim();
-const baseline = process.env.READWEAVE_PRIVACY_BASELINE || "v0.103.0";
+const baseline = process.env.READWEAVE_PRIVACY_BASELINE || "v0.104.0";
 
 const forbiddenFilePatterns = [
     /(^|\/)\.env($|\.)/i,
@@ -31,7 +31,7 @@ const secretPatterns = [
     ["Bearer 凭据", /\bAuthorization\s*:\s*Bearer\s+(?!\$|<|\{|example|placeholder|redacted)[A-Za-z0-9._~+/=-]{12,}/gi]
 ];
 
-const assignmentPattern = /\b(api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd)\b\s*[:=]\s*["']?([^\s,"'};]+)/gi;
+const assignmentPattern = /\b(api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd)\b\s*[:=]\s*(["'])([^"'\r\n]+)\2/gi;
 const emailPattern = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 const windowsUserPathPattern = /[A-Za-z]:[\\/]Users[\\/][^\\/\s"'<>]+/gi;
 const unixUserPathPattern = /\/(?:Users|home)\/([^/\s"'<>]+)/gi;
@@ -123,7 +123,7 @@ function scanContent(file, content) {
 
         assignmentPattern.lastIndex = 0;
         for (const match of line.matchAll(assignmentPattern)) {
-            if (!placeholderValue.test(match[2])) {
+            if (!placeholderValue.test(match[3])) {
                 findings.push({ file, line: lineNumber, reason: `疑似真实凭据赋值：${match[1]}` });
             }
         }

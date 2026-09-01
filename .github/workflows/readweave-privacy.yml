@@ -18,7 +18,7 @@ jobs:
           fetch-depth: 0
 
       - name: Fetch the official Trilium baseline
-        run: git fetch --no-tags --depth=1 https://github.com/TriliumNext/Trilium.git refs/tags/v0.103.0:refs/tags/v0.103.0
+        run: git fetch --no-tags --depth=1 https://github.com/TriliumNext/Trilium.git refs/tags/v0.104.0:refs/tags/v0.104.0
 
       - name: Set up Node.js
         uses: actions/setup-node@v6

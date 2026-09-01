@@ -1,4 +1,5 @@
 # Premium features
+
 The text editor we are using for <a class="reference-link" href="../Text.md">Text</a> notes is called CKEditor and it's a commercial product. The core components are open-source, however they [offer quite a few features](https://ckeditor.com/docs/trial/latest/index.html) that require a commercial license in order to be used.
 
 We have reached out to the CKEditor team in order to obtain a license in order to have some of these extra features and they have agreed, based on a signed agreement.
@@ -11,4 +12,4 @@ The license key is stored in the application and it enables the use of the previ
 
 At this moment there is no way to disable these features, apart from manually modifying the source code. If this is a problem, [let us know](../../Troubleshooting/Reporting%20issues.md).
 
-If you have the possibility of rebuilding the source code (e.g. if a package maintainer), then modify `VITE_CKEDITOR_KEY` in `apps/client/.env` to be `GPL`.
+If you have the possibility of rebuilding the source code (e.g. if a package maintainer), copy `apps/client/.env.example` to `apps/client/.env` and set `VITE_CKEDITOR_KEY=GPL` in the local `.env` file. The local file is ignored by Git.

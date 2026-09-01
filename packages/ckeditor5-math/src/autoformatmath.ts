@@ -44,8 +44,9 @@ export default class AutoformatMath extends Plugin {
 				);
 			};
 
-			// @ts-expect-error: blockAutoformatEditing expects an Autoformat instance even though it works with any Plugin instance
-			blockAutoformatEditing( editor, this, /^\$\$$/, callback );
+			// Do not register the legacy "$$" line-prefix shortcut here. It fires as soon as
+			// the second dollar is typed and prevents AutoMath from receiving a complete
+			// "$$...$$" expression with the equation prefilled.
 			// @ts-expect-error: blockAutoformatEditing expects an Autoformat instance even though it works with any Plugin instance
 			blockAutoformatEditing( editor, this, /^\\\[$/, callback );
 		}

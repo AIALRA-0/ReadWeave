@@ -86,7 +86,7 @@
   "generator": {
     "name": "ReadWeave",
     "version": "0.1.0",
-    "triliumVersion": "0.103.0",
+    "triliumVersion": "0.104.0",
     "workflowVersion": "context-v1"
   },
   "scope": {

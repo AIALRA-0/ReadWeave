@@ -290,7 +290,7 @@
 
 ## 10. 依赖与假设
 
-- 使用 TriliumNext v0.103.0 作为当前源代码基线；开发开始前再次确认是否已有更新稳定版。
+- 当前源代码基线为 TriliumNext v0.104.0；升级上游版本必须单独完成数据库、同步、备份和回滚兼容性验收。
 - 首批样本来自 AMD Vivado、RFC、RISC-V、arXiv、Trilium 与中文 Python 官方资料，全部在隔离 Web/Server 数据目录验证。
 - DeepSeek API 可用；已暴露密钥不使用，轮换后的新密钥只通过服务端 secret/env 注入。
 - Trilium Anchor/relations/隐藏 JSON note 可支撑 ID 连接原型；最终需要段落 hover/anchor 插件，而不是常驻问答卡片插件。

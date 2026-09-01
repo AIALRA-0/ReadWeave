@@ -8,23 +8,23 @@
 [![Privacy Gate](https://github.com/AIALRA-0/ReadWeave/actions/workflows/readweave-privacy.yml/badge.svg)](https://github.com/AIALRA-0/ReadWeave/actions/workflows/readweave-privacy.yml)
 [![CodeQL](https://github.com/AIALRA-0/ReadWeave/actions/workflows/codeql.yml/badge.svg)](https://github.com/AIALRA-0/ReadWeave/actions/workflows/codeql.yml)
 [![ReadWeave](https://img.shields.io/badge/ReadWeave-0.1.0-60A5FA)](docs/readlayer/10-IMPLEMENTATION-STATUS.md)
-[![TriliumNext](https://img.shields.io/badge/TriliumNext-0.103.0-2DD4BF)](docs/readlayer/research/UPSTREAM-BASELINE.md)
+[![TriliumNext](https://img.shields.io/badge/TriliumNext-0.104.0-2DD4BF)](docs/readlayer/research/UPSTREAM-BASELINE.md)
 [![License](https://img.shields.io/badge/License-AGPL--3.0--only-C084FC)](LICENSE)
 
 [English](README.en.md) · [核心闭环](#3-核心闭环) · [系统结构](#5-系统结构) · [本地验证](#11-本地验证) · [实现状态](docs/readlayer/10-IMPLEMENTATION-STATUS.md)
 </div>
 
 <div align="center">
-  <sub>图 1　段落锚点、会话草稿和可复用知识对象之间的织读主链路</sub>
+  <sub>图 1　段落锚点、持久审核草稿和可复用知识对象之间的织读主链路</sub>
 </div>
 
 ## 1 项目定位
 
-ReadWeave 是基于 TriliumNext `v0.103.0` 的 Web 优先个人阅读工作流修改版，不是 TriliumNext 官方发行版 [1][2]
+ReadWeave 是基于 TriliumNext `v0.104.0` 的 Web 优先个人阅读工作流修改版，不是 TriliumNext 官方发行版 [1][2]
 
 用户在 Trilium Web 中阅读，选择完整段落并主动提出一个问题或术语
 
-系统选择最小充分上下文并调用联网模型，同时保留会话草稿等待人工审核，确认后的内容会保存为由稳定标识符连接的知识对象
+系统选择最小充分上下文并调用联网模型，同时把生成任务和待审核草稿持久化到服务端；只有用户显式确认后，内容才会保存为由稳定标识符连接的知识对象
 
 ReadWeave 不预先猜测问题，也不根据行为自动学习偏好，人始终决定问什么、何时问、是否保存、是否复用和怎样修改 [3]
 
@@ -53,7 +53,7 @@ flowchart TB
     Select --> Ask[提出一个问题或术语]
     Ask --> Context[选择最小充分上下文]
     Context --> Provider[服务端调用联网模型]
-    Provider --> Draft[答案进入当前标签页草稿]
+    Provider --> Draft[答案进入服务端持久审核草稿]
     Draft --> Review{用户审核}
     Review -->|保存| Candidate[检查相似知识对象]
     Candidate --> Choice{复用、新建或本文变体}
@@ -62,7 +62,7 @@ flowchart TB
     Review -->|暂不保存| Draft
 ```
 
-图 3.1　主动提问、会话草稿、人工审核和稳定连接流程
+图 3.1　主动提问、持久草稿、人工审核和稳定连接流程
 
 </div>
 
@@ -75,7 +75,7 @@ flowchart TB
 | 1 | 悬停并点击文本段落 | 选择完整段落并持久化稳定锚点 |
 | 2 | 输入一个问题或术语 | 每次生成保持单问单答，不建立多轮聊天 |
 | 3 | 请求回答 | 按确定性预算选择最小充分上下文，模型只在服务端调用 |
-| 4 | 阅读或编辑草稿 | 未审核答案只保留在当前浏览器会话，不写入知识库 |
+| 4 | 阅读或编辑草稿 | 草稿以 `ready-for-review` 状态持久化并可在重启后恢复，但不进入规范知识对象 |
 | 5 | 查看相似候选 | 突出可复用对象，同时始终允许新建和本文变体 |
 | 6 | 确认保存 | 创建规范对象和锚点连接，标题不充当外键 |
 | 7 | 修改或导出 | 先预览影响范围，再全局修改、创建变体、只改显示或导出索引 |
@@ -91,7 +91,7 @@ flowchart TB
 | 原则 | 当前选择 | 为什么重要 |
 | --- | --- | --- |
 | 人主动提问 | 不自动批量生成用户可能问的问题 | 保留阅读判断和学习主动性 |
-| 审核后保存 | 生成内容先进入 `sessionStorage` 草稿 | 模型不能直接污染正式知识库 |
+| 审核后保存 | 生成任务按 `ready-for-review → saving → saved` 流转，必须显式提交 | 模型不能直接污染正式知识库 |
 | 标识符连接 | 文章锚点只保存不可变对象标识符 | 标题重命名、同名对象和全局更新保持可靠 |
 | Trilium 为真相源 | 笔记、关系、修订、权限和备份留在 Trilium | 派生相似索引可以删除并重建 |
 | 显式偏好 | 用户设置只能由用户明确修改 | 相同状态和设置保持确定性工作流 |
@@ -115,7 +115,7 @@ flowchart TB
     API --> Domain[知识对象领域服务]
     Domain --> Truth[Trilium 笔记、属性、关系与修订]
     Domain --> Derived[可重建的相似候选索引]
-    Panel --> Draft[当前标签页 sessionStorage 草稿]
+    API --> Draft[服务端持久生成任务与审核草稿]
     Truth --> Backup[Trilium 原生备份]
     Truth --> Export[独立 JSON 索引导出]
 ```
@@ -124,7 +124,7 @@ flowchart TB
 
 </div>
 
-浏览器只能调用 ReadWeave 服务端接口，不能获得模型密钥，正式知识只存在于 Trilium 真相数据，草稿不参与相似搜索、全局引用、备份承诺或索引导出 [4]
+浏览器只能调用 ReadWeave 服务端接口，不能获得模型密钥；正式知识只存在于 Trilium 真相数据。持久草稿可以跨重启恢复，但在显式提交前不参与相似搜索、全局引用或索引导出 [4]
 
 ## 6 数据模型
 
@@ -138,7 +138,7 @@ flowchart TB
 | 段落锚点 | `anchorId` | CKEditor 模型中的持久属性 | 创建后稳定，段落序号和文本哈希不是主键 |
 | 知识对象 | `objectId` | Trilium 隐藏对象子树 | 一个已审核问答或一个术语定义 |
 | 文章连接 | `linkId` | Trilium 隐藏连接子树 | 唯一关联文章、锚点和对象 |
-| 会话草稿 | `articleId + anchorId` | 当前标签页 `sessionStorage` | 未审核、可恢复但不承诺永久保存 |
+| 生成任务与审核草稿 | `jobId + draftId` | ReadWeave 服务端数据库 | 保存状态版本、活动尝试、进度和结果；显式提交前不是规范知识 |
 | 相似候选 | 派生索引键 | 可重建索引 | 只用于发现候选，不是真相源 |
 
 </div>
@@ -210,7 +210,7 @@ ReadWeave 保留 TriliumNext 的个人知识库基础能力，详细上游说明
 
 ## 11 本地验证
 
-仓库固定 Node.js `24.15.0`、pnpm `10.33.4` 和 TriliumNext `0.103.0` [8]
+仓库固定 Node.js `24.18.0`、pnpm `11.11.0` 和 TriliumNext `0.104.0` [8]
 
 ```bash
 corepack enable # 启用仓库声明的 pnpm 版本
@@ -226,7 +226,7 @@ ReadWeave 定向检查如下
 pnpm run readweave:privacy # 扫描相对上游基线的全部 ReadWeave 改动
 pnpm run --filter server test # 运行服务端领域与存储测试
 pnpm run --filter client test # 运行客户端测试
-pnpm run --filter server-e2e test # 在匿名隔离数据库中运行浏览器端到端测试
+pnpm run --filter server e2e # 在匿名隔离数据库中运行浏览器端到端测试
 pnpm client:build # 生成客户端生产构建
 pnpm server:build # 生成服务端生产构建
 ```
@@ -279,7 +279,7 @@ pnpm server:build # 生成服务端生产构建
 | [`apps/server/src/services/readweave_engine.ts`](apps/server/src/services/readweave_engine.ts) | 确定性上下文预算和相似标题候选 |
 | [`apps/server/src/services/readweave_repository.ts`](apps/server/src/services/readweave_repository.ts) | 权限、对象、连接、影响范围、变体和导出 |
 | [`apps/server/src/services/readweave_ai.ts`](apps/server/src/services/readweave_ai.ts) | 服务端联网模型适配和匿名测试替身 |
-| [`apps/server-e2e/src/readweave.spec.ts`](apps/server-e2e/src/readweave.spec.ts) | 审核、复用、修改传播和导出浏览器回归 |
+| [`apps/server/e2e/readweave.spec.ts`](apps/server/e2e/readweave.spec.ts) | 审核、复用、修改传播和导出浏览器回归 |
 | [`docs/readlayer`](docs/readlayer) | 产品需求、交互、架构、风险、追溯和发布证据 |
 | [`scripts/readweave`](scripts/readweave) | 隐私扫描和 Git 钩子安装 |
 

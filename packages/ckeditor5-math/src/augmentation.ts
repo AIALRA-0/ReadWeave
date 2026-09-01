@@ -30,6 +30,7 @@ declare module 'ckeditor5' {
 			previewClassName?: Array<string> | undefined;
 			popupClassName?: Array<string> | undefined;
 			katexRenderOptions?: Partial<KatexOptions> | undefined;
+			keystroke?: string | undefined;
 		};
 	}
 }

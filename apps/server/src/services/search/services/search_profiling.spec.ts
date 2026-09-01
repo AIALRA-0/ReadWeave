@@ -12,15 +12,12 @@
  * - These tests focus on the in-memory/CPU-bound parts of the pipeline
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import searchService from "./search.js";
-import BNote from "../../../becca/entities/bnote.js";
-import BBranch from "../../../becca/entities/bbranch.js";
-import SearchContext from "../search_context.js";
-import becca from "../../../becca/becca.js";
-import beccaService from "../../../becca/becca_service.js";
-import { NoteBuilder, note, id } from "../../../test/becca_mocking.js";
-import SearchResult from "../search_result.js";
-import { normalizeSearchText } from "../utils/text_utils.js";
+import { becca, becca_service as beccaService, BNote, BBranch, search as searchService, SearchContext, becca_mocking } from "@triliumnext/core";
+import SearchResult from "@triliumnext/core/src/services/search/search_result.js";
+import { normalizeSearchText } from "@triliumnext/core/src/services/search/utils/text_utils.js";
+
+const { NoteBuilder, note } = becca_mocking;
+type NoteBuilder = InstanceType<typeof NoteBuilder>;
 
 // ── helpers ──────────────────────────────────────────────────────────
 
@@ -182,7 +179,12 @@ function buildDataset(noteCount: number, opts: {
 
 // ── profiling tests ──────────────────────────────────────────────────
 
-describe("Search Profiling", () => {
+// These are diagnostic benchmarks (they just log timings), not correctness
+// tests. They build datasets up to 20k notes and are CPU-bound, so under the
+// parallel `forks` pool they contend for cores and blow past the test timeout.
+// Gate them behind an env var so they never flake CI; run on demand with
+// `RUN_SEARCH_PROFILING=1`.
+describe.runIf(process.env.RUN_SEARCH_PROFILING)("Search Profiling", () => {
 
     afterEach(() => {
         becca.reset();

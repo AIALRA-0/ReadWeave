@@ -14,6 +14,7 @@ export default defineConfig( {
 	test: {
 		browser: {
 			enabled: true,
+			api: { host: '127.0.0.1', port: 15151, strictPort: true },
 			provider: webdriverio(),
 			headless: true,
 			ui: false,
@@ -34,10 +35,10 @@ export default defineConfig( {
 				branches: 100,
 				statements: 100
 			},
-			provider: 'istanbul',
-			include: [
-				'src'
-			]
+			provider: 'v8',
+			include: [ 'src/**/*.{ts,tsx}' ],
+			exclude: [ '**/*.{test,spec}.{ts,mts,cts,tsx,js,jsx}', '**/*.d.ts' ],
+			reporter: [ 'text' ]
 		}
 	}
 } );

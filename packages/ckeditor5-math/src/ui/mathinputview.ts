@@ -251,7 +251,12 @@ export default class MathInputView extends View {
 	}
 
 	public focus(): void {
-		this.mathfield?.focus();
+		if ( this.mathfield ) {
+			this.mathfield.focus();
+		}
+		if ( document.activeElement !== this.mathfield ) {
+			this.latexTextAreaView.focus();
+		}
 	}
 
 	public override destroy(): void {

@@ -229,16 +229,16 @@ describe( 'MathUI', () => {
 		} );
 
 		describe( 'keyboard support', () => {
-			it( 'should show the UI on Ctrl+M keystroke', () => {
+			it( 'should show the UI on Alt+= keystroke', () => {
 				const spy = vi.spyOn( mathUIFeature, '_showUI' ).mockReturnValue( );
 				const command = editor.commands.get( 'math' )!;
 
 				command.isEnabled = false;
 
 				const keydata = {
-					keyCode: keyCodes.m,
-					ctrlKey: true,
-					altKey: false,
+					keyCode: 187,
+					ctrlKey: false,
+					altKey: true,
 					shiftKey: false,
 					metaKey: false,
 					preventDefault: vi.fn(),
@@ -255,16 +255,16 @@ describe( 'MathUI', () => {
 				expect(spy).toHaveBeenCalled();
 			} );
 
-			it( 'should prevent default action on Ctrl+M keystroke', () => {
+			it( 'should prevent default action on Alt+= keystroke', () => {
 				const preventDefaultSpy = vi.fn();
 				const stopPropagationSpy = vi.fn();
 
 				const keyEvtData = {
-					altKey: false,
-					ctrlKey: true,
+					altKey: true,
+					ctrlKey: false,
 					shiftKey: false,
 					metaKey: false,
-					keyCode: keyCodes.m,
+					keyCode: 187,
 					preventDefault: preventDefaultSpy,
 					stopPropagation: stopPropagationSpy
 				};
@@ -275,7 +275,7 @@ describe( 'MathUI', () => {
 				expect(stopPropagationSpy).toHaveBeenCalledOnce();
 			} );
 
-			it( 'should make stack with math visible on Ctrl+M keystroke - no math', () => {
+			it( 'should make stack with math visible on Alt+= keystroke - no math', () => {
 				const command = editor.commands.get( 'math' )!;
 
 				command.isEnabled = true;
@@ -286,9 +286,9 @@ describe( 'MathUI', () => {
 				} );
 
 				const keyEvtData = {
-					keyCode: keyCodes.m,
-					ctrlKey: true,
-					altKey: false,
+					keyCode: 187,
+					ctrlKey: false,
+					altKey: true,
 					shiftKey: false,
 					metaKey: false,
 					preventDefault: vi.fn(),
@@ -300,7 +300,7 @@ describe( 'MathUI', () => {
 				expect( balloon.visibleView ).to.equal( formView );
 			} );
 
-			it( 'should make stack with math visible on Ctrl+M keystroke - math', () => {
+			it( 'should make stack with math visible on Alt+= keystroke - math', () => {
 				setModelData( editor.model, '<paragraph><$text equation="x^2">f[]oo</$text></paragraph>' );
 
 				const customView = new View();
@@ -313,9 +313,9 @@ describe( 'MathUI', () => {
 				expect( balloon.visibleView ).to.equal( customView );
 
 				editor.keystrokes.press( {
-					keyCode: keyCodes.m,
-					ctrlKey: true,
-					altKey: false,
+					keyCode: 187,
+					ctrlKey: false,
+					altKey: true,
 					shiftKey: false,
 					metaKey: false,
 					// @ts-expect-error - preventDefault

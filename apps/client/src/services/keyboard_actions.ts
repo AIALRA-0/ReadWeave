@@ -1,12 +1,17 @@
 import server from "./server.js";
 import appContext from "../components/app_context.js";
+import { formatShortcut, joinShortcut } from "./keyboard_shortcut_display.js";
 import shortcutService, { ShortcutBinding } from "./shortcuts.js";
 import type Component from "../components/component.js";
 import type { ActionKeyboardShortcut } from "@triliumnext/commons";
+import { isAuthenticatedAppReady } from "./startup_state.js";
 
 const keyboardActionRepo: Record<string, ActionKeyboardShortcut> = {};
 
-const keyboardActionsLoaded = server.get<ActionKeyboardShortcut[]>("keyboard-actions").then((actions) => {
+const keyboardActionsRequest = isAuthenticatedAppReady()
+    ? server.get<ActionKeyboardShortcut[]>("keyboard-actions")
+    : Promise.resolve([] as ActionKeyboardShortcut[]);
+const keyboardActionsLoaded = keyboardActionsRequest.then((actions) => {
     actions = actions.filter((a) => !!a.actionName); // filter out separators
 
     for (const action of actions) {
@@ -50,6 +55,7 @@ async function setupActionsForElement(scope: string, $el: JQuery<HTMLElement>, c
 
 getActionsForScope("window").then((actions) => {
     for (const action of actions) {
+        /* v8 ignore next -- effectiveShortcuts is always normalized to an array by the loader (line 13) before this resolves, so the ?? [] fallback is unreachable */
         for (const shortcut of action.effectiveShortcuts ?? []) {
             shortcutService.bindGlobalShortcut(shortcut, () => appContext.triggerCommand(action.actionName, { ntxId: appContext.tabManager.activeNtxId }));
         }
@@ -77,46 +83,46 @@ export function getActionSync(actionName: string) {
 }
 
 function updateDisplayedShortcuts($container: JQuery<HTMLElement>) {
-    //@ts-ignore
-    //TODO: each() does not support async callbacks.
-    $container.find("kbd[data-command]").each(async (i, el) => {
-        const actionName = $(el).attr("data-command");
-        if (!actionName) {
-            return;
-        }
-
-        const action = await getAction(actionName, true);
-
-        if (action) {
-            const keyboardActions = (action.effectiveShortcuts ?? []).join(", ");
-
-            if (keyboardActions || $(el).text() !== "not set") {
-                $(el).text(keyboardActions);
-            }
-        }
-    });
-
-    //@ts-ignore
-    //TODO: each() does not support async callbacks.
-    $container.find("[data-trigger-command]").each(async (i, el) => {
-        const actionName = $(el).attr("data-trigger-command");
-        if (!actionName) {
-            return;
-        }
-        const action = await getAction(actionName, true);
-
-        if (action) {
-            const title = $(el).attr("title");
-            const shortcuts = (action.effectiveShortcuts ?? []).join(", ");
-
-            if (title?.includes(shortcuts)) {
+    $container.find("kbd[data-command]").each((_i, el) => {
+        void (async () => {
+            const actionName = $(el).attr("data-command");
+            if (!actionName) {
                 return;
             }
 
-            const newTitle = !title?.trim() ? shortcuts : `${title} (${shortcuts})`;
+            const action = await getAction(actionName, true);
 
-            $(el).attr("title", newTitle);
-        }
+            if (action) {
+                const keyboardActions = formatShortcutList(action.effectiveShortcuts);
+
+                if (keyboardActions || $(el).text() !== "not set") {
+                    $(el).text(keyboardActions);
+                }
+            }
+        })();
+    });
+
+    $container.find("[data-trigger-command]").each((_i, el) => {
+        void (async () => {
+            const actionName = $(el).attr("data-trigger-command");
+            if (!actionName) {
+                return;
+            }
+            const action = await getAction(actionName, true);
+
+            if (action) {
+                const title = $(el).attr("title");
+                const shortcuts = formatShortcutList(action.effectiveShortcuts);
+
+                if (title?.includes(shortcuts)) {
+                    return;
+                }
+
+                const newTitle = !title?.trim() ? shortcuts : `${title} (${shortcuts})`;
+
+                $(el).attr("title", newTitle);
+            }
+        })();
     });
 }
 
@@ -127,3 +133,8 @@ export default {
     getActions,
     getActionsForScope
 };
+
+/** Renders a list of stored shortcuts into a localized, comma-separated display string. */
+function formatShortcutList(shortcuts: string[] | undefined) {
+    return (shortcuts ?? []).map((shortcut) => joinShortcut(formatShortcut(shortcut))).join(", ");
+}
