@@ -1,7 +1,7 @@
 import type { ReadWeaveGenerateRequest } from "@triliumnext/commons";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { searchMock, defaultSearchImplementation } = vi.hoisted(() => {
+const { searchMock, defaultSearchImplementation, verifierConfig } = vi.hoisted(() => {
     const defaultSearchImplementation = async (options: { query: string }) => ({
         used: true,
         query: options.query,
@@ -20,7 +20,17 @@ const { searchMock, defaultSearchImplementation } = vi.hoisted(() => {
         cacheHit: false,
         searchCostCny: 0
     });
-    return { defaultSearchImplementation, searchMock: vi.fn(defaultSearchImplementation) };
+    return {
+        defaultSearchImplementation,
+        searchMock: vi.fn(defaultSearchImplementation),
+        verifierConfig: {
+            current: {
+                baseUrl: "https://independent-verifier.example.com",
+                model: "independent-verifier",
+                apiKey: "placeholder"
+            }
+        }
+    };
 });
 
 vi.mock("./readweave_search.js", () => ({ searchReadWeaveEvidence: searchMock }));
@@ -30,11 +40,7 @@ vi.mock("./readweave_settings.js", () => ({
         model: "deepseek-v4-flash",
         apiKey: "placeholder"
     }),
-    getReadWeaveVerifierRuntimeConfig: () => ({
-        baseUrl: "https://independent-verifier.example.com",
-        model: "independent-verifier",
-        apiKey: "placeholder"
-    })
+    getReadWeaveVerifierRuntimeConfig: () => verifierConfig.current
 }));
 
 import {
@@ -108,10 +114,34 @@ describe("ReadWeave unified evidence workflow", () => {
     beforeEach(() => {
         searchMock.mockReset();
         searchMock.mockImplementation(defaultSearchImplementation);
+        verifierConfig.current = {
+            baseUrl: "https://independent-verifier.example.com",
+            model: "independent-verifier",
+            apiKey: "placeholder"
+        };
         installModel();
     });
 
     afterEach(() => vi.unstubAllGlobals());
+
+    it("uses the temperature required by Kimi Code without changing the writer", async () => {
+        verifierConfig.current = {
+            baseUrl: "https://api.kimi.com/coding/v1",
+            model: "kimi-for-coding",
+            apiKey: "placeholder"
+        };
+        installModel();
+
+        await generateUnifiedReadWeaveAnswer(request("Moongon Jung 是谁？"));
+
+        const calls = vi.mocked(fetch).mock.calls.map(([ input, init ]) => ({
+            url: String(input),
+            payload: JSON.parse(String(init?.body)) as { temperature: number }
+        }));
+        expect(calls.filter(call => call.url.startsWith("https://api.kimi.com/"))).not.toHaveLength(0);
+        expect(calls.filter(call => call.url.startsWith("https://api.kimi.com/")).every(call => call.payload.temperature === 1)).toBe(true);
+        expect(calls.filter(call => call.url.startsWith("https://api.deepseek.com/")).every(call => call.payload.temperature === 0)).toBe(true);
+    });
 
     it.each([
         [ "人物资料", "Moongon Jung 是谁？", "question" ],
