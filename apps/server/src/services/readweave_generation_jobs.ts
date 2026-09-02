@@ -644,11 +644,12 @@ function runJob(jobId: string) {
         for (let attempt = 1; attempt <= MAX_BACKGROUND_GENERATION_ATTEMPTS; attempt++) {
             try {
                 const result = await generateReadWeaveAnswer(request, progress => appendProgress(jobId, progress), controller.signal);
-                const unresolvedFormatIssues = (result.unresolvedIssues ?? result.reviewIssues ?? [])
-                    .filter(issue => categoryForIssue(issue) === "format");
-                if (unresolvedFormatIssues.length > 0) {
-                    throw new NonRetryableReadWeaveError(`ReadWeave 格式修复未闭环：${unresolvedFormatIssues.join("；")}`);
-                }
+                // A non-empty, structurally valid answer with review warnings is
+                // still a deliverable draft.  The unified workflow has already
+                // rejected empty, unparsable, unsafe and invariant-breaking
+                // results; format/evidence/semantic warnings belong in
+                // ready-for-review + provisional so the user can inspect and
+                // correct them instead of losing the draft as a paused job.
                 return result;
             } catch (error) {
                 latestError = error;
