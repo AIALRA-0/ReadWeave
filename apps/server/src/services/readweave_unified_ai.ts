@@ -2350,10 +2350,11 @@ function requestedBibliographicTitles(request: ReadWeaveGenerateRequest): string
         for (const match of value.matchAll(/(?:原文题名|论文题名|文章题名|论文标题|文章标题|title)\s*[：:]\s*([^。；;\n]{8,300})/giu)) candidates.push(match[1]);
     };
     addExplicitTitles(request.title);
-    for (const fragment of request.fragments) addExplicitTitles(fragment.text);
-
+    // A selection may stand in for the paper title only when the user's
+    // question explicitly refers to the selected/current paper. A bare
+    // “DOI” or a technical fragment must never be promoted to a paper title.
     const selected = request.fragments.find(fragment => fragment.role === "selected" && fragment.text.trim())?.text.trim();
-    if (selected
+    if (selected && /(?:这篇|该篇|指定|所选|当前)\s*(?:论文|文章)|论文题名|论文标题/iu.test(request.title)
         && selected.length >= 8
         && selected.length <= 300
         && selected.split(/\r?\n/u).length <= 2
@@ -2482,21 +2483,40 @@ function compactTermEvidenceIssues(
             const source = sourceById.get(sourceId);
             return source?.sourceType === "external" ? [ source ] : [];
         });
+    const citedLocal = claims.flatMap(claim => claim.sourceIds)
+        .flatMap(sourceId => {
+            const source = sourceById.get(sourceId);
+            return source?.sourceType === "local" ? [ source ] : [];
+        });
+    const localDirectlySupportsTerm = citedLocal.some(source => {
+        const text = `${source.title}\n${source.excerpt}`;
+        return candidates.some(candidate => new RegExp(`(?<![\\p{L}\\p{N}_.-])${escapeRegExp(candidate)}(?![\\p{L}\\p{N}_.-])`, "iu").test(text));
+    });
+    if (localDirectlySupportsTerm) return [];
     if (citedExternal.length === 0 && /^DAX$/iu.test(requested)) {
         return [ `术语 ${requested} 的定义只有文章选区支持，没有可核验的公开来源` ];
     }
     if (citedExternal.length === 0) return [];
 
     const formalEnglishName = termIdentity?.englishName?.trim();
-    const matched = citedExternal.some(source => {
-        const text = `${source.title}\n${source.excerpt}`;
-        const namesRequestedTerm = candidates.some(candidate => {
-            const pattern = new RegExp(`(?<![\\p{L}\\p{N}_.-])${escapeRegExp(candidate)}(?![\\p{L}\\p{N}_.-])`, "iu");
-            return pattern.test(text);
+    const unsupportedClaims = claims.filter(claim => {
+        const externalForClaim = claim.sourceIds.flatMap(sourceId => {
+            const source = sourceById.get(sourceId);
+            return source?.sourceType === "external" ? [ source ] : [];
         });
-        return namesRequestedTerm && (!formalEnglishName || new RegExp(escapeRegExp(formalEnglishName), "iu").test(text));
+        if (externalForClaim.length === 0) return false;
+        return !externalForClaim.some(source => {
+            const text = `${source.title}\n${source.excerpt}`;
+            const namesRequestedTerm = candidates.some(candidate => {
+                const pattern = new RegExp(`(?<![\\p{L}\\p{N}_.-])${escapeRegExp(candidate)}(?![\\p{L}\\p{N}_.-])`, "iu");
+                return pattern.test(text);
+            });
+            return namesRequestedTerm && (!formalEnglishName || new RegExp(escapeRegExp(formalEnglishName), "iu").test(text));
+        });
     });
-    return matched ? [] : [ `公开来源没有出现术语 ${requested} 或其正式英文全称，不能把这些来源标记为定义证据` ];
+    return unsupportedClaims.length === 0
+        ? []
+        : [ `公开来源没有出现术语 ${requested} 或其正式英文全称，不能把这些来源标记为定义证据` ];
 }
 
 function abbreviationFormattingIssues(

@@ -3,9 +3,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ${READWEAVE_IMAGE:-readweave:0.104.0-20260731}
+    image: ${READWEAVE_IMAGE:-readweave:0.104.1}
     container_name: readweave
     restart: unless-stopped
+    env_file:
+      - /srv/aialra/secrets/readweave-verifier.env
     ports:
       - "${READWEAVE_BIND:-127.0.0.1:11802}:8080"
     volumes:

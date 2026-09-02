@@ -184,6 +184,33 @@ describe("call / ajax success paths", () => {
 
         expect(seen).toEqual(["PUT", "PATCH", "DELETE"]);
     });
+
+    it("rejects an HTTP 200 login document before it reaches API callers", async () => {
+        const loginHtml = '<!doctype html><form id="login" action="/_aialra_auth/sign-in"></form>';
+        (window as any).$.ajax = (opts: AjaxOptions) => {
+            opts.success(loginHtml, "success", {
+                ...fakeJqXhr("Content-Type: text/html; charset=utf-8"),
+                responseURL: "https://readweave.example/_aialra_auth/sign-in"
+            });
+        };
+
+        await expect(server.get("tree")).rejects.toBe("Authentication is required");
+        expect(authenticationRecoveryMock.recoverExpiredAuthentication).toHaveBeenCalledTimes(1);
+        expect(toastMock.showErrorTitleAndMessage).not.toHaveBeenCalled();
+    });
+
+    it("does not mistake an ordinary raw note HTML response for a login document", async () => {
+        const articleHtml = "<p>正文包含一个普通 form 片段，但不是登录页。</p>";
+        (window as any).$.ajax = (opts: AjaxOptions) => {
+            opts.success(articleHtml, "success", {
+                ...fakeJqXhr("Content-Type: text/html; charset=utf-8"),
+                responseURL: "https://readweave.example/api/notes/article/data"
+            });
+        };
+
+        await expect(server.get("notes/article/data", undefined, true)).resolves.toBe(articleHtml);
+        expect(authenticationRecoveryMock.recoverExpiredAuthentication).not.toHaveBeenCalled();
+    });
 });
 
 describe("ajax error handling", () => {

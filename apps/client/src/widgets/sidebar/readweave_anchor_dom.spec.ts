@@ -12,6 +12,11 @@ import {
     rangesAreNestedOrDisjoint,
     readWeaveAnchorGroupRange,
     readWeaveAnchorIdsOf,
+    readWeaveRangeForSourceLocator,
+    readWeaveSourceLocatorForRange,
+    applyReadWeaveRuntimeRangeAnchor,
+    removeReadWeaveRuntimeRangeAnchors,
+    readWeaveLeafBlocks,
     releaseReadWeaveProvisionalAnchors,
     uniqueReadWeaveExcerptRange
 } from "./readweave_anchor_dom.js";
@@ -115,5 +120,40 @@ describe("ReadWeave nested DOM anchors", () => {
         root.insertAdjacentHTML("beforeend", "<p>重复的 BUFFALO 不应被猜测定位</p>");
         expect(uniqueReadWeaveExcerptRange(root, "p", "BUFFALO")).toBeUndefined();
         root.remove();
+    });
+
+    it("round-trips a read-only locator to the selected duplicate in its original block", () => {
+        const root = document.createElement("div");
+        root.dataset.readweaveContentRoot = "readonly";
+        root.innerHTML = "<p>第一段包含 CDC 和其他内容。</p><p>第二段也包含 CDC，但这里才是目标。</p>";
+        const block = readWeaveLeafBlocks(root, "p")[1];
+        const text = block.firstChild!;
+        const start = text.textContent!.indexOf("CDC");
+        const range = document.createRange();
+        range.setStart(text, start);
+        range.setEnd(text, start + 3);
+
+        const locator = readWeaveSourceLocatorForRange(root, block, range, "p");
+        expect(locator).toMatchObject({ version: 1, blockIndex: 1, startOffset: expect.any(Number), endOffset: expect.any(Number) });
+        const restored = readWeaveRangeForSourceLocator(root, "p", locator!, "CDC");
+        expect(restored?.toString()).toBe("CDC");
+        expect(block.contains(restored?.startContainer ?? null)).toBe(true);
+    });
+
+    it("marks read-only selections in runtime-only spans and unwraps them without changing text", () => {
+        const root = document.createElement("div");
+        root.innerHTML = "<p>只读正文中的目标片段。</p>";
+        const text = root.querySelector("p")!.firstChild!;
+        const range = document.createRange();
+        range.setStart(text, 7);
+        range.setEnd(text, 11);
+        const before = root.textContent;
+
+        applyReadWeaveRuntimeRangeAnchor(root, range, "runtime-anchor");
+        expect(root.querySelectorAll("[data-readweave-runtime-only='1']")).toHaveLength(1);
+        expect(root.textContent).toBe(before);
+        removeReadWeaveRuntimeRangeAnchors(root, "runtime-anchor");
+        expect(root.querySelector("[data-readweave-runtime-only='1']")).toBeNull();
+        expect(root.textContent).toBe(before);
     });
 });

@@ -120,6 +120,8 @@ export function useEditorSpacedUpdate({ note, noteType, noteContext, getData, on
     // across note switches, so until the new note's blob arrives the editor still holds the
     // previous note's content — content that must never be saved under the new noteId (#9614).
     const loadedNoteIdRef = useRef<string>();
+    const inFlightSubmissionRef = useRef<{ noteId: string; content: string }>();
+    const lastSuccessfulSubmissionRef = useRef<{ noteId: string; content: string }>();
 
     const prepare = useCallback(() => {
         if (!note || loadedNoteIdRef.current !== note.noteId) return undefined;
@@ -132,8 +134,22 @@ export function useEditorSpacedUpdate({ note, noteType, noteContext, getData, on
 
         protected_session_holder.touchProtectedSessionIfNecessary(note);
 
-        await server.put(`notes/${note.noteId}/data`, data, parentComponent?.componentId);
+        inFlightSubmissionRef.current = { noteId: note.noteId, content: data.content };
+        try {
+            await server.put(`notes/${note.noteId}/data`, data, parentComponent?.componentId);
+        } catch (error) {
+            // A failed submission is not provenance for a later blob. Keeping
+            // the marker unset means the editor may still receive a genuine
+            // remote update and SpacedUpdate retains its retry snapshot.
+            if (inFlightSubmissionRef.current?.noteId === note.noteId
+                && inFlightSubmissionRef.current.content === data.content) {
+                inFlightSubmissionRef.current = undefined;
+            }
+            throw error;
+        }
 
+        lastSuccessfulSubmissionRef.current = { noteId: note.noteId, content: data.content };
+        inFlightSubmissionRef.current = undefined;
         noteSavedDataStore.set(note.noteId, data.content);
         dataSaved?.(data);
     }, [ note, dataSaved, noteType, parentComponent ]);
@@ -169,7 +185,18 @@ export function useEditorSpacedUpdate({ note, noteType, noteContext, getData, on
     useEffect(() => {
         if (!blob || !note) return;
         noteSavedDataStore.set(note.noteId, blob.content);
-        spacedUpdate.allowUpdateWithoutChange(() => onContentChange(blob.content));
+        const lastSuccessfulSubmission = lastSuccessfulSubmissionRef.current;
+        const isSuccessfulSelfEcho = lastSuccessfulSubmission?.noteId === note.noteId
+            && lastSuccessfulSubmission.content === blob.content;
+        // A later, different blob is evidence that the server (or another
+        // client) has moved on. Do not keep an old self-echo marker around
+        // long enough to swallow a genuine remote revert to that content.
+        if (lastSuccessfulSubmission?.noteId === note.noteId && !isSuccessfulSelfEcho) {
+            lastSuccessfulSubmissionRef.current = undefined;
+        }
+        if (!isSuccessfulSelfEcho) {
+            spacedUpdate.allowUpdateWithoutChange(() => onContentChange(blob.content));
+        }
         loadedNoteIdRef.current = note.noteId;
     }, [ blob ]);
 
@@ -1695,23 +1722,27 @@ export function useTextEditor(noteContext: NoteContext | null | undefined) {
 export function useContentElement(noteContext: NoteContext | null | undefined) {
     const [ contentElement, setContentElement ] = useState<HTMLElement | null>(null);
     const requestIdRef = useRef(0);
-    const [, forceUpdate] = useState(0);
+    const noteId = noteContext?.noteId;
 
     useEffect(() => {
         const requestId = ++requestIdRef.current;
+        // Do not let the previous note's static root remain interactive while
+        // the new note is mounting (or when the new note has no content root).
+        setContentElement(null);
+        if (!noteContext) return;
         noteContext?.getContentElement().then(contentElement => {
             // Prevent stale async.
-            if (!contentElement || requestId !== requestIdRef.current) return;
+            if (requestId !== requestIdRef.current) return;
             setContentElement(contentElement?.[0] ?? null);
-            forceUpdate(v => v + 1);
+        }).catch(() => {
+            if (requestId === requestIdRef.current) setContentElement(null);
         });
-    }, [ noteContext ]);
+    }, [ noteContext, noteId ]);
 
     // React to content changes initializing.
     useTriliumEvent("contentElRefreshed", ({ ntxId: eventNtxId, contentEl }) => {
         if (eventNtxId !== noteContext?.ntxId) return;
         setContentElement(contentEl);
-        forceUpdate(v => v + 1);
     });
 
     return contentElement;

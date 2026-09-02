@@ -121,6 +121,7 @@ export function ReadOnlyTextContent({ html, ntxId, dir, className, contentRef: e
         <RawHtmlBlock
             containerRef={contentRef}
             className={clsx("note-detail-readonly-text-content ck-content use-tn-links selectable-text", codeBlockWordWrap && "word-wrap", className)}
+            data-readweave-content-root="readonly"
             tabindex={100}
             dir={dir}
             html={html}

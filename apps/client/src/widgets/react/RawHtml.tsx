@@ -5,6 +5,7 @@ type HTMLElementLike = string | HTMLElement | JQuery<HTMLElement>;
 
 interface RawHtmlProps extends Pick<HTMLProps<HTMLElement>, "tabindex" | "dir"> {
     className?: string;
+    "data-readweave-content-root"?: string;
     html?: HTMLElementLike;
     style?: CSSProperties;
     onClick?: (e: MouseEvent) => void;
@@ -18,9 +19,12 @@ export function RawHtmlBlock({containerRef, ...props}: RawHtmlProps & { containe
     return <div ref={containerRef} {...getProps(props)} />;
 }
 
-function getProps({ className, html, style, onClick }: RawHtmlProps) {
+function getProps({ className, html, style, onClick, tabindex, dir, "data-readweave-content-root": contentRoot }: RawHtmlProps) {
     return {
         className,
+        "data-readweave-content-root": contentRoot,
+        tabindex,
+        dir,
         dangerouslySetInnerHTML: getHtml(html ?? ""),
         style,
         onClick

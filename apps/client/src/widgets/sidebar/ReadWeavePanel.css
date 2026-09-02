@@ -172,6 +172,11 @@
     color: #28a745;
 }
 
+.readweave-anchor-status-draft::before {
+    content: "●";
+    color: #d99a00;
+}
+
 .readweave-anchor-status-paused::before {
     content: "●";
     color: var(--admonition-warning-accent-color);
@@ -974,6 +979,7 @@
 }
 
 .readweave-generation-state.complete { background: #28a745; }
+.readweave-generation-state.draft { background: #d99a00; }
 .readweave-generation-state.failed { background: var(--admonition-caution-accent-color); }
 .readweave-generation-state.paused { background: var(--admonition-warning-accent-color); }
 .readweave-generation-state.cancelled { background: var(--muted-text-color); }

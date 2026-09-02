@@ -57,8 +57,18 @@ export default function EditableText({ note, parentComponent, ntxId, noteContext
             };
         },
         onContentChange(newContent) {
+            const editor = watchdogRef.current?.editor;
+            // Blob notifications commonly echo the snapshot just submitted by
+            // this editor. Avoid setData() for both the cached snapshot and an
+            // editor that already renders the same HTML: CKEditor emits a
+            // change event for setData(), which used to cause a PUT/flash loop.
+            if (editor?.getData() === newContent) {
+                contentRef.current = newContent;
+                return;
+            }
+            if (contentRef.current === newContent && !editor) return;
             contentRef.current = newContent;
-            watchdogRef.current?.editor?.setData(newContent);
+            editor?.setData(newContent);
 
             // Scroll to bookmark anchor if navigated with ?bookmark=...
             const viewScope = noteContext?.viewScope;
@@ -438,7 +448,11 @@ export default function EditableText({ note, parentComponent, ntxId, noteContext
                 templates={templates}
                 onNotificationWarning={onNotificationWarning}
                 onWatchdogStateChange={onWatchdogStateChange}
-                onChange={() => spacedUpdate.scheduleUpdate()}
+                onChange={() => {
+                    const editor = watchdogRef.current?.editor;
+                    if (!editor || editor.getData() === contentRef.current) return;
+                    spacedUpdate.scheduleUpdate();
+                }}
                 onEditorInitialized={(editor) => {
                     if (containerRef.current) {
                         setupImageOpening(containerRef.current, false);
@@ -447,7 +461,7 @@ export default function EditableText({ note, parentComponent, ntxId, noteContext
                     initialized.current.resolve();
                     // Restore the data, either on the first render or if the editor crashes.
                     // We are not using CKEditor's built-in watch dog content, instead we are using the data we store regularly in the spaced update (see `dataSaved`).
-                    editor.setData(contentRef.current);
+                    if (editor.getData() !== contentRef.current) editor.setData(contentRef.current);
                     parentComponent?.triggerEvent("textEditorRefreshed", { ntxId, editor });
 
                 }}

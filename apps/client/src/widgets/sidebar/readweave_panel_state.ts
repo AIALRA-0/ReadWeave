@@ -10,7 +10,7 @@ import type {
 export const READWEAVE_CANDIDATE_MIN_CONFIDENCE = 0.55;
 export const READWEAVE_CANDIDATE_LIMIT = 3;
 
-export type ReadWeaveGenerationVisualState = "running" | "unread" | "paused" | "error";
+export type ReadWeaveGenerationVisualState = "running" | "unread" | "draft" | "paused" | "error";
 
 export interface ReadWeaveReviewIssueBaseline {
     body: string;
@@ -124,8 +124,8 @@ export function isReadWeaveJobAutoRestoreAllowed(input: {
 export function readWeaveGenerationVisualState(job: Pick<ReadWeaveGenerationJob, "status" | "unread"> & { qualityState?: ReadWeaveGenerationJob["qualityState"] }): ReadWeaveGenerationVisualState | undefined {
     if (job.status === "failed") return "error";
     if (job.status === "paused") return "paused";
-    if (job.status === "queued" || job.status === "running") return "running";
-    if (isReadWeaveGenerationReviewable(job.status) && job.qualityState !== "verified") return "paused";
+    if (job.status === "queued" || job.status === "running" || job.status === "saving") return "running";
+    if (isReadWeaveGenerationReviewable(job.status) && job.qualityState !== "verified") return "draft";
     if (isReadWeaveGenerationReviewable(job.status) && job.unread) return "unread";
     return undefined;
 }

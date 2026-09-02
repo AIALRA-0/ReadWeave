@@ -19,6 +19,7 @@ server {
 }
 
 server {
+    include /srv/aialra/config/nginx/snippets/aialra-hsts.conf;
     listen 443 ssl http2;
     listen [::]:443 ssl http2;
     server_name __READWEAVE_DOMAIN__;
@@ -26,7 +27,128 @@ server {
     ssl_certificate /etc/letsencrypt/live/__READWEAVE_DOMAIN__/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/__READWEAVE_DOMAIN__/privkey.pem;
 
+    include /srv/aialra/config/nginx/snippets/aialra-auth-endpoints.conf;
+    include /srv/aialra/config/nginx/snippets/aialra-auth-protect.conf;
+
+    # ETAPI is intentionally not a public compatibility surface. ReadWeave
+    # uses the authenticated application API instead.
+    location = /etapi {
+        auth_request off;
+        return 404;
+    }
+
+    location ^~ /etapi/ {
+        auth_request off;
+        return 404;
+    }
+
+    # Versioned client resources must load before the SSO session is available.
+    # This narrow exception does not expose API, note, attachment or database
+    # content; those routes remain protected below.
+    location ^~ /src/ {
+        auth_request off;
+        proxy_pass http://127.0.0.1:11802;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    # API callers must receive machine-readable authentication failures. Do
+    # not inherit the shared browser redirect from aialra-auth-protect.conf.
+    location = /api {
+        auth_request /_aialra_auth/verify;
+        error_page 401 = @readweave_api_auth_required;
+        error_page 403 = @readweave_api_forbidden;
+        include /srv/aialra/config/nginx/snippets/aialra-auth-identity-headers.conf;
+        proxy_pass http://127.0.0.1:11802;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $readweave_connection_upgrade;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    location ^~ /api/ {
+        auth_request /_aialra_auth/verify;
+        error_page 401 = @readweave_api_auth_required;
+        error_page 403 = @readweave_api_forbidden;
+        include /srv/aialra/config/nginx/snippets/aialra-auth-identity-headers.conf;
+        proxy_pass http://127.0.0.1:11802;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $readweave_connection_upgrade;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    location = /bootstrap {
+        auth_request /_aialra_auth/verify;
+        error_page 401 = @readweave_api_auth_required;
+        error_page 403 = @readweave_api_forbidden;
+        include /srv/aialra/config/nginx/snippets/aialra-auth-identity-headers.conf;
+        proxy_pass http://127.0.0.1:11802;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $readweave_connection_upgrade;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    location @readweave_api_auth_required {
+        auth_request off;
+        default_type application/json;
+        add_header X-AIALRA-Auth-Required "1" always;
+        add_header Cache-Control "no-store" always;
+        return 401 '{"error":"authentication_required"}';
+    }
+
+    location @readweave_api_forbidden {
+        auth_request off;
+        default_type application/json;
+        add_header Cache-Control "no-store" always;
+        return 403 '{"error":"forbidden"}';
+    }
+
+    # Ordinary document navigation keeps the SSO redirect. A failed upgrade
+    # instead receives 401 so the browser WebSocket client can stop retrying
+    # until authentication recovery has completed.
+    location @readweave_browser_auth {
+        auth_request off;
+        add_header X-AIALRA-Auth-Required "1" always;
+        add_header Cache-Control "no-store" always;
+        if ($http_upgrade = websocket) {
+            return 401;
+        }
+        return 302 /_aialra_auth/sign-in?return=$request_uri;
+    }
+
     location / {
+        error_page 401 = @readweave_browser_auth;
+        include /srv/aialra/config/nginx/snippets/aialra-auth-identity-headers.conf;
         proxy_pass http://127.0.0.1:11802;
         proxy_http_version 1.1;
         proxy_set_header Host $host;

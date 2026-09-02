@@ -120,7 +120,17 @@ async function refreshCsrfToken(): Promise<void> {
         try {
             const response = await fetch(`./bootstrap${window.location.search}`, { cache: "no-store" });
             if (response.ok) {
-                const json = await response.json();
+                let json: { csrfToken?: string };
+                if (typeof response.text === "function") {
+                    const body = await response.text();
+                    if (isAuthenticationFetchResponse(response, body)) {
+                        signalAuthenticationRequired();
+                        throw new Error("Authentication is required");
+                    }
+                    json = JSON.parse(body) as { csrfToken?: string };
+                } else {
+                    json = await response.json() as { csrfToken?: string };
+                }
                 glob.csrfToken = json.csrfToken;
             }
         } finally {
@@ -141,6 +151,31 @@ function isCsrfError(status: number, responseText: string): boolean {
     } catch {
         return false;
     }
+}
+
+function isAuthenticationFetchResponse(response: globalThis.Response, body: string): boolean {
+    const required = response.headers.get("x-aialra-auth-required")?.trim() === "1";
+    const redirectedToAuth = /\/_aialra_auth\/(?:sign-in|forbidden)/iu.test(response.url);
+    const contentType = response.headers.get("content-type")?.toLocaleLowerCase() ?? "";
+    const loginMarkup = contentType.includes("text/html")
+        && /<form\b[^>]*(?:sign-in|login)|_aialra_auth\/sign-in|id=["'](?:sign-in|login)["']/iu.test(body);
+    return required || redirectedToAuth || loginMarkup;
+}
+
+function isAuthenticationJqResponse(jqXhr: JQuery.jqXHR, body: unknown): boolean {
+    const responseUrl = typeof (jqXhr as unknown as { responseURL?: unknown }).responseURL === "string"
+        ? (jqXhr as unknown as { responseURL: string }).responseURL
+        : "";
+    const required = jqXhr.getResponseHeader?.("x-aialra-auth-required")?.trim() === "1";
+    const contentType = jqXhr.getResponseHeader?.("content-type")?.toLocaleLowerCase() ?? "";
+    const text = typeof body === "string" ? body : typeof jqXhr.responseText === "string" ? jqXhr.responseText : "";
+    const loginMarkup = contentType.includes("text/html")
+        && /<form\b[^>]*(?:sign-in|login)|_aialra_auth\/sign-in|id=["'](?:sign-in|login)["']/iu.test(text);
+    return required || /\/_aialra_auth\/(?:sign-in|forbidden)/iu.test(responseUrl) || loginMarkup;
+}
+
+function signalAuthenticationRequired() {
+    if (!isShare && isAuthenticatedAppReady()) recoverExpiredAuthentication();
 }
 
 interface CallOptions {
@@ -182,6 +217,11 @@ function ajax(url: string, method: string, data: unknown, headers: Headers, opts
             headers,
             timeout: 60000,
             success: (body, _textStatus, jqXhr) => {
+                if (isAuthenticationJqResponse(jqXhr, body)) {
+                    signalAuthenticationRequired();
+                    rej("Authentication is required");
+                    return;
+                }
                 const respHeaders: Headers = {};
 
                 jqXhr
@@ -192,7 +232,7 @@ function ajax(url: string, method: string, data: unknown, headers: Headers, opts
                         const parts = line.split(": ");
                         const header = parts.shift();
                         if (header) {
-                            respHeaders[header] = parts.join(": ");
+                            respHeaders[header.toLocaleLowerCase()] = parts.join(": ");
                         }
                     });
 
@@ -212,10 +252,8 @@ function ajax(url: string, method: string, data: unknown, headers: Headers, opts
                 // running an authenticated client for a session the server no
                 // longer accepts. Recover once instead of reporting every
                 // startup request independently and leaving the page half-built.
-                if (jqXhr.status === 401 && !isShare) {
-                    if (isAuthenticatedAppReady()) {
-                        recoverExpiredAuthentication();
-                    }
+                if (jqXhr.status === 401 || isAuthenticationJqResponse(jqXhr, jqXhr.responseText)) {
+                    signalAuthenticationRequired();
                     rej(jqXhr.responseText);
                     return;
                 }
