@@ -98,6 +98,19 @@
         }
       ]
     },
+    "sourceLocator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "blockIndex", "startOffset", "endOffset", "prefix", "suffix"],
+      "properties": {
+        "version": { "const": 1 },
+        "blockIndex": { "type": "integer", "minimum": 0 },
+        "startOffset": { "type": "integer", "minimum": 0 },
+        "endOffset": { "type": "integer", "minimum": 0 },
+        "prefix": { "type": "string", "maxLength": 64 },
+        "suffix": { "type": "string", "maxLength": 64 }
+      }
+    },
     "anchor": {
       "type": "object",
       "additionalProperties": false,
@@ -106,7 +119,8 @@
         "anchorId": { "$ref": "#/$defs/id" },
         "articleId": { "$ref": "#/$defs/id" },
         "selector": { "$ref": "#/$defs/selector" },
-        "excerpt": { "type": "string" }
+        "excerpt": { "type": "string" },
+        "sourceLocator": { "$ref": "#/$defs/sourceLocator" }
       }
     },
     "indexObject": {
@@ -181,6 +195,7 @@
         "depth": { "type": "integer", "minimum": 0, "maximum": 5 },
         "parentRevision": { "type": "integer", "minimum": 1 },
         "sourceExcerpt": { "type": "string" },
+        "sourceLocator": { "$ref": "#/$defs/sourceLocator" },
         "displayTitle": { "type": "string" },
         "displayBody": { "type": "string" },
         "displayCalloutType": { "$ref": "#/$defs/calloutType" },

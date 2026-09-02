@@ -130,7 +130,10 @@ export function useEditorSpacedUpdate({ note, noteType, noteContext, getData, on
 
     const commit = useCallback(async (data: SavedData | undefined) => {
         // for read only notes, or if note is not yet available (e.g. lazy creation)
-        if (data === undefined || !note || note.type !== noteType) return;
+        // The type resolver normally swaps EditableText out before this runs. The
+        // synchronous label check is still needed for a pending debounce that
+        // crosses the read-only transition.
+        if (data === undefined || !note || note.type !== noteType || options.is("databaseReadonly") || note.isLabelTruthy("readOnly")) return;
 
         protected_session_holder.touchProtectedSessionIfNecessary(note);
 

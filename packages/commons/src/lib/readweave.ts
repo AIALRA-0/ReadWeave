@@ -545,6 +545,7 @@ export interface ReadWeaveExport {
             | { type: "readweave-paragraph-v1"; value: string }
             | { type: "readweave-range-v1"; value: string; quote: string };
         excerpt: string;
+        sourceLocator?: ReadWeaveSourceLocator;
     }>;
     objects: ReadWeaveObject[];
     links: ReadWeaveLink[];

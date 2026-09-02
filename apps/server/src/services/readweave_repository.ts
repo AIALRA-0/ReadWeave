@@ -720,7 +720,8 @@ export function exportReadWeave(articleIdValue?: unknown): ReadWeaveExport {
             selector: link.anchorType === "range"
                 ? { type: "readweave-range-v1" as const, value: link.anchorId, quote: link.sourceExcerpt }
                 : { type: "readweave-paragraph-v1" as const, value: link.anchorId },
-            excerpt: link.sourceExcerpt
+            excerpt: link.sourceExcerpt,
+            ...(link.sourceLocator ? { sourceLocator: link.sourceLocator } : {})
         }
     ])).values()).toSorted((a, b) => `${a.articleId}:${a.anchorId}`.localeCompare(`${b.articleId}:${b.anchorId}`));
     const articleIdSet = new Set(articles.map(article => article.articleId));
