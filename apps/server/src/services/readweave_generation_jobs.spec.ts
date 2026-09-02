@@ -373,7 +373,7 @@ describe("ReadWeave persisted generation jobs", () => {
         expect(completed.progress.some(event => event.message.includes("正在自动重试第 2 次"))).toBe(false);
     });
 
-    it("never persists an answer that still has machine-fixable format issues", async () => {
+    it("keeps a non-empty answer with format warnings as a provisional review draft", async () => {
         generateMock.mockResolvedValueOnce({
             ...result("这份草稿仍有格式问题"),
             qualityState: "provisional",
@@ -382,11 +382,14 @@ describe("ReadWeave persisted generation jobs", () => {
         });
 
         const started = startReadWeaveGenerationJob({ ...request, anchorId: "range_jobs_format", title: "格式门测试" });
-        const paused = await waitForStatus(started.jobId, "paused");
+        const ready = await waitForStatus(started.jobId, "ready-for-review");
 
-        expect(paused.failureClass).toBe("format");
-        expect(paused.savedLinkId).toBeUndefined();
-        expect(paused.result).toBeUndefined();
+        expect(generateMock).toHaveBeenCalledTimes(1);
+        expect(ready.qualityState).toBe("provisional");
+        expect(ready.failureClass).toBeUndefined();
+        expect(ready.result?.body).toContain("这份草稿仍有格式问题");
+        expect(ready.unresolvedIssues).toContain("回答包含乱码字符");
+        expect(ready.savedLinkId).toBeUndefined();
         expect(getEntriesForAnchor(request.articleId, "range_jobs_format")).toHaveLength(0);
     });
 
