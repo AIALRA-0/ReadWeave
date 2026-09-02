@@ -8,6 +8,7 @@ const BLOCK_SELECTOR = "p,h1,h2,h3,h4,h5,h6,li,blockquote,pre";
 export const READWEAVE_GENERATION_STATUS_CLASSES = [
     "readweave-anchor-status-running",
     "readweave-anchor-status-unread",
+    "readweave-anchor-status-draft",
     "readweave-anchor-status-paused",
     "readweave-anchor-status-error"
 ] as const;

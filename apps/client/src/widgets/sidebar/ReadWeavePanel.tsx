@@ -18,6 +18,7 @@ import {
     type ReadWeaveObject,
     type ReadWeaveObjectKind,
     type ReadWeaveResolvedEntry,
+    type ReadWeaveSourceLocator,
     type ReadWeaveTermIdentity
 } from "@triliumnext/commons";
 import type { JSX } from "preact";
@@ -27,7 +28,7 @@ import appContext from "../../components/app_context.js";
 import { t } from "../../services/i18n.js";
 import server from "../../services/server.js";
 import utils from "../../services/utils.js";
-import { useActiveNoteContext } from "../react/hooks.js";
+import { useActiveNoteContext, useContentElement } from "../react/hooks.js";
 import {
     clearReadWeaveProvisionalAnchors,
     exactReadWeaveAnchorIdForExcerpt,
@@ -43,7 +44,11 @@ import {
     readWeaveAnchorGroupRange,
     readWeaveAnchorIdsOf,
     releaseReadWeaveProvisionalAnchors,
-    uniqueReadWeaveExcerptRange
+    applyReadWeaveRuntimeRangeAnchor,
+    readWeaveRangeForSourceLocator,
+    readWeaveSourceLocatorForRange,
+    removeReadWeaveRuntimeRangeAnchors,
+    uniqueReadWeaveExcerptRangeWithLocator
 } from "./readweave_anchor_dom.js";
 import {
     applyReadWeaveGenerationVisual,
@@ -105,6 +110,8 @@ interface AnchorSelection {
     anchorType: ReadWeaveAnchorType;
     excerpt: string;
     fragments: ReadWeaveContextFragment[];
+    sourceLocator?: ReadWeaveSourceLocator;
+    readonly?: boolean;
     pending?: boolean;
 }
 
@@ -162,6 +169,8 @@ interface SelectionActionTarget {
 
 export default function ReadWeavePanel() {
     const { note, noteId, noteContext } = useActiveNoteContext();
+    const contentElement = useContentElement(noteContext);
+    const activeContentRootRef = useRef<HTMLElement | null>(null);
     const articleNoteId = note?.type === "text" && note.isContentAvailable() ? noteId : undefined;
     const [selection, setSelection] = useState<AnchorSelection>();
     const [entries, setEntries] = useState<ReadWeaveResolvedEntry[]>([]);
@@ -266,8 +275,8 @@ export default function ReadWeavePanel() {
         job.status === "queued"
         || job.status === "running"
         || job.status === "paused"
-        || job.status === "cancelled"
-        || job.unread);
+        || job.status === "failed"
+        || (job.status === "ready-for-review" && job.unread));
     const currentTitle = kind === "question"
         ? decodeReadWeaveText(questionTitle)
         : formatPartialTermIdentity(termIdentity) || selection?.excerpt.trim() || "";
@@ -373,13 +382,23 @@ export default function ReadWeavePanel() {
         generationJobsCursor.current = Math.max(generationJobsCursor.current, response.nextCursor);
         const mergedJobs = mergeReadWeaveGenerationJobSnapshot(generationJobsRef.current, response.jobs, response.removedJobIds);
         generationJobsRef.current = mergedJobs;
-        setGenerationJobs(mergedJobs);
+        const unchanged = mergedJobs.length === generationJobs.length
+            && mergedJobs.every((job, index) => {
+                const previous = generationJobs[index];
+                return previous?.jobId === job.jobId
+                    && previous.stateVersion === job.stateVersion
+                    && previous.updatedAt === job.updatedAt;
+            });
+        if (!unchanged) setGenerationJobs(mergedJobs);
         const articleJobs = mergedJobs.filter(job => job.articleId === targetNoteId);
         const jobsForDecoration = transientGenerationJobRef.current
             ? [ transientGenerationJobRef.current, ...articleJobs ]
             : articleJobs;
-        applyGenerationJobStatusDecorations(document.body, jobsForDecoration);
-        window.requestAnimationFrame(() => applyGenerationJobStatusDecorations(document.body, jobsForDecoration));
+        const root = activeContentRootRef.current;
+        if (root) {
+            applyGenerationJobStatusDecorations(root, jobsForDecoration);
+            window.requestAnimationFrame(() => applyGenerationJobStatusDecorations(root, jobsForDecoration));
+        }
         return mergedJobs;
     }
 
@@ -398,7 +417,8 @@ export default function ReadWeavePanel() {
             anchorId: job.anchorId,
             anchorType: job.anchorType,
             excerpt: job.sourceExcerpt,
-            fragments: [ { id: "selected", role: "selected", text: job.sourceExcerpt } ]
+            fragments: [ { id: "selected", role: "selected", text: job.sourceExcerpt } ],
+            sourceLocator: job.sourceLocator
         };
     }
 
@@ -421,6 +441,31 @@ export default function ReadWeavePanel() {
             return next;
         });
         if (generationJobId === job.jobId) hydrateGenerationJob(response.job);
+    }
+
+    async function retryBackgroundJob(job: ReadWeaveGenerationJob) {
+        const response = await server.post<{ job: ReadWeaveGenerationJob }>(
+            `readweave/generation-jobs/${encodeURIComponent(job.jobId)}/regenerate`, {}
+        );
+        upsertGenerationJob(response.job);
+        if (generationJobId === job.jobId) {
+            hydrateGenerationJob(response.job);
+            setGenerationPollRevision(current => current + 1);
+        }
+    }
+
+    async function removeBackgroundJob(job: ReadWeaveGenerationJob) {
+        await server.remove(`readweave/generation-jobs/${encodeURIComponent(job.jobId)}`);
+        generationJobsRequestRevision.current += 1;
+        setGenerationJobs(current => {
+            const next = current.filter(candidate => candidate.jobId !== job.jobId);
+            generationJobsRef.current = next;
+            return next;
+        });
+        if (generationJobId === job.jobId) {
+            setGenerationJobId(undefined);
+            setBusy(false);
+        }
     }
 
     async function refreshCurrent(targetNoteId: string, anchorId?: string) {
@@ -576,6 +621,10 @@ export default function ReadWeavePanel() {
     const confirmPendingSelection = useAnchorInteractions({
         noteId: articleNoteId,
         noteContext,
+        contentElement,
+        onContentRoot(root) {
+            activeContentRootRef.current = root;
+        },
         summaries: anchorSummaries,
         generationJobs: decorationGenerationJobs,
         dataReady: loadedArticleNoteId === articleNoteId,
@@ -833,6 +882,11 @@ export default function ReadWeavePanel() {
         return () => { cancelled = true; };
     }, [generationJobId, generationPollRevision]);
 
+    function applyCurrentGenerationVisual(job: ReadWeaveGenerationJob) {
+        const root = activeContentRootRef.current;
+        if (root) applyReadWeaveGenerationVisual(root, job);
+    }
+
     useEffect(() => {
         if (!currentTitle) {
             setCandidates([]);
@@ -872,11 +926,12 @@ export default function ReadWeavePanel() {
             kind,
             parentLinkId,
             title: currentTitle,
-            sourceExcerpt: selection.excerpt
+            sourceExcerpt: selection.excerpt,
+            sourceLocator: selection.sourceLocator
         });
         transientGenerationJobRef.current = transientJob;
         setTransientGenerationJob(transientJob);
-        applyReadWeaveGenerationVisual(document.body, transientJob);
+        applyCurrentGenerationVisual(transientJob);
         setBusy(true);
         setStatus(undefined);
         setStatusTone("normal");
@@ -886,8 +941,8 @@ export default function ReadWeavePanel() {
         setReviewIssues([]);
         setReviewIssueBaseline(undefined);
         try {
-            await persistReadWeaveAnchor(noteContext);
-            if (!await readWeaveAnchorIsPresent(noteContext, selection.anchorId)) {
+            await persistReadWeaveAnchor(noteContext, selection);
+            if (!await readWeaveAnchorIsPresent(noteContext, selection.anchorId, selection.readonly)) {
                 throw new Error(t("readweave.anchor_lost_before_generation"));
             }
             const response = await server.post<{ job: ReadWeaveGenerationJob }>("readweave/generation-jobs", {
@@ -898,6 +953,7 @@ export default function ReadWeavePanel() {
                 calloutType,
                 parentLinkId,
                 rootSourceExcerpt: selection.excerpt,
+                sourceLocator: selection.sourceLocator,
                 title: currentTitle,
                 optimizeQuestion: kind === "question" ? optimizeQuestion : undefined,
                 termIdentity: kind === "term" ? cleanPartialTermIdentity(termIdentity) : undefined,
@@ -910,7 +966,7 @@ export default function ReadWeavePanel() {
                 setTransientGenerationJob(undefined);
             }
             if (activeArticleNoteId.current === target.noteId) upsertGenerationJob(response.job);
-            applyReadWeaveGenerationVisual(document.body, response.job);
+            applyCurrentGenerationVisual(response.job);
             if (!isSelectionActionCurrent(target)) return;
             setGenerationProgress(response.job.progress);
             setGenerationJobId(response.job.jobId);
@@ -941,7 +997,7 @@ export default function ReadWeavePanel() {
                 };
                 transientGenerationJobRef.current = failedJob;
                 setTransientGenerationJob(failedJob);
-                applyReadWeaveGenerationVisual(document.body, failedJob);
+                applyCurrentGenerationVisual(failedJob);
                 if (isSelectionActionCurrent(target)) setGenerationProgress(failedJob.progress);
             }
             if (!isSelectionActionCurrent(target)) return;
@@ -980,9 +1036,15 @@ export default function ReadWeavePanel() {
             const reviewedTitle = kind === "question"
                 ? decodeReadWeaveText(questionTextareaRef.current?.value ?? questionTitle)
                 : currentTitle;
-            await persistReadWeaveAnchor(noteContext);
             let committedJob: ReadWeaveGenerationJob | undefined;
             if (completedJobId && currentJob) {
+                // Generation force-snapshotted the editable anchor before
+                // creating the job. Only repair a missing DOM anchor here; a
+                // second unconditional force snapshot would issue an
+                // identical PUT.
+                if (!await readWeaveAnchorIsPresent(noteContext, selection.anchorId, selection.readonly)) {
+                    await persistReadWeaveAnchor(noteContext, selection);
+                }
                 const response = await server.post<{ job: ReadWeaveGenerationJob }>(`readweave/generation-jobs/${encodeURIComponent(completedJobId)}/commit`, {
                     expectedStateVersion: currentJob.stateVersion,
                     title: reviewedTitle,
@@ -994,6 +1056,10 @@ export default function ReadWeavePanel() {
                 upsertGenerationJob(response.job);
                 if (isSelectionActionCurrent(target, completedJobId)) hydrateGenerationJob(response.job);
             } else {
+                // A direct save/reuse path may not have gone through
+                // generation, so its editable model anchor still needs the
+                // normal force snapshot even when it is already present.
+                await persistReadWeaveAnchor(noteContext, selection);
                 await server.post("readweave/entries", {
                     articleId: noteId,
                     anchorId: selection.anchorId,
@@ -1003,6 +1069,7 @@ export default function ReadWeavePanel() {
                     title: reviewedTitle,
                     body: reviewedBody,
                     sourceExcerpt: currentSourceExcerpt,
+                    sourceLocator: selection.sourceLocator,
                     calloutType,
                     termIdentity: kind === "term" ? cleanPartialTermIdentity(termIdentity) : undefined,
                     reuseObjectId
@@ -1037,7 +1104,7 @@ export default function ReadWeavePanel() {
             await server.remove(`readweave/generation-jobs/${encodeURIComponent(discardedJobId)}`);
             const hasOtherDraft = generationJobs.some(job => job.jobId !== discardedJobId && job.anchorId === selection.anchorId);
             const removeAnchor = entries.length === 0 && !hasOtherDraft;
-            if (removeAnchor) await removeProvisionalAnchor(noteContext, selection.anchorId);
+            if (removeAnchor) await removeProvisionalAnchor(noteContext, selection.anchorId, selection.readonly);
             sessionStorage.removeItem(draftKey(target.noteId, target.anchorId, target.parentLinkId, currentJob?.draftId ?? discardedJobId));
             sessionStorage.removeItem(draftKey(target.noteId, target.anchorId, target.parentLinkId));
             generationJobsRequestRevision.current += 1;
@@ -1088,10 +1155,11 @@ export default function ReadWeavePanel() {
             parentLinkId: target.parentLinkId,
             title: currentTitle,
             sourceExcerpt: currentSourceExcerpt || selection!.excerpt,
+            sourceLocator: selection!.sourceLocator,
             feedback: regenerationFeedback.trim() || undefined
         });
         upsertGenerationJob(optimisticJob);
-        applyReadWeaveGenerationVisual(document.body, optimisticJob);
+        applyCurrentGenerationVisual(optimisticJob);
         setBusy(true);
         setStatus(undefined);
         setStatusTone("normal");
@@ -1109,7 +1177,7 @@ export default function ReadWeavePanel() {
                     : selection!.fragments
             });
             if (activeArticleNoteId.current === target.noteId) upsertGenerationJob(response.job);
-            applyReadWeaveGenerationVisual(document.body, response.job);
+            applyCurrentGenerationVisual(response.job);
             if (!isSelectionActionCurrent(target, regeneratedJobId)) return;
             hydrateGenerationJob(response.job);
             setGenerationPollRevision(current => current + 1);
@@ -1137,7 +1205,7 @@ export default function ReadWeavePanel() {
                 ]
             };
             if (activeArticleNoteId.current === target.noteId) upsertGenerationJob(failedJob);
-            applyReadWeaveGenerationVisual(document.body, failedJob);
+            applyCurrentGenerationVisual(failedJob);
             if (!isSelectionActionCurrent(target, regeneratedJobId)) return;
             setGenerationProgress(failedJob.progress);
             setStatus(message);
@@ -1525,8 +1593,8 @@ export default function ReadWeavePanel() {
                 generationJobs
             });
             if (removeAnchor) {
-                await removeProvisionalAnchor(noteContext, target.anchorId);
-                await persistReadWeaveAnchor(noteContext);
+                await removeProvisionalAnchor(noteContext, target.anchorId, selection.readonly);
+                await persistReadWeaveAnchor(noteContext, selection);
             }
             if (isSelectionActionCurrent(target)) setDeleteState(undefined);
             if (activeArticleNoteId.current === target.noteId) await refreshCurrent(target.noteId, removeAnchor ? undefined : target.anchorId);
@@ -1603,12 +1671,21 @@ export default function ReadWeavePanel() {
                             {backgroundJobs.map(job => (
                                 <div class="readweave-background-job" key={job.jobId}>
                                     <button type="button" onClick={() => void openBackgroundJob(job)} title={job.title}>
-                                        <span class={`readweave-generation-state ${isReadWeaveGenerationReviewable(job.status) ? job.qualityState === "verified" ? "complete" : "paused" : job.status}`} />
+                                        <span class={`readweave-generation-state ${generationJobStateClass(job)}`} />
                                         <span>{job.title}</span>
-                                        <small>{isReadWeaveGenerationReviewable(job.status) ? job.status === "saved" ? "已入库" : job.qualityState === "verified" ? "已核验" : "待核验" : job.status}</small>
+                                        <small>{generationJobStatusLabel(job)}</small>
                                     </button>
                                     {(job.status === "queued" || job.status === "running") && (
                                         <button type="button" class="readweave-background-cancel" onClick={() => void cancelGenerationJob(job)}>取消</button>
+                                    )}
+                                    {job.status === "paused" && (
+                                        <>
+                                            <button type="button" class="readweave-background-cancel" onClick={() => void retryBackgroundJob(job)}>重试</button>
+                                            <button type="button" class="readweave-background-cancel" onClick={() => void removeBackgroundJob(job)}>移除</button>
+                                        </>
+                                    )}
+                                    {job.status === "failed" && (
+                                        <button type="button" class="readweave-background-cancel" onClick={() => void removeBackgroundJob(job)}>移除</button>
                                     )}
                                 </div>
                             ))}
@@ -1843,7 +1920,7 @@ export default function ReadWeavePanel() {
                                                 key={job.jobId}
                                                 title={job.title}
                                             >
-                                                <span class={`readweave-generation-state ${isReadWeaveGenerationReviewable(job.status) ? job.qualityState === "verified" ? "complete" : "paused" : job.status}`} />
+                                                <span class={`readweave-generation-state ${generationJobStateClass(job)}`} />
                                                 <span>{job.title}</span>
                                             </button>
                                         ))}
@@ -2000,11 +2077,7 @@ export default function ReadWeavePanel() {
 function GenerationMonitor({ job, pinned, onTogglePinned }: { job: ReadWeaveGenerationJob; pinned: boolean; onTogglePinned: () => void }) {
     const displayedProgress = readWeaveGenerationProgressForDisplay(job, t("readweave.generate_failed"));
     const latest = displayedProgress.at(-1);
-    const state = isReadWeaveGenerationReviewable(job.status)
-        ? job.qualityState === "verified" ? "complete" : "paused"
-        : job.status === "failed" ? "failed"
-            : job.status === "paused" ? "paused"
-                : "running";
+    const state = generationJobStateClass(job);
     const elapsed = latest?.elapsedMs ?? Math.max(0, Date.now() - Date.parse(job.createdAt));
     const errorProgress = displayedProgress.findLast(progress => progress.stage === "failed") ?? latest;
     const categoryLabels: Record<string, string> = {
@@ -2263,6 +2336,8 @@ function TermFields({ value, disabled = false, onChange }: { value: Partial<Read
 interface AnchorInteractionOptions {
     noteId: string | null | undefined;
     noteContext: ReturnType<typeof useActiveNoteContext>["noteContext"];
+    contentElement: HTMLElement | null;
+    onContentRoot?: (root: HTMLElement | null) => void;
     summaries: ReadWeaveAnchorSummary[];
     generationJobs: ReadWeaveGenerationJob[];
     dataReady: boolean;
@@ -2365,7 +2440,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             const exactAnchor = event.target.closest<HTMLElement>(RANGE_ANCHOR_SELECTOR);
             if (!exactAnchor || !root.contains(exactAnchor)) return;
             const block = exactAnchor.closest<HTMLElement>(BLOCK_SELECTOR);
-            if (!block || !root.contains(block) || !block.dataset.readweaveParagraphAnchorIds) return;
+            if (!block || !root.contains(block)) return;
             const exactAnchorId = preferredAnchorIdOf(exactAnchor, optionsRef.current.summaries, optionsRef.current.generationJobs);
             if (!exactAnchorId || suppressedAnchorRef.current === exactAnchorId || READWEAVE_LOCKED_ANCHOR_BY_ROOT.has(root)) return;
             const relatedAnchorId = event.relatedTarget instanceof Element
@@ -2442,8 +2517,12 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             const editor: CKTextEditor | null = currentContext
                 ? await currentContext.getTextEditor().catch(() => null)
                 : null;
-            const root = editor?.editing.view.getDomRoot() as HTMLElement | null;
-            return { editor, root };
+            const editorRoot = editor?.editing.view.getDomRoot() as HTMLElement | null;
+            if (editorRoot) return { editor, root: editorRoot, mode: "editable" as const };
+            const contentRoot = optionsRef.current.contentElement
+                ?? (await currentContext?.getContentElement().catch(() => null))?.[0]
+                ?? null;
+            return { editor: null, root: contentRoot, mode: "readonly" as const };
         }
 
         async function selectExisting(root: HTMLElement, domAnchorId: string, block: HTMLElement, anchorType: ReadWeaveAnchorType, preferredKind?: ReadWeaveObjectKind) {
@@ -2452,14 +2531,17 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             const summary = elements.map(element => summaryForElement(optionsRef.current.summaries, domAnchorId, element)).find(Boolean);
             const anchorId = summary?.anchorId ?? domAnchorId;
             const summaryExcerpt = summary?.excerpt;
-            const jobExcerpt = optionsRef.current.generationJobs.find(job => job.anchorId === anchorId)?.sourceExcerpt;
+            const job = optionsRef.current.generationJobs.find(job => job.anchorId === anchorId);
+            const jobExcerpt = job?.sourceExcerpt;
             const renderedExcerpt = anchorType === "range" ? textOfAnchorElements(elements) : textOf(block);
             const excerpt = summaryExcerpt || jobExcerpt || renderedExcerpt || "";
             await optionsRef.current.onSelect({
                 anchorId,
                 anchorType,
                 excerpt,
-                fragments: collectFragments(root, block, excerpt)
+                fragments: collectFragments(root, block, excerpt),
+                sourceLocator: summary?.sourceLocator ?? job?.sourceLocator,
+                readonly: root.dataset.readweaveContentRoot === "readonly"
             }, preferredKind);
         }
 
@@ -2472,7 +2554,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             const nativeRange = trimRangeWhitespace(nativeSelection.getRangeAt(0));
             const excerpt = nativeRange.toString().replace(/\s+/g, " ").trim().slice(0, 10_000);
             const common = nativeRange.commonAncestorContainer instanceof Element ? nativeRange.commonAncestorContainer : nativeRange.commonAncestorContainer.parentElement;
-            const root = common?.closest<HTMLElement>('[contenteditable="true"][role="textbox"]');
+            const root = common?.closest<HTMLElement>(`[data-readweave-content-root], [contenteditable="true"][role="textbox"]`);
             if (!root || !excerpt) {
                 removeBubble();
                 return;
@@ -2481,22 +2563,32 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
                 positionBubble();
                 return;
             }
-            const { editor, root: actualRoot } = await editorAndRoot();
-            if (disposed || revision !== selectionRevision || !editor || !actualRoot || actualRoot !== root) return;
-            const viewRange = editor.editing.view.domConverter.domRangeToView(nativeRange);
-            if (!viewRange) {
+            const { editor, root: actualRoot, mode } = await editorAndRoot();
+            if (disposed || revision !== selectionRevision || !actualRoot || actualRoot !== root) return;
+            const block = common?.closest<HTMLElement>(BLOCK_SELECTOR);
+            if (!block || !root.contains(block) || (mode === "readonly" && !rangeIsContainedByBlock(block, nativeRange))) {
                 removeBubble();
-                optionsRef.current.onStatus(t("readweave.selection_sync_failed"));
+                if (mode === "readonly") optionsRef.current.onStatus("只读正文中的选区必须位于同一段落");
                 return;
             }
-            const modelRange = editor.editing.mapper.toModelRange(viewRange);
-            const block = common?.closest<HTMLElement>(BLOCK_SELECTOR);
-            if (!modelRange || modelRange.isCollapsed || !excerpt || !block || !root.contains(block)) return;
+            let modelRange: ReturnType<CKTextEditor["editing"]["mapper"]["toModelRange"]> | undefined;
+            if (mode === "editable") {
+                if (!editor) return;
+                const viewRange = editor.editing.view.domConverter.domRangeToView(nativeRange);
+                if (!viewRange) {
+                    removeBubble();
+                    optionsRef.current.onStatus(t("readweave.selection_sync_failed"));
+                    return;
+                }
+                modelRange = editor.editing.mapper.toModelRange(viewRange);
+                if (!modelRange || modelRange.isCollapsed) return;
+            }
             const interactionEditor = editor;
             const interactionRoot = root;
             const interactionBlock = block;
             const interactionModelRange = modelRange;
             const fragments = collectFragments(interactionRoot, interactionBlock, excerpt);
+            const sourceLocator = readWeaveSourceLocatorForRange(interactionRoot, interactionBlock, nativeRange, BLOCK_SELECTOR);
             pendingSelectionActionsRef.current = {};
 
             optionsRef.current.onSelectionPreview({
@@ -2504,6 +2596,8 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
                 anchorType: "range",
                 excerpt,
                 fragments,
+                sourceLocator,
+                readonly: mode === "readonly",
                 pending: true
             });
 
@@ -2546,7 +2640,11 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
                     if (!anchorId) {
                         anchorId = `rwr_${utils.randomString(20)}`;
                         protectReadWeaveProvisionalAnchor(interactionRoot, anchorId);
-                        interactionEditor.model.change(writer => updateReadWeaveAnchorIdOnRange(writer, interactionModelRange, anchorId!, "add"));
+                        if (mode === "readonly") {
+                            applyReadWeaveRuntimeRangeAnchor(interactionRoot, nativeRange, anchorId);
+                        } else if (interactionEditor && interactionModelRange) {
+                            interactionEditor.model.change(writer => updateReadWeaveAnchorIdOnRange(writer, interactionModelRange, anchorId!, "add"));
+                        }
                     }
                     removeBubble();
                     window.getSelection()?.removeAllRanges();
@@ -2554,7 +2652,9 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
                         anchorId: anchorId!,
                         anchorType: "range",
                         excerpt,
-                        fragments
+                        fragments,
+                        sourceLocator,
+                        readonly: mode === "readonly"
                     };
                     // Finalize the editor state in the same event turn. Deferring the
                     // whole transition left the pending preview interactive for one
@@ -2606,8 +2706,8 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             if (nativeSelection && !nativeSelection.isCollapsed && nativeSelection.rangeCount) {
                 const common = nativeSelection.getRangeAt(0).commonAncestorContainer;
                 const commonElement = common instanceof Element ? common : common.parentElement;
-                const selectionRoot = commonElement?.closest('[contenteditable="true"][role="textbox"]');
-                const clickRoot = event.target.closest('[contenteditable="true"][role="textbox"]');
+                const selectionRoot = commonElement?.closest('[data-readweave-content-root], [contenteditable="true"][role="textbox"]');
+                const clickRoot = event.target.closest('[data-readweave-content-root], [contenteditable="true"][role="textbox"]');
                 // A selection may survive navigation and restoration. Clicking a
                 // precise ReadWeave fragment must still open/lock that fragment;
                 // only plain editor clicks should remain reserved for selection.
@@ -2616,8 +2716,8 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             removeBubble();
             const located = findEditableBlock(event.target);
             if (!located) return;
-            const { editor, root } = await editorAndRoot();
-            if (!editor || !root || root !== located.root) return;
+            const { editor, root, mode } = await editorAndRoot();
+            if (!root || root !== located.root || (mode === "editable" && !editor)) return;
             // The desktop layout can keep more than one ReadWeave panel hook
             // attached to the same editor (for example while panes transition).
             // All of those hooks receive the same document-level click. Let the
@@ -2688,30 +2788,46 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
         }
 
         async function attachEditorWhenReady(attempt = 0) {
-            const { editor, root } = await editorAndRoot();
+            const { editor, root, mode } = await editorAndRoot();
             if (disposed) return;
             if (!editor || !root) {
-                if (attempt < 100) editorAttachTimer = window.setTimeout(() => attachEditorWhenReady(attempt + 1), 80);
-                return;
+                if (mode === "readonly" && root) {
+                    // A static note root does not expose CKEditor; it is still
+                    // a complete ReadWeave interaction surface.
+                } else if (attempt < 100) {
+                    editorAttachTimer = window.setTimeout(() => attachEditorWhenReady(attempt + 1), 80);
+                }
+                if (!root) return;
             }
             editorRoot = root;
+            root.dataset.readweaveContentRoot = mode;
+            optionsRef.current.onContentRoot?.(root);
             root.addEventListener("mouseover", onAnchorMouseOver);
             root.addEventListener("mouseout", onAnchorMouseOut);
-            normalizeRangeAnchorWhitespace(editor, root);
-            if (reconcileOrphanedRangeAnchors(
-                editor,
-                root,
-                optionsRef.current.summaries,
-                optionsRef.current.generationJobs,
-                optionsRef.current.activeAnchorId,
-                optionsRef.current.dataReady
-            )) {
-                persistReconciledReadWeaveAnchor(root);
+            if (mode === "editable" && editor) {
+                normalizeRangeAnchorWhitespace(editor, root);
+                if (reconcileOrphanedRangeAnchors(
+                    editor,
+                    root,
+                    optionsRef.current.summaries,
+                    optionsRef.current.generationJobs,
+                    optionsRef.current.activeAnchorId,
+                    optionsRef.current.dataReady
+                )) {
+                    persistReconciledReadWeaveAnchor(root, mode);
+                }
+            } else {
+                restoreReadOnlyRangeAnchors(root, optionsRef.current.summaries, optionsRef.current.generationJobs);
             }
             decorateAnchors(root);
             observer = new MutationObserver(() => {
-                normalizeRangeAnchorWhitespace(editor, root);
-                decorateAnchors(root);
+                if (mode === "editable" && editor) {
+                    normalizeRangeAnchorWhitespace(editor, root);
+                    decorateAnchors(root);
+                } else {
+                    restoreReadOnlyRangeAnchors(root, optionsRef.current.summaries, optionsRef.current.generationJobs);
+                    decorateAnchors(root);
+                }
             });
             observer.observe(root, { childList: true, subtree: true });
         }
@@ -2735,7 +2851,12 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
                 element.classList.remove("readweave-anchor-active", "readweave-paragraph-selected", "readweave-anchor-hover", "readweave-anchor-locked", "readweave-paragraph-anchor-hover");
                 delete element.dataset.readweaveLockedAnchorId;
             });
-            if (editorRoot) clearReadWeaveProvisionalAnchors(editorRoot);
+            if (editorRoot) {
+                removeReadWeaveRuntimeRangeAnchors(editorRoot);
+                clearReadWeaveProvisionalAnchors(editorRoot);
+                if (editorRoot.dataset.readweaveContentRoot === "editable") delete editorRoot.dataset.readweaveContentRoot;
+            }
+            optionsRef.current.onContentRoot?.(null);
             hoveredAnchorRef.current = undefined;
             suppressedAnchorRef.current = undefined;
             document.removeEventListener("mouseup", onMouseUp, true);
@@ -2745,15 +2866,16 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             window.removeEventListener("resize", positionBubble);
             document.removeEventListener("keydown", onKeyDown, true);
         };
-    }, [options.noteId, options.noteContext]);
+    }, [options.noteId, options.noteContext, options.contentElement]);
 
     useEffect(() => {
         let cancelled = false;
         if (!options.noteContext) return;
         options.noteContext.getTextEditor().then(editor => {
             if (cancelled) return;
-            const root = editor?.editing.view.getDomRoot() as HTMLElement | null;
-            if (root && editor) {
+            const root = editor?.editing.view.getDomRoot() as HTMLElement | null
+                ?? optionsRef.current.contentElement;
+            if (root) {
                 const latest = optionsRef.current;
                 releaseReadWeaveProvisionalAnchors(root, [
                     ...latest.summaries.map(summary => summary.anchorId),
@@ -2761,15 +2883,19 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
                         .filter(job => !job.jobId.startsWith("readweave-local-"))
                         .map(job => job.anchorId)
                 ]);
-                if (reconcileOrphanedRangeAnchors(
-                    editor,
-                    root,
-                    latest.summaries,
-                    latest.generationJobs,
-                    latest.activeAnchorId,
-                    latest.dataReady
-                )) {
-                    persistReconciledReadWeaveAnchor(root);
+                if (editor && !root.dataset.readweaveContentRoot) {
+                    if (reconcileOrphanedRangeAnchors(
+                        editor,
+                        root,
+                        latest.summaries,
+                        latest.generationJobs,
+                        latest.activeAnchorId,
+                        latest.dataReady
+                    )) {
+                        persistReconciledReadWeaveAnchor(root, "editable");
+                    }
+                } else {
+                    restoreReadOnlyRangeAnchors(root, latest.summaries, latest.generationJobs);
                 }
                 applyAnchorSummaryDecorations(root, latest.summaries, latest.generationJobs);
                 if (hoveredAnchorRef.current) {
@@ -2789,7 +2915,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             }
         }).catch(() => undefined);
         return () => { cancelled = true; };
-    }, [options.noteId, options.noteContext, options.summaries, options.generationJobs, options.dataReady, options.activeAnchorId]);
+    }, [options.noteId, options.noteContext, options.contentElement, options.summaries, options.generationJobs, options.dataReady, options.activeAnchorId]);
 
     return (preferredKind: ReadWeaveObjectKind): boolean => {
         const action = pendingSelectionActionsRef.current[preferredKind];
@@ -2803,8 +2929,8 @@ function normalizedAnchorText(value: string): string {
     return decodeReadWeaveText(value);
 }
 
-function persistReconciledReadWeaveAnchor(root: HTMLElement) {
-    if (!root.isConnected) return;
+function persistReconciledReadWeaveAnchor(root: HTMLElement, mode: "editable" | "readonly" = "editable") {
+    if (mode === "readonly" || !root.isConnected) return;
     void Promise.resolve(glob.getComponentByEl(root)?.triggerCommand("saveNoteDetailNow", { forceSnapshot: true }))
         .catch(() => undefined);
 }
@@ -2877,6 +3003,7 @@ function previewEntriesForElement(
             anchorId: job.anchorId,
             anchorType: job.anchorType,
             objectId: `readweave-generation:${job.jobId}`,
+            sourceLocator: job.sourceLocator,
             parentLinkId: job.parentLinkId,
             rootLinkId: job.parentLinkId,
             depth: job.parentLinkId ? 1 : 0,
@@ -3044,16 +3171,41 @@ function anchorCalloutType(summary: ReadWeaveAnchorSummary | undefined): ReadWea
         ?? "note";
 }
 
+function generationJobStateClass(job: Pick<ReadWeaveGenerationJob, "status" | "qualityState">): string {
+    if (job.status === "failed") return "error";
+    if (job.status === "paused") return "paused";
+    if (job.status === "queued" || job.status === "running" || job.status === "saving") return "running";
+    if (job.status === "ready-for-review") return job.qualityState === "verified" ? "complete" : "draft";
+    if (job.status === "saved") return "complete";
+    return "paused";
+}
+
+function generationJobStatusLabel(job: Pick<ReadWeaveGenerationJob, "status" | "qualityState">): string {
+    if (job.status === "queued" || job.status === "running" || job.status === "saving") return "生成中";
+    if (job.status === "ready-for-review") return job.qualityState === "verified" ? "已核验，可入库" : "草稿可审核";
+    if (job.status === "paused") return "已暂停";
+    if (job.status === "failed") return "失败";
+    if (job.status === "saved") return "已入库";
+    return "已取消";
+}
+
 function calloutTypeForKind(summary: ReadWeaveAnchorSummary | undefined, kind: ReadWeaveObjectKind): ReadWeaveCalloutType | undefined {
     return summary?.entries.find(entry => entry.kind === kind)?.calloutType;
 }
 
 function findEditableBlock(target: EventTarget | null): { root: HTMLElement; block: HTMLElement } | null {
     if (!(target instanceof Element)) return null;
-    const root = target.closest<HTMLElement>('[contenteditable="true"][role="textbox"]');
+    const root = target.closest<HTMLElement>('[data-readweave-content-root], [contenteditable="true"][role="textbox"]');
     if (!root) return null;
     const block = target.closest<HTMLElement>(BLOCK_SELECTOR);
     return block && root.contains(block) ? { root, block } : null;
+}
+
+function rangeIsContainedByBlock(block: HTMLElement, range: Range): boolean {
+    const blockRange = document.createRange();
+    blockRange.selectNodeContents(block);
+    return blockRange.compareBoundaryPoints(Range.START_TO_START, range) <= 0
+        && blockRange.compareBoundaryPoints(Range.END_TO_END, range) >= 0;
 }
 
 function preferredAnchorIdOf(
@@ -3180,6 +3332,33 @@ function normalizeRangeAnchorWhitespace(editor: CKTextEditor, root: HTMLElement)
     editor.model.change(writer => modelRanges.forEach(item => updateReadWeaveAnchorIdOnRange(writer, item.range, item.anchorId, "remove")));
 }
 
+function restoreReadOnlyRangeAnchors(
+    root: HTMLElement,
+    summaries: ReadWeaveAnchorSummary[],
+    generationJobs: ReadWeaveGenerationJob[]
+): void {
+    const candidates = new Map<string, { excerpt: string; sourceLocator?: ReadWeaveSourceLocator }>();
+    for (const summary of summaries) {
+        if (summary.anchorType === "range" && summary.excerpt.trim()) {
+            candidates.set(summary.anchorId, { excerpt: summary.excerpt, sourceLocator: summary.sourceLocator });
+        }
+    }
+    for (const job of generationJobs) {
+        if (job.anchorType === "range" && job.sourceExcerpt.trim() && !candidates.has(job.anchorId)) {
+            candidates.set(job.anchorId, { excerpt: job.sourceExcerpt, sourceLocator: job.sourceLocator });
+        }
+    }
+    for (const [anchorId, candidate] of candidates) {
+        if (matchingReadWeaveAnchorElements(root, anchorId).length > 0) continue;
+        const exact = candidate.sourceLocator
+            ? readWeaveRangeForSourceLocator(root, BLOCK_SELECTOR, candidate.sourceLocator, candidate.excerpt)
+            : undefined;
+        const range = exact
+            ?? uniqueReadWeaveExcerptRangeWithLocator(root, BLOCK_SELECTOR, candidate.excerpt, candidate.sourceLocator);
+        if (range) applyReadWeaveRuntimeRangeAnchor(root, range, anchorId);
+    }
+}
+
 function reconcileOrphanedRangeAnchors(
     editor: CKTextEditor,
     root: HTMLElement,
@@ -3219,19 +3398,25 @@ function reconcileOrphanedRangeAnchors(
         const saved = summary.excerpt;
         if (exactSummary && normalizedAnchorText(rendered) === normalizedAnchorText(saved)) continue;
         const full = readWeaveAnchorGroupRange(root, anchorId);
-        const exact = exactReadWeaveExcerptRange(elements, BLOCK_SELECTOR, saved);
+        const exact = (exactSummary?.sourceLocator
+            ? readWeaveRangeForSourceLocator(root, BLOCK_SELECTOR, exactSummary.sourceLocator, saved)
+            : undefined)
+            ?? exactReadWeaveExcerptRange(elements, BLOCK_SELECTOR, saved);
         if (full && exact) repairs.push({ full, exact, orphanAnchorId: anchorId, summary });
     }
     const missingPersistedRanges = Array.from(new Map([
         ...summaries
             .filter(summary => summary.anchorType === "range")
-            .map(summary => [ summary.anchorId, { anchorId: summary.anchorId, excerpt: summary.excerpt } ] as const),
+            .map(summary => [ summary.anchorId, { anchorId: summary.anchorId, excerpt: summary.excerpt, sourceLocator: summary.sourceLocator } ] as const),
         ...generationJobs
             .filter(job => job.anchorType === "range" && !job.jobId.startsWith("readweave-local-"))
-            .map(job => [ job.anchorId, { anchorId: job.anchorId, excerpt: job.sourceExcerpt } ] as const)
+            .map(job => [ job.anchorId, { anchorId: job.anchorId, excerpt: job.sourceExcerpt, sourceLocator: job.sourceLocator } ] as const)
     ]).values()).flatMap(candidate => {
         if (grouped.has(candidate.anchorId)) return [];
-        const exact = uniqueReadWeaveExcerptRange(root, BLOCK_SELECTOR, candidate.excerpt);
+        const exact = (candidate.sourceLocator
+            ? readWeaveRangeForSourceLocator(root, BLOCK_SELECTOR, candidate.sourceLocator, candidate.excerpt)
+            : undefined)
+            ?? uniqueReadWeaveExcerptRangeWithLocator(root, BLOCK_SELECTOR, candidate.excerpt, candidate.sourceLocator);
         return exact ? [ { exact, anchorId: candidate.anchorId } ] : [];
     });
     if (!repairs.length && !staleRanges.length && !missingPersistedRanges.length) return false;
@@ -3400,20 +3585,43 @@ async function loadReadWeaveEntries(noteId: string, anchorId: string): Promise<R
     return response.entries;
 }
 
-async function persistReadWeaveAnchor(noteContext: ReturnType<typeof useActiveNoteContext>["noteContext"]) {
+async function persistReadWeaveAnchor(
+    noteContext: ReturnType<typeof useActiveNoteContext>["noteContext"],
+    selection?: Pick<AnchorSelection, "readonly">
+) {
+    // Read-only articles own their original HTML. Their anchors live only in
+    // the sidecar job/link data and in runtime DOM markers.
+    if (selection?.readonly) return;
     const editor = await noteContext?.getTextEditor().catch(() => null);
     const root = editor?.editing.view.getDomRoot() as HTMLElement | null;
     if (!root) return;
     await glob.getComponentByEl(root)?.triggerCommand("saveNoteDetailNow", { forceSnapshot: true });
 }
 
-async function readWeaveAnchorIsPresent(noteContext: ReturnType<typeof useActiveNoteContext>["noteContext"], anchorId: string): Promise<boolean> {
+async function readWeaveAnchorIsPresent(
+    noteContext: ReturnType<typeof useActiveNoteContext>["noteContext"],
+    anchorId: string,
+    readonly = false
+): Promise<boolean> {
+    if (readonly) {
+        const content = await noteContext?.getContentElement().catch(() => null);
+        return !!content?.[0] && matchingReadWeaveAnchorElements(content[0], anchorId).length > 0;
+    }
     const editor = await noteContext?.getTextEditor().catch(() => null);
     const root = editor?.editing.view.getDomRoot() as HTMLElement | null;
     return !!root && matchingReadWeaveAnchorElements(root, anchorId).length > 0;
 }
 
-async function removeProvisionalAnchor(noteContext: ReturnType<typeof useActiveNoteContext>["noteContext"], anchorId: string) {
+async function removeProvisionalAnchor(
+    noteContext: ReturnType<typeof useActiveNoteContext>["noteContext"],
+    anchorId: string,
+    readonly = false
+) {
+    if (readonly) {
+        const content = await noteContext?.getContentElement().catch(() => null);
+        if (content?.[0]) removeReadWeaveRuntimeRangeAnchors(content[0], anchorId);
+        return;
+    }
     const editor = await noteContext?.getTextEditor().catch(() => null);
     const root = editor?.editing.view.getDomRoot() as HTMLElement | null;
     if (!editor || !root) return;
@@ -3440,6 +3648,7 @@ function createTransientGenerationJob(input: {
     parentLinkId?: string;
     title: string;
     sourceExcerpt: string;
+    sourceLocator?: ReadWeaveSourceLocator;
 }): ReadWeaveGenerationJob {
     const now = new Date().toISOString();
     return {
@@ -3478,6 +3687,7 @@ function createOptimisticRegenerationJob(input: {
     parentLinkId?: string;
     title: string;
     sourceExcerpt: string;
+    sourceLocator?: ReadWeaveSourceLocator;
     feedback?: string;
 }): ReadWeaveGenerationJob {
     const queued = createTransientGenerationJob({
@@ -3487,7 +3697,8 @@ function createOptimisticRegenerationJob(input: {
         kind: input.kind,
         parentLinkId: input.parentLinkId,
         title: input.title,
-        sourceExcerpt: input.sourceExcerpt
+        sourceExcerpt: input.sourceExcerpt,
+        sourceLocator: input.sourceLocator
     });
     const updatedAt = nextReadWeaveJobTimestamp(input.previous?.updatedAt);
     return {
@@ -3500,6 +3711,7 @@ function createOptimisticRegenerationJob(input: {
         parentLinkId: input.parentLinkId,
         title: input.title,
         sourceExcerpt: input.sourceExcerpt,
+        sourceLocator: input.sourceLocator,
         jobId: input.jobId,
         stateVersion: (input.previous?.stateVersion ?? 0) + 1,
         status: "queued",

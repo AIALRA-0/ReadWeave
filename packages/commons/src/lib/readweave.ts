@@ -9,7 +9,21 @@ export type ReadWeaveCalloutType = "note" | "tip" | "important" | "warning" | "c
 export type ReadWeaveContextRole = "selected" | "heading" | "previous" | "next" | "section" | "document";
 export type ReadWeaveQualityState = "legacy-unverified" | "verified" | "provisional";
 export type ReadWeaveEvidenceState = "not-checked" | "local-only" | "externally-checked" | "conflicted" | "insufficient";
-export type ReadWeaveFailureClass = "format" | "semantic" | "evidence" | "transport" | "budget" | "protected-session" | "cancelled" | "internal";
+export type ReadWeaveFailureClass = "format" | "semantic" | "evidence" | "transport" | "configuration" | "budget" | "protected-session" | "cancelled" | "internal";
+
+/**
+ * A content-only locator for a range in a rendered article. It deliberately
+ * contains no CSS selector or DOM path, so it can be persisted beside an
+ * answer without making the article HTML mutable or executable.
+ */
+export interface ReadWeaveSourceLocator {
+    version: 1;
+    blockIndex: number;
+    startOffset: number;
+    endOffset: number;
+    prefix: string;
+    suffix: string;
+}
 
 export interface ReadWeaveTermIdentity {
     abbreviation?: string;
@@ -143,6 +157,7 @@ export interface ReadWeaveGenerationJob {
     parentLinkId?: string;
     title: string;
     sourceExcerpt: string;
+    sourceLocator?: ReadWeaveSourceLocator;
     status: "queued" | "running" | "ready-for-review" | "saving" | "saved" | "paused" | "cancelled" | "failed";
     qualityState: ReadWeaveQualityState;
     harnessVersion: string;
@@ -193,6 +208,7 @@ export interface ReadWeaveLink {
     depth?: number;
     parentRevision?: number;
     sourceExcerpt: string;
+    sourceLocator?: ReadWeaveSourceLocator;
     displayTitle?: string;
     displayBody?: string;
     displayCalloutType?: ReadWeaveCalloutType;
@@ -206,6 +222,7 @@ export interface ReadWeaveResolvedEntry {
     anchorId: string;
     anchorType: ReadWeaveAnchorType;
     objectId: string;
+    sourceLocator?: ReadWeaveSourceLocator;
     parentLinkId?: string;
     rootLinkId?: string;
     depth: number;
@@ -232,6 +249,7 @@ export interface ReadWeaveAnchorSummary {
     anchorId: string;
     anchorType: ReadWeaveAnchorType;
     excerpt: string;
+    sourceLocator?: ReadWeaveSourceLocator;
     questionCount: number;
     termCount: number;
     entries: ReadWeaveResolvedEntry[];
@@ -265,6 +283,7 @@ export interface ReadWeaveGenerateRequest {
     calloutType?: ReadWeaveCalloutType;
     parentLinkId?: string;
     rootSourceExcerpt?: string;
+    sourceLocator?: ReadWeaveSourceLocator;
     title: string;
     optimizeQuestion?: boolean;
     termIdentity?: Partial<ReadWeaveTermIdentity>;
@@ -310,6 +329,7 @@ export interface ReadWeaveSaveRequest {
     title: string;
     body: string;
     sourceExcerpt: string;
+    sourceLocator?: ReadWeaveSourceLocator;
     calloutType: ReadWeaveCalloutType;
     termIdentity?: ReadWeaveTermIdentity;
     verifiedNonExpandableArtifact?: ReadWeaveVerifiedNonExpandableArtifact;

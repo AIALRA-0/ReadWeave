@@ -14,6 +14,7 @@ import {
     type ReadWeaveQualityState,
     type ReadWeaveResolvedEntry,
     type ReadWeaveSaveRequest,
+    type ReadWeaveSourceLocator,
     type ReadWeaveTermIdentity,
     type ReadWeaveVerifiedNonExpandableArtifact
 } from "@triliumnext/commons";
@@ -135,7 +136,10 @@ function parseLink(note: BNote): ReadWeaveLink | null {
         depth: Number.isInteger(value.depth) && Number(value.depth) >= 0 && Number(value.depth) <= 5
             ? Number(value.depth)
             : 0,
-        sourceExcerpt: typeof value.sourceExcerpt === "string" ? value.sourceExcerpt : ""
+        sourceExcerpt: typeof value.sourceExcerpt === "string" ? value.sourceExcerpt : "",
+        sourceLocator: (() => {
+            try { return normalizeSourceLocator(value.sourceLocator); } catch { return undefined; }
+        })()
     } as ReadWeaveLink;
 }
 
@@ -167,6 +171,36 @@ function getReadWeaveLink(linkId: string): { note: BNote; link: ReadWeaveLink } 
 
 function normalizeAnchorExcerpt(value: string): string {
     return value.normalize("NFKC").replace(/\s+/g, " ").trim();
+}
+
+function normalizeSourceLocator(value: unknown): ReadWeaveSourceLocator | undefined {
+    if (value === undefined || value === null) return undefined;
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+        throw new ValidationError("sourceLocator is invalid.");
+    }
+    const candidate = value as Partial<ReadWeaveSourceLocator>;
+    if (typeof candidate.prefix !== "string" || typeof candidate.suffix !== "string") {
+        throw new ValidationError("sourceLocator is invalid.");
+    }
+    // Keep boundary whitespace: it is part of the normalized text context and
+    // distinguishes a selection next to a space from one next to punctuation.
+    const prefix = candidate.prefix.replace(/\s+/gu, " ");
+    const suffix = candidate.suffix.replace(/\s+/gu, " ");
+    if (candidate.version !== 1
+        || !Number.isInteger(candidate.blockIndex) || Number(candidate.blockIndex) < 0 || Number(candidate.blockIndex) > 1_000_000
+        || !Number.isInteger(candidate.startOffset) || Number(candidate.startOffset) < 0 || Number(candidate.startOffset) > 10_000_000
+        || !Number.isInteger(candidate.endOffset) || Number(candidate.endOffset) < Number(candidate.startOffset) || Number(candidate.endOffset) > 10_000_000
+        || prefix.length > 64 || suffix.length > 64) {
+        throw new ValidationError("sourceLocator is invalid.");
+    }
+    return {
+        version: 1,
+        blockIndex: Number(candidate.blockIndex),
+        startOffset: Number(candidate.startOffset),
+        endOffset: Number(candidate.endOffset),
+        prefix,
+        suffix
+    };
 }
 
 function validateAnchorConsistency(articleId: string, anchorId: string, anchorType: ReadWeaveAnchorType, sourceExcerpt: string): void {
@@ -201,6 +235,7 @@ function resolveLink(link: ReadWeaveLink): ReadWeaveResolvedEntry | null {
         anchorId: link.anchorId,
         anchorType: link.anchorType,
         objectId: object.objectId,
+        sourceLocator: link.sourceLocator,
         parentLinkId: link.parentLinkId,
         rootLinkId: link.rootLinkId ?? link.linkId,
         depth: link.depth ?? 0,
@@ -257,6 +292,7 @@ export function getAnchorSummaries(articleIdValue: unknown): ReadWeaveAnchorSumm
             anchorId,
             anchorType: links.find(link => link.anchorType === "range")?.anchorType ?? "paragraph",
             excerpt: links.find(link => link.sourceExcerpt)?.sourceExcerpt ?? "",
+            sourceLocator: links.find(link => link.sourceLocator)?.sourceLocator,
             questionCount: new Set(entries.filter(entry => entry.kind === "question").map(entry => entry.objectId)).size,
             termCount: new Set(entries.filter(entry => entry.kind === "term").map(entry => entry.objectId)).size,
             entries
@@ -386,6 +422,7 @@ function createLink(request: ReadWeaveSaveRequest, object: ReadWeaveObject): Rea
     const article = becca.getNoteOrThrow(articleId);
     const objectNote = becca.getNoteOrThrow(object.objectId);
     const sourceExcerpt = requireText(request.sourceExcerpt, "sourceExcerpt", 10_000);
+    const sourceLocator = normalizeSourceLocator(request.sourceLocator);
     const tree = parentTreeFor(request);
     if (!objectNote.isContentAvailable()) throw new ValidationError("The reusable object is unavailable in the current protected session.");
 
@@ -409,6 +446,7 @@ function createLink(request: ReadWeaveSaveRequest, object: ReadWeaveObject): Rea
         depth: tree.depth,
         parentRevision: tree.parentRevision,
         sourceExcerpt,
+        sourceLocator,
         createdAt: timestamp,
         updatedAt: timestamp
     };
@@ -434,6 +472,7 @@ export function saveReadWeaveEntry(request: ReadWeaveSaveRequest, hooks?: {
     const anchorId = requireId(request.anchorId, "anchorId");
     const anchorType = requireAnchorType(request.anchorType);
     const sourceExcerpt = requireText(request.sourceExcerpt, "sourceExcerpt", 10_000);
+    normalizeSourceLocator(request.sourceLocator);
     validateAnchorConsistency(articleId, anchorId, anchorType, sourceExcerpt);
     parentTreeFor(request);
     if (request.kind === "term") {

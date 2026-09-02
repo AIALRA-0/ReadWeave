@@ -26,18 +26,45 @@ export async function loadFreshBootstrap<T>(options: FreshBootstrapOptions = {})
         cache: "no-store",
         credentials: "same-origin"
     });
-    if (response.status === 401) {
+    if (response.status === 401 || isAuthenticationFetchResponse(response, "")) {
         recoverExpiredAuthentication({ navigate: options.navigate });
         throw new Error("Authentication is required");
     }
     if (!response.ok) {
         throw new Error(`Bootstrap failed with HTTP ${response.status}`);
     }
-    const bootstrap = await response.json() as T;
+    const bootstrap = await readBootstrapBody<T>(response, options.navigate);
     if (bootstrap && typeof bootstrap === "object" && "loggedIn" in bootstrap && bootstrap.loggedIn === true) {
         clearRecoveryNavigationMarker();
     }
     return bootstrap;
+}
+
+async function readBootstrapBody<T>(response: globalThis.Response, navigate?: (url: string) => void): Promise<T> {
+    // Reading text first lets us reject a proxy's HTTP 200 login document
+    // before it reaches startup code that expects a bootstrap object.
+    if (typeof response.text === "function") {
+        const body = await response.text();
+        if (isAuthenticationFetchResponse(response, body)) {
+            recoverExpiredAuthentication({ navigate });
+            throw new Error("Authentication is required");
+        }
+        try {
+            return JSON.parse(body) as T;
+        } catch {
+            throw new Error("Bootstrap returned invalid JSON");
+        }
+    }
+    return await response.json() as T;
+}
+
+function isAuthenticationFetchResponse(response: Pick<globalThis.Response, "url" | "headers">, body: string): boolean {
+    const required = response.headers?.get?.("x-aialra-auth-required")?.trim() === "1";
+    const redirectedToAuth = /\/_aialra_auth\/(?:sign-in|forbidden)/iu.test(response.url ?? "");
+    const contentType = response.headers?.get?.("content-type")?.toLocaleLowerCase() ?? "";
+    const loginMarkup = contentType.includes("text/html")
+        && /<form\b[^>]*(?:sign-in|login)|_aialra_auth\/sign-in|id=["'](?:sign-in|login)["']/iu.test(body);
+    return required || redirectedToAuth || loginMarkup;
 }
 
 function clearRecoveryNavigationMarker(): void {

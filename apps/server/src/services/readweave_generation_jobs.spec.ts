@@ -1,4 +1,4 @@
-import type { ReadWeaveGenerateRequest, ReadWeaveGenerateResponse } from "@triliumnext/commons";
+import type { ReadWeaveGenerateRequest, ReadWeaveGenerateResponse, ReadWeaveSourceLocator } from "@triliumnext/commons";
 import { cls, hidden_subtree as hiddenSubtreeService, note_service as noteService, protected_session as protectedSessionModule } from "@triliumnext/core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -162,6 +162,27 @@ describe("ReadWeave persisted generation jobs", () => {
         expect(getReadWeaveGenerationEvents(started.jobId, firstPage.nextSequence).events).toEqual([]);
 
         expect(markReadWeaveGenerationJobViewed(started.jobId).unread).toBe(false);
+    });
+
+    it("round-trips a source locator through the job, commit and saved link", async () => {
+        const sourceLocator: ReadWeaveSourceLocator = {
+            version: 1,
+            blockIndex: 2,
+            startOffset: 8,
+            endOffset: 11,
+            prefix: "前文",
+            suffix: "后文"
+        };
+        const started = startReadWeaveGenerationJob({ ...request, anchorId: "range_jobs_locator", sourceLocator });
+        expect(started.sourceLocator).toEqual(sourceLocator);
+        const ready = await waitForStatus(started.jobId, "ready-for-review");
+        expect(ready.sourceLocator).toEqual(sourceLocator);
+
+        const saved = commitReadWeaveGenerationJob(started.jobId, { expectedStateVersion: ready.stateVersion });
+        expect(saved.sourceLocator).toEqual(sourceLocator);
+        expect(getEntriesForAnchor(request.articleId, "range_jobs_locator")[0].sourceLocator).toEqual(sourceLocator);
+        expect(getAnchorSummaries(request.articleId).find(summary => summary.anchorId === "range_jobs_locator")?.sourceLocator)
+            .toEqual(sourceLocator);
     });
 
     it("commits once with optimistic concurrency and returns the same saved link on retries", async () => {
@@ -379,6 +400,31 @@ describe("ReadWeave persisted generation jobs", () => {
         expect(paused.failureClass).toBe("semantic");
         expect(paused.error).toContain("内部检查协议未能形成有效修复计划");
         expect(paused.progress.some(event => event.stage === "paused")).toBe(true);
+    });
+
+    it("classifies provider configuration failures without retrying or re-queueing", async () => {
+        generateMock.mockRejectedValue(new Error("401 invalid API key"));
+
+        const started = startReadWeaveGenerationJob({ ...request, anchorId: "range_jobs_configuration" });
+        const paused = await waitForStatus(started.jobId, "paused");
+
+        expect(generateMock).toHaveBeenCalledTimes(1);
+        expect(paused.failureClass).toBe("configuration");
+        await new Promise(resolve => setTimeout(resolve, 40));
+        expect(generateMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries transport failures once and then waits for a manual retry", async () => {
+        generateMock.mockRejectedValue(new Error("upstream timeout"));
+
+        const started = startReadWeaveGenerationJob({ ...request, anchorId: "range_jobs_transport" });
+        const paused = await waitForStatus(started.jobId, "paused");
+
+        expect(generateMock).toHaveBeenCalledTimes(2);
+        expect(paused.failureClass).toBe("transport");
+        expect(paused.progress.some(event => event.message.includes("自动恢复第 2 次"))).toBe(true);
+        await new Promise(resolve => setTimeout(resolve, 80));
+        expect(generateMock).toHaveBeenCalledTimes(2);
     });
 
     it("pauses without replay when evidence is only bibliographic metadata", async () => {

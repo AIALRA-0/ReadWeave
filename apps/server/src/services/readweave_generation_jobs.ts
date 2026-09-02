@@ -69,7 +69,10 @@ interface EventRow {
 const activeJobs = new Map<string, { attemptId: string; controller: AbortController }>();
 let commitFaultForTests: "after-object" | "after-link" | "before-task-update" | undefined;
 const protectedSession = protectedSessionModule.default;
-const MAX_BACKGROUND_GENERATION_ATTEMPTS = 5;
+// A transient provider failure gets one automatic retry. Everything else is
+// surfaced as a durable task state so the scheduler cannot spend tokens in a
+// retry loop while a configuration or evidence problem remains unresolved.
+const MAX_BACKGROUND_GENERATION_ATTEMPTS = 2;
 const MAX_CONCURRENT_GENERATION_JOBS = 2;
 const LEASE_DURATION_MS = 30_000;
 const LEASE_HEARTBEAT_MS = 10_000;
@@ -81,6 +84,18 @@ function requireReadableArticle(articleId: string) {
     const article = becca.getNoteOrThrow(articleId);
     if (!article.isContentAvailable()) throw new ValidationError("Article is unavailable in the current protected session.");
     return article;
+}
+
+function validateSourceLocator(value: ReadWeaveGenerateRequest["sourceLocator"]): void {
+    if (value === undefined) return;
+    if (!value || typeof value !== "object" || value.version !== 1
+        || !Number.isInteger(value.blockIndex) || value.blockIndex < 0
+        || !Number.isInteger(value.startOffset) || value.startOffset < 0
+        || !Number.isInteger(value.endOffset) || value.endOffset < value.startOffset
+        || typeof value.prefix !== "string" || typeof value.suffix !== "string"
+        || value.prefix.length > 64 || value.suffix.length > 64) {
+        throw new ValidationError("sourceLocator is invalid.");
+    }
 }
 
 function encodeStoredValue(value: string | null, isProtected: boolean): string | null {
@@ -299,6 +314,7 @@ function publicJob(row: JobRow, includeProgress = true): ReadWeaveGenerationJob 
         parentLinkId: storedRequest?.parentLinkId,
         title: decodeStoredValue(row.title, row.isProtected) ?? "",
         sourceExcerpt: decodeStoredValue(row.sourceExcerpt, row.isProtected) ?? "",
+        sourceLocator: storedRequest?.sourceLocator,
         status: row.status,
         qualityState: row.qualityState === "verified" || row.qualityState === "provisional" ? row.qualityState : "legacy-unverified",
         harnessVersion: row.harnessVersion || "legacy",
@@ -482,6 +498,7 @@ function persistGeneratedResult(
         title,
         body: result.body,
         sourceExcerpt: sourceExcerpt(request),
+        sourceLocator: request.sourceLocator,
         calloutType,
         termIdentity,
         verifiedNonExpandableArtifact: result.verifiedNonExpandableArtifact,
@@ -506,6 +523,7 @@ export function setReadWeaveCommitFaultForTests(point?: typeof commitFaultForTes
 function classifyFailure(error: unknown): ReadWeaveFailureClass {
     const message = error instanceof Error ? error.message : String(error);
     if (/protected session|受保护会话/iu.test(message)) return "protected-session";
+    if (/401|402|403|无效.*(?:api.?key|密钥)|api.?key.*(?:缺失|missing|invalid)|凭据|credential|model.*(?:not found|不存在)|模型不存在|endpoint.*(?:不兼容|unsupported)/iu.test(message)) return "configuration";
     if (/费用|预算|cost|budget/iu.test(message)) return "budget";
     if (/来源|证据|搜索|联网|source|evidence|search/iu.test(message)) return "evidence";
     if (/格式|标点|括号|乱码|format|schema|json/iu.test(message)) return "format";
@@ -513,12 +531,11 @@ function classifyFailure(error: unknown): ReadWeaveFailureClass {
     if (/超时|限流|连接|网络|temporar|timeout|429|5\d\d|ECONN|fetch failed/iu.test(message)) return "transport";
     if (error instanceof NonRetryableReadWeaveError) return "semantic";
     if (error instanceof ValidationError) return "internal";
-    return "transport";
+    return "internal";
 }
 
 function isRetryableTransport(error: unknown): boolean {
-    return classifyFailure(error) === "transport"
-        && !/(?:401|402|403|404|API key|credential|模型不存在)/iu.test(error instanceof Error ? error.message : String(error));
+    return classifyFailure(error) === "transport";
 }
 
 function leaseExpiry(): string {
@@ -776,7 +793,7 @@ export function initializeReadWeaveGenerationJobs() {
             const retryBefore = new Date(Date.now() - 60_000).toISOString();
             const retryable = sql.getRows<JobRow>(/* sql */`
                 SELECT * FROM readweave_generation_jobs
-                WHERE status = 'paused' AND failureClass IN ('transport', 'protected-session') AND updatedAt < ?
+                WHERE status = 'paused' AND failureClass = 'protected-session' AND updatedAt < ?
                 ORDER BY updatedAt LIMIT 20
             `, [ retryBefore ]);
             for (const row of retryable) {
@@ -801,6 +818,7 @@ export function startReadWeaveGenerationJob(request: ReadWeaveGenerateRequest): 
     if (!request.articleId || !request.anchorId || !request.title?.trim() || !Array.isArray(request.fragments)) {
         throw new ValidationError("ReadWeave generation request is incomplete.");
     }
+    validateSourceLocator(request.sourceLocator);
     const article = requireReadableArticle(request.articleId);
     const isProtected = article.isProtected === true;
     if (request.kind === "term") {

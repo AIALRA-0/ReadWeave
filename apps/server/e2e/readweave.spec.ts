@@ -61,6 +61,40 @@ async function selectTextRange(page: Page, paragraph: Locator, selectedText: str
     await expect(page.locator(".readweave-selection-actions")).toBeVisible();
 }
 
+async function selectReadOnlyTextRange(page: Page, paragraph: Locator, selectedText: string) {
+    await expect(paragraph).toBeVisible({ timeout: 15_000 });
+    await expect(async () => {
+        await paragraph.evaluate((element, text) => {
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            let textNode: Text | undefined;
+            let start = -1;
+            while (walker.nextNode()) {
+                const candidate = walker.currentNode as Text;
+                const index = candidate.data.indexOf(text);
+                if (index >= 0) {
+                    textNode = candidate;
+                    start = index;
+                    break;
+                }
+            }
+            if (!textNode) throw new Error(`Could not find selected read-only text: ${text}`);
+            const range = document.createRange();
+            range.setStart(textNode, start);
+            range.setEnd(textNode, start + text.length);
+            const selection = window.getSelection()!;
+            selection.removeAllRanges();
+            selection.addRange(range);
+            document.dispatchEvent(new Event("selectionchange"));
+            element.dispatchEvent(new MouseEvent("mouseup", {
+                bubbles: true,
+                clientX: range.getBoundingClientRect().right,
+                clientY: range.getBoundingClientRect().top
+            }));
+        }, selectedText);
+        await expect(page.locator(".readweave-selection-actions")).toBeVisible({ timeout: 1_000 });
+    }).toPass({ timeout: 15_000, intervals: [ 100, 250, 500 ] });
+}
+
 async function createTextNote(app: App, title: string, body: string) {
     await app.addNewTab();
     const autocomplete = app.currentNoteSplit.locator(".note-autocomplete");
@@ -580,6 +614,145 @@ test("ReadWeave keeps launcher and right-panel headers separated across desktop 
         }));
         expect(layoutIssues, JSON.stringify(viewport)).toEqual([]);
     }
+});
+
+test("ReadWeave supports read-only questions without changing the article", async ({ page, context }) => {
+    test.setTimeout(120_000);
+    page.setDefaultTimeout(10_000);
+    const app = new App(page, context);
+    await gotoReadWeave(app, page);
+
+    const firstParagraph = "第一段包含 CDC 作为背景，但不是本次选区。";
+    const secondParagraph = "第二段再次出现 CDC，需要恢复第二处。";
+    const title = uniqueTitle("ReadWeave E2E · Read-only interaction");
+    await createTextNote(app, title, `${firstParagraph}\n\n${secondParagraph}`);
+    const noteId = await page.evaluate(() => (window as unknown as {
+        glob: { appContext: { tabManager: { getActiveContext: () => { noteId: string } } } }
+    }).glob.appContext.tabManager.getActiveContext().noteId);
+    const origin = new URL(page.url()).origin;
+    const csrfToken = await page.evaluate(() => (window as unknown as { glob: { csrfToken: string } }).glob.csrfToken);
+    const readOnlyResponse = await page.request.post(`${origin}/api/notes/${encodeURIComponent(noteId)}/attributes`, {
+        headers: { "x-csrf-token": csrfToken },
+        data: { type: "label", name: "readOnly", value: "true" }
+    });
+    expect(readOnlyResponse.ok()).toBe(true);
+
+    const beforeResponse = await page.request.get(`${origin}/api/notes/${encodeURIComponent(noteId)}/blob`);
+    expect(beforeResponse.ok()).toBe(true);
+    const articleBefore = ((await beforeResponse.json()) as { content: string }).content;
+    const articleDataPuts: string[] = [];
+    const generationStarts: string[] = [];
+    const onRequest = (request: { method: () => string; url: () => string }) => {
+        const url = new URL(request.url());
+        if (request.method() === "PUT" && url.pathname === `/api/notes/${noteId}/data`) articleDataPuts.push(request.url());
+        if (request.method() === "POST" && url.pathname === "/api/readweave/generation-jobs") generationStarts.push(request.url());
+    };
+    page.on("request", onRequest);
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(app.currentNoteSplitTitle).toHaveValue(title, { timeout: 20_000 });
+    const content = page.locator('.note-detail-readonly-text-content[data-readweave-content-root="readonly"]');
+    await expect(content).toBeVisible({ timeout: 20_000 });
+    const second = content.locator("p", { hasText: secondParagraph });
+    await selectReadOnlyTextRange(page, second, "CDC");
+    const panel = app.sidebar.locator("#readweave-panel");
+    await expect(panel.locator(".readweave-selection")).toContainText("CDC");
+    await page.locator(".readweave-selection-actions").getByRole("button", { name: "Ask", exact: true }).click();
+    await expect(panel.getByRole("button", { name: "Generate answer", exact: true })).toBeEnabled();
+    await panel.getByRole("button", { name: "Generate answer", exact: true }).click();
+    await expect.poll(() => generationStarts.length).toBe(1);
+    await expect(panel.getByTestId("readweave-answer")).toContainText(/\S/u, { timeout: 30_000 });
+    await ensureGeneratedItemSaved(panel);
+    await expect.poll(() => articleDataPuts.length).toBe(0);
+    const savedAnchorsResponse = await page.request.get(`${origin}/api/readweave/articles/${encodeURIComponent(noteId)}/anchors`);
+    expect(savedAnchorsResponse.ok()).toBe(true);
+    const savedAnchors = (await savedAnchorsResponse.json()) as { anchors: Array<{ anchorId: string; sourceLocator?: unknown }> };
+    expect(savedAnchors.anchors).toHaveLength(1);
+    expect(savedAnchors.anchors[0].sourceLocator).toBeTruthy();
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(app.currentNoteSplitTitle).toHaveValue(title, { timeout: 20_000 });
+    const reloadedContent = page.locator('.note-detail-readonly-text-content[data-readweave-content-root="readonly"]');
+    const reloadedFirst = reloadedContent.locator("p", { hasText: firstParagraph });
+    const reloadedSecond = reloadedContent.locator("p", { hasText: secondParagraph });
+    const runtimeAnchor = reloadedSecond.locator('[data-readweave-runtime-only="1"][data-readweave-range-anchor-id]');
+    await expect(runtimeAnchor).toHaveCount(1, { timeout: 20_000 });
+    await expect(reloadedFirst.locator('[data-readweave-runtime-only="1"]')).toHaveCount(0);
+    const afterResponse = await page.request.get(`${origin}/api/notes/${encodeURIComponent(noteId)}/blob`);
+    expect(((await afterResponse.json()) as { content: string }).content).toBe(articleBefore);
+
+    await runtimeAnchor.click();
+    const restoredEntry = app.sidebar.locator("#readweave-panel .readweave-entry").first();
+    await expect(restoredEntry).toBeVisible();
+    await restoredEntry.getByRole("button", { name: /^Delete /u }).click();
+    await app.sidebar.locator("#readweave-panel").getByRole("alertdialog", { name: "Delete saved content" })
+        .getByRole("button", { name: "Delete", exact: true }).click();
+    await expect(restoredEntry).toHaveCount(0);
+    await expect.poll(async () => {
+        const response = await page.request.get(`${origin}/api/notes/${encodeURIComponent(noteId)}/blob`);
+        return ((await response.json()) as { content: string }).content;
+    }).toBe(articleBefore);
+    expect(articleDataPuts).toEqual([]);
+    page.off("request", onRequest);
+});
+
+test("ReadWeave does not reapply an identical editor blob after saving an anchor", async ({ page, context }) => {
+    test.setTimeout(120_000);
+    page.setDefaultTimeout(10_000);
+    const pageErrors: string[] = [];
+    const consoleErrors: string[] = [];
+    page.on("pageerror", error => pageErrors.push(error.message));
+    page.on("console", message => {
+        if (message.type() === "error") consoleErrors.push(message.text());
+    });
+    const app = new App(page, context);
+    await gotoReadWeave(app, page);
+    const source = Array.from({ length: 16 }, (_value, index) => `第${index + 1}段用于滚动和保存回显测试。目标词 无闪烁 位于中间位置。`).join("\n\n");
+    const editor = await createTextNote(app, uniqueTitle("ReadWeave E2E · Save echo"), source);
+    const paragraph = editor.locator("p", { hasText: "目标词 无闪烁" }).first();
+    await selectTextRange(page, paragraph, "无闪烁");
+    await page.locator(".readweave-selection-actions").getByRole("button", { name: "Ask", exact: true }).click();
+    const panel = app.sidebar.locator("#readweave-panel");
+    const noteId = await page.evaluate(() => (window as unknown as {
+        glob: { appContext: { tabManager: { getActiveContext: () => { noteId: string } } } }
+    }).glob.appContext.tabManager.getActiveContext().noteId);
+    const dataPuts: string[] = [];
+    const onRequest = (request: { method: () => string; url: () => string }) => {
+        const url = new URL(request.url());
+        if (request.method() === "PUT" && url.pathname === `/api/notes/${noteId}/data`) dataPuts.push(request.url());
+    };
+    page.on("request", onRequest);
+    const editorIdentity = await editor.evaluate(element => {
+        const htmlElement = element as HTMLElement;
+        htmlElement.scrollTop = 24;
+        htmlElement.focus();
+        const editorWithIdentity = htmlElement as HTMLElement & { readweaveE2eEditorIdentity?: string };
+        editorWithIdentity.readweaveE2eEditorIdentity ??= crypto.randomUUID();
+        return { identity: editorWithIdentity.readweaveE2eEditorIdentity, scrollTop: htmlElement.scrollTop };
+    });
+    await panel.getByRole("button", { name: "Generate answer", exact: true }).click();
+    await expect(panel.getByTestId("readweave-answer")).toContainText(/\S/u, { timeout: 30_000 });
+    await expect.poll(() => dataPuts.length).toBeGreaterThan(0);
+    const firstSaveCount = dataPuts.length;
+    await page.waitForTimeout(8_000);
+    expect(dataPuts.length).toBe(firstSaveCount);
+    const after = await editor.evaluate(element => {
+        const htmlElement = element as HTMLElement;
+        const editorWithIdentity = htmlElement as HTMLElement & { readweaveE2eEditorIdentity?: string };
+        return {
+            identity: editorWithIdentity.readweaveE2eEditorIdentity,
+            scrollTop: htmlElement.scrollTop,
+            connected: element.isConnected
+        };
+    });
+    expect(after.identity).toBe(editorIdentity.identity);
+    expect(after.connected).toBe(true);
+    expect(after.scrollTop).toBe(editorIdentity.scrollTop);
+    expect(pageErrors).toEqual([]);
+    expect(consoleErrors.filter(message =>
+        !/CKEditor license key is not set|ResizeObserver loop completed with undelivered notifications/iu.test(message)
+    )).toEqual([]);
+    page.off("request", onRequest);
 });
 
 test("ReadWeave confirms a pending selection from the right panel and enables generation", async ({ page, context }) => {
