@@ -631,6 +631,16 @@ test("ReadWeave supports read-only questions without changing the article", asyn
     }).glob.appContext.tabManager.getActiveContext().noteId);
     const origin = new URL(page.url()).origin;
     const csrfToken = await page.evaluate(() => (window as unknown as { glob: { csrfToken: string } }).glob.csrfToken);
+
+    // Wait for the initial editor input to reach the server before changing the
+    // note's mode. Otherwise a cold Docker run can deliver that legitimate
+    // creation save after the read-only assertion starts listening.
+    await expect.poll(async () => {
+        const response = await page.request.get(`${origin}/api/notes/${encodeURIComponent(noteId)}/blob`);
+        if (!response.ok()) return "";
+        return ((await response.json()) as { content: string }).content;
+    }, { timeout: 20_000 }).toContain(firstParagraph);
+
     const readOnlyResponse = await page.request.post(`${origin}/api/notes/${encodeURIComponent(noteId)}/attributes`, {
         headers: { "x-csrf-token": csrfToken },
         data: { type: "label", name: "readOnly", value: "true" }
