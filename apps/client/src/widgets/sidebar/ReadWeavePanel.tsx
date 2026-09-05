@@ -1726,6 +1726,16 @@ export default function ReadWeavePanel() {
                                 : selection.anchorType === "range" ? t("readweave.selected_range") : t("readweave.selected_paragraph")}</div>
                             <p>{selection.excerpt}</p>
                         </section>
+                        {selection.pending && selection.readonly && (
+                            <div class="readweave-selection-actions readweave-selection-actions-panel" role="toolbar" aria-label="只读选区操作">
+                                <button type="button" onClick={() => confirmPendingSelection("question")}>
+                                    {t("readweave.ask_action")}
+                                </button>
+                                <button type="button" onClick={() => confirmPendingSelection("term")}>
+                                    {t("readweave.define_action")}
+                                </button>
+                            </div>
+                        )}
 
                         <section class="readweave-existing">
                             <div class="readweave-section-title">{t("readweave.saved_items")}</div>
@@ -2766,8 +2776,9 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
                 pendingSelectionActionsRef.current[preferredKind] = () => {
                     void activate(new Event("readweave-confirm-selection", { cancelable: true }));
                 };
-                actionBubble.append(button);
+                if (mode !== "readonly") actionBubble.append(button);
             }
+            if (mode === "readonly") return;
             document.body.append(actionBubble);
             positionBubble();
         }
@@ -2942,7 +2953,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
         document.addEventListener("keydown", onKeyDown, true);
         return () => {
             disposed = true;
-            pendingSelectionActionsRef.current = {};
+            if (optionsRef.current.noteId !== noteId) pendingSelectionActionsRef.current = {};
             window.clearTimeout(editorAttachTimer);
             if (selectionFrame !== undefined) window.cancelAnimationFrame(selectionFrame);
             removeBubble();

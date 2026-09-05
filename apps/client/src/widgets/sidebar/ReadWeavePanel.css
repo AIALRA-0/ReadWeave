@@ -244,6 +244,13 @@
     background: var(--accented-background-color);
 }
 
+.readweave-selection-actions-panel {
+    position: static;
+    width: fit-content;
+    box-shadow: none;
+    animation: none;
+}
+
 .readweave-panel {
     display: flex;
     flex-direction: column;
