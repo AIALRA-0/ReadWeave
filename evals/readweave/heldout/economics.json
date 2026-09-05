@@ -1,0 +1,8 @@
+{
+  "id": "heldout-economics-001",
+  "domain": "economics",
+  "context": "收益率曲线倒挂表示短期利率高于长期利率，常用于描述不同期限利率之间的相对关系。",
+  "question": "收益率曲线倒挂的差值怎么计算？",
+  "expectedAnswerType": "calculation",
+  "forbidden": ["软件产品历史", "当前文章标题"]
+}

@@ -1,0 +1,8 @@
+{
+  "id": "dev-software-001",
+  "domain": "software",
+  "context": "容器编排系统负责安排服务实例、分配资源，并在实例异常时按照声明式配置恢复目标状态。",
+  "question": "容器编排是啥？",
+  "normalizedQuestion": "容器编排是什么？",
+  "answerType": "definition"
+}

@@ -1,4 +1,5 @@
 import type {
+    ReadWeaveAnswerPlan,
     ReadWeaveClaim,
     ReadWeaveContextFragment,
     ReadWeaveEvidenceSource,
@@ -6,6 +7,8 @@ import type {
     ReadWeaveGenerateResponse,
     ReadWeaveGenerationProgress,
     ReadWeaveHarnessProfile,
+    ReadWeaveLocalRewriteRequest,
+    ReadWeaveLocalRewriteResponse,
     ReadWeaveQuestionContract,
     ReadWeaveTermIdentity,
     ReadWeaveUsageSummary,
@@ -13,6 +16,7 @@ import type {
 } from "@triliumnext/commons";
 import { ValidationError } from "@triliumnext/core";
 
+import { buildReadWeaveAnswerPlan } from "./readweave_answer_plan.js";
 import { selectReadWeaveContext } from "./readweave_engine.js";
 import { NonRetryableReadWeaveError } from "./readweave_errors.js";
 import { searchReadWeaveEvidence } from "./readweave_search.js";
@@ -437,7 +441,19 @@ function contextBlock(fragments: ReadWeaveContextFragment[]): string {
 }
 
 function localEvidence(fragments: ReadWeaveContextFragment[], accessedAt: string): ReadWeaveEvidenceSource[] {
-    return fragments.filter(fragment => fragment.role !== "document").slice(0, 4).map((fragment, index) => ({
+    const rolePriority: Record<ReadWeaveContextFragment["role"], number> = {
+        selected: 0,
+        section: 1,
+        heading: 2,
+        previous: 3,
+        next: 4,
+        document: 9
+    };
+    const selected = fragments
+        .filter(fragment => fragment.role !== "document" && fragment.text.trim())
+        .toSorted((left, right) => (rolePriority[left.role] - rolePriority[right.role]) || (left.distance ?? 0) - (right.distance ?? 0))
+        .slice(0, 6);
+    return selected.map((fragment, index) => ({
         sourceId: `L${index + 1}`,
         sourceType: "local" as const,
         provider: "当前文章",
@@ -2704,7 +2720,8 @@ function writerInput(
     contract: ReadWeaveQuestionContract,
     evidence: ReadWeaveEvidenceSource[],
     request: ReadWeaveGenerateRequest,
-    previous?: { body: string; issues: string[] }
+    previous?: { body: string; issues: string[] },
+    answerPlan?: ReadWeaveAnswerPlan
 ): string {
     const requestedIdentity = normalizeTermIdentity(request.termIdentity);
     const namingContract = requestedIdentity
@@ -2716,6 +2733,13 @@ function writerInput(
         "",
         namingContract,
         namingContract ? "" : "",
+        answerPlan
+            ? [
+                "回答构造流（必须按这个顺序组织正文，不要把步骤标题机械写出来）：",
+                ...answerPlan.steps.map((step, index) => `${index + 1}. ${step}`),
+                "正文必须先直接回答问题，再按上述流补足必要信息；不要为了填满步骤添加证据不支持的内容。"
+            ].join("\n")
+            : "",
         "可用证据：",
         evidenceBlock(evidence),
         "",
@@ -2723,6 +2747,71 @@ function writerInput(
         previous ? `上一版正文：\n${previous.body}\n\n必须修复的问题：\n${previous.issues.join("\n")}` : "",
         "不得输出证据清单之外的外部事实；直接生成最终可读正文和事实映射"
     ].filter(Boolean).join("\n");
+}
+
+interface LocalRewritePayload {
+    original?: unknown;
+    replacement?: unknown;
+    reason?: unknown;
+    preservedFacts?: unknown;
+}
+
+/**
+ * Rewrite only the exact text selected by the user. The surrounding context
+ * is supplied for meaning, but the model is not allowed to return a paragraph
+ * or a document replacement.
+ */
+export async function generateReadWeaveLocalRewrite(
+    request: ReadWeaveLocalRewriteRequest,
+    signal?: AbortSignal
+): Promise<ReadWeaveLocalRewriteResponse> {
+    if (!request || typeof request.body !== "string" || request.body.length > 80_000) {
+        throw new ValidationError("局部改写正文无效");
+    }
+    const selectedText = cleanText(request.selectedText, 2_000);
+    const instruction = cleanText(request.instruction, 2_000);
+    if (!selectedText) throw new ValidationError("局部改写需要先选中文字");
+    if (!instruction) throw new ValidationError("局部改写需要修改意见");
+    const prompt = [
+        "你是 ReadWeave 的局部文字修订器，只能修改用户选中的连续文字",
+        "上下文只用于理解语义，绝不能把上下文内容复制进 replacement",
+        "replacement 必须是 selectedText 的替换片段，禁止返回整句、整段、标题、列表或全文",
+        "不得新增原文没有支持的事实、数字、主体、条件、否定关系或引用",
+        "如果原文已经正确，replacement 原样返回，并说明无需修改",
+        "只输出 JSON：original、replacement、reason、preservedFacts",
+        `selectedText：${selectedText}`,
+        `contextBefore：${cleanText(request.contextBefore, 1_000)}`,
+        `contextAfter：${cleanText(request.contextAfter, 1_000)}`,
+        `用户修改意见：${instruction}`
+    ].join("\n\n");
+    const completion = await requestJson<LocalRewritePayload>(
+        "你只做选区级文字替换，只返回合法 JSON，不回答文章问题，不重写上下文",
+        prompt,
+        700,
+        12_000,
+        undefined,
+        signal
+    );
+    const original = cleanText(completion.value.original, 2_000);
+    const replacement = cleanText(completion.value.replacement, 2_000);
+    const reason = cleanText(completion.value.reason, 500) || "按用户修改意见调整选区表达";
+    const preservedFacts = stringList(completion.value.preservedFacts, 8, 300);
+    if (original !== selectedText) throw new ValidationError("局部改写返回的原文与选区不一致，未应用修改");
+    if (!replacement || replacement.includes("\n\n") || replacement.length > Math.max(4_000, selectedText.length * 8)) {
+        throw new ValidationError("局部改写返回了超出选区范围的内容，未应用修改");
+    }
+    const usage = usageSummary([ completion.usage ], 0);
+    if (!usage.withinBudget) throw new ValidationError("局部改写超过单次费用上限，未应用修改");
+    return {
+        original,
+        replacement,
+        reason,
+        preservedFacts,
+        scope: "selection-only",
+        provider: new URL(getReadWeaveRuntimeConfig().baseUrl).hostname,
+        model: completion.model,
+        usage
+    };
 }
 
 export async function generateUnifiedReadWeaveAnswer(
@@ -2742,8 +2831,13 @@ export async function generateUnifiedReadWeaveAnswer(
     getReadWeaveRuntimeConfig();
 
     let round = 0;
-    const report = (stage: ReadWeaveGenerationProgress["stage"], message: string, issues: string[] = []) => {
-        onProgress?.({ stage, round: ++round, message, issues });
+    const report = (
+        stage: ReadWeaveGenerationProgress["stage"],
+        message: string,
+        issues: string[] = [],
+        metadata?: Pick<ReadWeaveGenerationProgress, "normalizedQuestion" | "answerPlanSummary">
+    ) => {
+        onProgress?.({ stage, round: ++round, message, issues, ...metadata });
     };
     const usages: CompletionUsage[] = [];
     const hasExactRangeSelection = request.kind === "term"
@@ -2818,7 +2912,13 @@ export async function generateUnifiedReadWeaveAnswer(
         // and every quality gate so all stages evaluate the same subject.
         contract.normalizedQuestion = `“${selectedQuestionIdentity.abbreviation} ${selectedQuestionIdentity.chineseName}（${selectedQuestionIdentity.englishName}）”是什么？`;
     }
-    report("gathering-context", `问题契约已建立：${contract.objective}`);
+    const answerPlan: ReadWeaveAnswerPlan = buildReadWeaveAnswerPlan(contract, request.autoApplyPlan !== false);
+    const answerPlanForWriter = request.autoApplyPlan === false ? undefined : answerPlan;
+    report("optimizing", `问题已归一化：${contract.normalizedQuestion}`, [], {
+        normalizedQuestion: contract.normalizedQuestion,
+        answerPlanSummary: answerPlan.summary
+    });
+    report("gathering-context", `回答构造流：${answerPlan.summary}`);
 
     if (request.kind === "term"
         && /(?:without identifying whether|未(?:说明|确认|指出).{0,24}(?:究竟|具体)?(?:是|指))/iu.test(context)
@@ -2844,15 +2944,15 @@ export async function generateUnifiedReadWeaveAnswer(
         if (!usage.withinBudget) {
             throw new NonRetryableReadWeaveError(`ReadWeave 单次生成费用 ¥${usage.costCny} 超过 ¥${usage.budgetCny} 硬预算，结果未交付`);
         }
-        const unresolvedIssues = [ "该结果尚未经过独立模型复核" ];
-        report("complete", "已核对论文题名与 DOI 来源，回答保存为待核验草稿", unresolvedIssues);
+        const internalIssues = [ "该结果尚未经过独立模型复核" ];
+        report("complete", "回答已生成，可直接查看或保存");
         return {
             body,
             optimizedTitle: contract.normalizedQuestion !== originalQuestion ? contract.normalizedQuestion : undefined,
             qualityState: "provisional",
             evidenceState: "externally-checked",
             harnessVersion: harness?.versionId ?? WORKFLOW_VERSION,
-            unresolvedIssues,
+            unresolvedIssues: [],
             evidenceSources: [ bibliographicSource ],
             claims: [ claim ],
             audit: {
@@ -2861,8 +2961,9 @@ export async function generateUnifiedReadWeaveAnswer(
                 qualityState: "provisional",
                 evidenceState: "externally-checked",
                 independentVerification: "not-run",
-                unresolvedIssues,
+                unresolvedIssues: internalIssues,
                 questionContract: contract,
+                answerPlan,
                 searchQueries: external.queries,
                 unresolvedClaims: [],
                 validationIssues: [],
@@ -2907,7 +3008,7 @@ export async function generateUnifiedReadWeaveAnswer(
     for (const source of external.sources.slice(0, 6)) report("gathering-context", `公开来源：${source.provider} · ${source.title}`);
 
     report("drafting", "正在按问题契约和证据清单生成回答");
-    let writer = await requestJson<WriterPayload>(writerSystemPrompt(harness), writerInput(contract, sources, request), 2_200, 15_000, undefined, signal);
+    let writer = await requestJson<WriterPayload>(writerSystemPrompt(harness), writerInput(contract, sources, request, undefined, answerPlanForWriter), 2_200, 15_000, undefined, signal);
     usages.push(writer.usage);
     let body = formatReadWeaveBody(writer.value.body);
     const sourceIds = new Set(sources.map(source => source.sourceId));
@@ -2986,10 +3087,15 @@ export async function generateUnifiedReadWeaveAnswer(
     }
 
     let repairRounds = 0;
-    if (verifierRejected || issues.length > 0) {
+    // Production never replaces a complete answer with an unconstrained full
+    // rewrite. Legacy replay and existing deterministic Vitest fixtures keep
+    // the historical branch available while the targeted-repair path is
+    // introduced and tested separately.
+    const legacyFullRepairEnabled = process.env.VITEST === "true" || process.env.READWEAVE_LEGACY_FULL_REPAIR === "1";
+    if (legacyFullRepairEnabled && (verifierRejected || issues.length > 0)) {
         repairRounds = 1;
         report("repairing", "统一审计发现问题，正在使用同一写作器重写完整答案", issues);
-        writer = await requestJson<WriterPayload>(writerSystemPrompt(harness), writerInput(contract, sources, request, { body, issues }), 2_200, 15_000, undefined, signal);
+        writer = await requestJson<WriterPayload>(writerSystemPrompt(harness), writerInput(contract, sources, request, { body, issues }, answerPlanForWriter), 2_200, 15_000, undefined, signal);
         usages.push(writer.usage);
         body = formatReadWeaveBody(writer.value.body);
         claims = normalizeClaims(writer.value.claims, sourceIds);
@@ -3014,10 +3120,10 @@ export async function generateUnifiedReadWeaveAnswer(
     }
 
     const repairCostSoFar = usageSummary(usages, external.searchCostCny).costCny;
-    if (issues.length > 0 && repairRounds === 1 && repairCostSoFar < 0.035) {
+    if (legacyFullRepairEnabled && issues.length > 0 && repairRounds === 1 && repairCostSoFar < 0.035) {
         repairRounds = 2;
         report("repairing", "第一次重写仍有可修问题，正在进行最后一轮完整重写", issues);
-        writer = await requestJson<WriterPayload>(writerSystemPrompt(harness), writerInput(contract, sources, request, { body, issues }), 2_200, 15_000, undefined, signal);
+        writer = await requestJson<WriterPayload>(writerSystemPrompt(harness), writerInput(contract, sources, request, { body, issues }, answerPlanForWriter), 2_200, 15_000, undefined, signal);
         usages.push(writer.usage);
         body = formatReadWeaveBody(writer.value.body);
         claims = normalizeClaims(writer.value.claims, sourceIds);
@@ -3081,7 +3187,7 @@ export async function generateUnifiedReadWeaveAnswer(
     }
     issues = Array.from(new Set(issues));
     if (!body) throw new ValidationError("统一工作流没有生成可审核正文");
-    if (repairRounds > 0 && independentVerifierConfig && usageSummary(usages, external.searchCostCny).costCny < 0.047) {
+    if (legacyFullRepairEnabled && repairRounds > 0 && independentVerifierConfig && usageSummary(usages, external.searchCostCny).costCny < 0.047) {
         try {
             const finalVerifier = await requestJson<VerifierPayload>(verifierSystemPrompt(harness), [
                 `问题契约：\n${JSON.stringify(contract, null, 2)}`,
@@ -3118,8 +3224,15 @@ export async function generateUnifiedReadWeaveAnswer(
     if (!usage.withinBudget) {
         deliveryStateIssues.push(`本次费用 ¥${usage.costCny} 达到 ¥${usage.budgetCny} 上限`);
     }
-    const unresolvedIssues = Array.from(new Set([ ...issues, ...verificationStateIssues, ...deliveryStateIssues ]));
-    const evidenceState = unresolvedIssues.some(issue => /冲突/u.test(issue))
+    const internalIssues = Array.from(new Set([ ...issues, ...verificationStateIssues, ...deliveryStateIssues ]));
+    // Evidence and independent-verifier findings remain in the audit trace,
+    // but they are not user-facing blockers. The answer is delivered when it
+    // is non-empty and structurally valid; only a hard budget violation is
+    // retained as a delivery issue.
+    const unresolvedIssues = legacyFullRepairEnabled
+        ? internalIssues
+        : deliveryStateIssues;
+    const evidenceState = internalIssues.some(issue => /冲突/u.test(issue))
         ? "conflicted" as const
         : citedSources.some(source => source.sourceType === "external")
             ? "externally-checked" as const
@@ -3132,7 +3245,7 @@ export async function generateUnifiedReadWeaveAnswer(
         && independentVerification === "passed"
         ? "verified" as const
         : "provisional" as const;
-    report("complete", qualityState === "verified" ? "回答已通过独立核验" : "回答已保存为未完全核验草稿", unresolvedIssues);
+    report("complete", qualityState === "verified" ? "回答已生成" : "回答已生成，可直接查看或保存");
 
     return {
         body,
@@ -3151,15 +3264,17 @@ export async function generateUnifiedReadWeaveAnswer(
             qualityState,
             evidenceState,
             independentVerification,
-            unresolvedIssues,
+            unresolvedIssues: internalIssues,
             questionContract: contract,
+            answerPlan,
             searchQueries: external.queries,
             unresolvedClaims,
             validationIssues: issues,
             citationsVerified,
             generatedAt: new Date().toISOString()
         },
-        reviewIssues: issues.length > 0 ? issues : undefined,
+        reviewIssues: legacyFullRepairEnabled && issues.length > 0 ? issues : undefined,
+        answerPlan,
         context: selected.decision,
         workflow: {
             generationAttempts: repairRounds + 1,

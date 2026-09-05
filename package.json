@@ -48,6 +48,7 @@
     "dev:linter-check": "cross-env NODE_OPTIONS=--max_old_space_size=4096 eslint .",
     "dev:linter-fix": "cross-env NODE_OPTIONS=--max_old_space_size=4096 eslint . --fix",
     "readweave:privacy": "node scripts/readweave/privacy-scan.mjs --all-changes",
+    "readweave:eval-isolation": "node scripts/readweave/verify-eval-isolation.mjs",
     "readweave:privacy:staged": "node scripts/readweave/privacy-scan.mjs --staged",
     "readweave:install-hooks": "node scripts/readweave/install-git-hooks.mjs",
     "postinstall": "tsx scripts/electron-rebuild.mts && pnpm prepare",

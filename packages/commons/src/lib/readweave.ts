@@ -82,6 +82,18 @@ export interface ReadWeaveQuestionContract {
     requiresCurrentEvidence: boolean;
 }
 
+/**
+ * A small, inspectable answer outline. It is derived from the normalized
+ * contract and is deliberately separate from the generated body, so the UI
+ * can show the intended answer shape without exposing the full prompt trace.
+ */
+export interface ReadWeaveAnswerPlan {
+    answerType: "definition" | "identity" | "reason" | "mechanism" | "comparison" | "procedure" | "calculation" | "boundary" | "general";
+    steps: string[];
+    summary: string;
+    autoApplied: boolean;
+}
+
 export interface ReadWeaveEvidenceSource {
     sourceId: string;
     sourceType: "local" | "external";
@@ -109,6 +121,7 @@ export interface ReadWeaveGenerationAudit {
     independentVerification?: "passed" | "failed" | "not-run";
     unresolvedIssues?: string[];
     questionContract: ReadWeaveQuestionContract;
+    answerPlan?: ReadWeaveAnswerPlan;
     searchQueries: string[];
     unresolvedClaims: string[];
     validationIssues: string[];
@@ -142,6 +155,8 @@ export interface ReadWeaveGenerationProgress {
     issueGroups?: ReadWeaveGenerationIssue[];
     repairedSegmentIds?: string[];
     unchangedSegmentsVerified?: boolean;
+    normalizedQuestion?: string;
+    answerPlanSummary?: string;
 }
 
 export interface ReadWeaveGenerationJob {
@@ -286,6 +301,7 @@ export interface ReadWeaveGenerateRequest {
     sourceLocator?: ReadWeaveSourceLocator;
     title: string;
     optimizeQuestion?: boolean;
+    autoApplyPlan?: boolean;
     termIdentity?: Partial<ReadWeaveTermIdentity>;
     fragments: ReadWeaveContextFragment[];
     characterBudget?: number;
@@ -300,6 +316,7 @@ export interface ReadWeaveGenerateResponse {
     evidenceSources?: ReadWeaveEvidenceSource[];
     claims?: ReadWeaveClaim[];
     audit?: ReadWeaveGenerationAudit;
+    answerPlan?: ReadWeaveAnswerPlan;
     qualityState?: ReadWeaveQualityState;
     evidenceState?: ReadWeaveEvidenceState;
     harnessVersion?: string;
@@ -318,6 +335,25 @@ export interface ReadWeaveGenerateResponse {
         cacheHit?: boolean;
         searchCostCny?: number;
     };
+}
+
+export interface ReadWeaveLocalRewriteRequest {
+    body: string;
+    selectedText: string;
+    contextBefore?: string;
+    contextAfter?: string;
+    instruction: string;
+}
+
+export interface ReadWeaveLocalRewriteResponse {
+    original: string;
+    replacement: string;
+    reason: string;
+    preservedFacts: string[];
+    scope: "selection-only";
+    provider: string;
+    model: string;
+    usage?: ReadWeaveUsageSummary;
 }
 
 export interface ReadWeaveSaveRequest {
