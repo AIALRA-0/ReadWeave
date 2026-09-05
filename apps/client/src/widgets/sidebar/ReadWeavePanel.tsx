@@ -2466,7 +2466,7 @@ function ContentTypeSelector({ value, disabled = false, onChange }: { value: Rea
     return (
         <div class="readweave-kind readweave-content-type-selector" role="group" aria-label="内容类型">
             {options.map(option => (
-                <button type="button" class={value === option.value ? "active" : ""} disabled={disabled} aria-pressed={value === option.value} onClick={() => onChange(option.value)} key={option.value}>{option.label}</button>
+                <button type="button" class={value === option.value ? "active" : ""} title={option.label} aria-label={option.value === "problem" ? "Question" : option.value === "definition" ? "Term" : option.label} disabled={disabled} aria-pressed={value === option.value} onClick={() => onChange(option.value)} key={option.value}>{option.label}</button>
             ))}
         </div>
     );
