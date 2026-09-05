@@ -1031,65 +1031,6 @@
     font-weight: 650;
 }
 
-.readweave-background-job-list {
-    margin-block: 0.55rem;
-    border-block: 1px solid var(--main-border-color);
-    padding-block: 0.45rem;
-}
-
-.readweave-background-job-list > summary {
-    cursor: pointer;
-    font-weight: 650;
-}
-
-.readweave-background-job-list > div {
-    display: grid;
-    gap: 0.25rem;
-    margin-top: 0.4rem;
-}
-
-.readweave-background-job {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 0.25rem;
-    align-items: center;
-}
-
-.readweave-background-job > button:first-child {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    gap: 0.4rem;
-    align-items: center;
-    min-width: 0;
-    border: 0;
-    border-radius: 0.35rem;
-    padding: 0.35rem 0.45rem;
-    background: transparent;
-    color: inherit;
-    text-align: start;
-}
-
-.readweave-background-job > button:first-child:hover {
-    background: var(--hover-item-background-color, var(--accented-background-color));
-}
-
-.readweave-background-job > button:first-child > span:nth-child(2) {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.readweave-background-job small {
-    color: var(--muted-text-color);
-}
-
-.readweave-background-cancel {
-    border: 0;
-    background: transparent;
-    color: var(--muted-text-color);
-    padding: 0.3rem;
-}
-
 .readweave-anchor-job-list > div:last-child {
     display: flex;
     gap: 5px;
