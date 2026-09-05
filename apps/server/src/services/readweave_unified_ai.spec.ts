@@ -938,6 +938,21 @@ describe("ReadWeave one-pass workflow", () => {
         });
         expect(result.usage?.modelCalls).toBe(1);
     });
+
+    it("turns the Creative Commons BY marker into a required bilingual definition", async () => {
+        installModel([ "authoritative direct evidence" ], "BY 是 Creative Commons 许可中的署名条件，要求再利用者保留作者署名");
+
+        const result = await generateUnifiedReadWeaveAnswer(request("BY 是什么意思？", "term"));
+
+        expect(result.body).toMatch(/^[-] BY 署名（Attribution）：/u);
+        expect(result.body).toContain("保留作者署名");
+        expect(result.termIdentity).toEqual({
+            abbreviation: "BY",
+            chineseName: "署名",
+            englishName: "Attribution"
+        });
+        expect(result.audit?.questionContract.answerRequirements.join("\n")).toContain("BY");
+    });
 });
 
 describe("ReadWeave natural paragraph formatting", () => {

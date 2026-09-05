@@ -17,6 +17,8 @@ export const KNOWN_PRODUCT_CANONICAL_FORMS = new Map([
     [ "Motorola Solutions Foundation Professor", "摩托罗拉解决方案基金会教授（Motorola Solutions Foundation Professor）" ],
     [ "ASIC", "ASIC 专用集成电路（Application-Specific Integrated Circuit）" ],
     [ "CCF", "CCF 中国计算机学会（China Computer Federation）" ],
+    [ "CC", "CC 知识共享（Creative Commons）" ],
+    [ "BY", "BY 署名（Attribution）" ],
     [ "CPU", "CPU 中央处理器（Central Processing Unit）" ],
     [ "CXL.io", "CXL.io 输入输出协议（Input/Output Protocol）" ],
     [ "CXL", "CXL 计算快速链路（Compute Express Link）" ],

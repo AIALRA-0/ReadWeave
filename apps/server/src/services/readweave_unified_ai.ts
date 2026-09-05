@@ -230,7 +230,15 @@ async function requestJson<T>(
 
 function normalizeQuestion(request: ReadWeaveGenerateRequest): string {
     const title = cleanText(request.title, 1_000).replace(/\s+/gu, " ");
-    if (request.kind === "term") return `“${title.replace(/^[“"']|[”"']$/gu, "")}”是什么？`;
+    if (request.kind === "term") {
+        const unquoted = title.replace(/^[“"']|[”"']$/gu, "").trim();
+        // The client may send a complete natural-language term question.  Do
+        // not turn “BY 是什么意思？” into the term name itself; extract the
+        // named object before constructing the canonical term question.
+        const namedObject = unquoted.match(/^(.{1,180}?)\s*(?:是(?:什么|什么意思|啥)|指什么|为何物)\s*[？?]?$/u)?.[1]?.trim();
+        const term = (namedObject || unquoted).replace(/[？?]+$/gu, "").trim();
+        return `“${term}”是什么？`;
+    }
     return title;
 }
 
@@ -1256,6 +1264,35 @@ function applyConfirmedTermIdentity(value: string, identity: ReadWeaveTermIdenti
     return corrected.slice(0, afterIndex) + corrected.slice(afterIndex).replace(abbreviation, identity.chineseName);
 }
 
+/**
+ * ReadWeave definitions have one stable, user-visible opening shape.  Keep
+ * legacy saved answers readable, but make every newly generated definition
+ * start with the requested bilingual identity and a colon instead of letting
+ * the writer choose between several equivalent openings.
+ */
+function enforceReadWeaveDefinitionOpening(value: string, identity: ReadWeaveTermIdentity | undefined): string {
+    if (!identity?.chineseName || !identity.englishName) return value;
+    const canonical = `${identity.abbreviation ? `${identity.abbreviation} ` : ""}${identity.chineseName}（${identity.englishName}）`;
+    const paragraphs = value.split(/\n{2,}/u);
+    const opening = paragraphs[0]?.trim() ?? "";
+    if (!opening) return value;
+    if (opening.startsWith(`- ${canonical}：`)) return value;
+
+    let remainder = opening;
+    if (remainder.startsWith(canonical)) remainder = remainder.slice(canonical.length).trimStart();
+    else if (identity.abbreviation) {
+        const abbreviation = new RegExp(`^${escapeRegExp(identity.abbreviation)}\\s*`, "u");
+        remainder = remainder.replace(abbreviation, "");
+    } else {
+        const chineseName = new RegExp(`^${escapeRegExp(identity.chineseName)}(?:（[^（）]+）)?\\s*`, "u");
+        remainder = remainder.replace(chineseName, "");
+    }
+    remainder = remainder.replace(/^是\s*/u, "").replace(/^：\s*/u, "");
+    if (!remainder) return value;
+    paragraphs[0] = `- ${canonical}：${remainder}`;
+    return paragraphs.join("\n\n");
+}
+
 function correctLongestObservedMargin(value: string, question: string): string {
     if (!/(?:最长|最大).{0,20}(?:时间|时长|延迟|握手|观测|记录)/u.test(question)) return value;
     const threshold = value.match(/(?:阈值|上限|预算|超时)[^\d]{0,12}(\d+(?:\.\d+)?)\s*(秒|毫秒|分钟|小时)/u);
@@ -1326,7 +1363,9 @@ function applyGeneralContractCorrections(
             englishName: selectedBilingualIdentity[3]
         })
         : undefined;
-    const normalizedIdentity = selectedIdentity ?? normalizeTermIdentity(termIdentity);
+    const knownEntry = askedTerm ? knownTermEntry(askedTerm) : undefined;
+    const catalogIdentity = knownEntry ? knownTermIdentity(knownEntry[1]) : undefined;
+    const normalizedIdentity = selectedIdentity ?? catalogIdentity ?? normalizeTermIdentity(termIdentity);
     const normalizedBody = correctLongestObservedMargin(formatReadWeaveBody(body), contract.normalizedQuestion);
     const identityCorrectedBody = applyConfirmedTermIdentity(normalizedBody, normalizedIdentity);
     let correctedBody = kind === "term" ? compactFocusedTermBody(identityCorrectedBody) : identityCorrectedBody;
@@ -2602,11 +2641,9 @@ function deterministicIssues(
     }
     if (kind === "term" && termIdentity?.chineseName && termIdentity.englishName) {
         const prefix = termIdentity.abbreviation ? `${escapeRegExp(termIdentity.abbreviation)}\\s+` : "";
-        const openingPattern = new RegExp(
-            `^\\s*${prefix}${escapeRegExp(termIdentity.chineseName)}（${escapeRegExp(termIdentity.englishName)}）是`,
-            "u"
-        );
-        if (!openingPattern.test(body)) issues.push("定义必须以“中文名称（English Name）是……”开头");
+        const identity = `${prefix}${escapeRegExp(termIdentity.chineseName)}（${escapeRegExp(termIdentity.englishName)}）`;
+        const openingPattern = new RegExp(`^\\s*-\\s*${identity}：|^\\s*${identity}是`, "u");
+        if (!openingPattern.test(body)) issues.push("定义必须以“- 中文名称（English Name）：定义内容”开头");
     }
     if (kind === "term" && termIdentity?.abbreviation
         && termIdentity.abbreviation.toLocaleLowerCase() !== "dblp"
@@ -2889,6 +2926,29 @@ export async function generateUnifiedReadWeaveAnswer(
         }
     }
     if (request.optimizeQuestion === false && request.kind === "question") contract.normalizedQuestion = originalQuestion;
+    const selectedFragment = selected.fragments.find(fragment => fragment.role === "selected" && fragment.text.trim())?.text.trim();
+    if (selectedFragment) {
+        contract.answerRequirements = [
+            `以文章选区明确指向的对象作为回答主体；不得用相邻对象、文章标题或相关术语替代它`,
+            ...contract.answerRequirements
+        ].slice(0, 8);
+        contract.exclusions = Array.from(new Set([
+            ...contract.exclusions,
+            "不得把选区中的背景材料当成用户问题本身，也不得因为上下文相关就漏答问题中点名的子项"
+        ])).slice(0, 8);
+    }
+    if (request.kind === "term") {
+        const requestedTerm = askedTermFromQuestion(contract.normalizedQuestion)
+            ?? request.title.normalize("NFKC").trim().replace(/^[“”"']+|[“”"']+$/gu, "");
+        const requestedEntry = knownTermEntry(requestedTerm);
+        const requestedIdentity = requestedEntry ? knownTermIdentity(requestedEntry[1]) : undefined;
+        if (requestedIdentity?.abbreviation && requestedIdentity.chineseName && requestedIdentity.englishName) {
+            contract.answerRequirements = [
+                `必须先解释 ${requestedIdentity.abbreviation} 的中文含义和英文名称，再说明它在当前对象中的作用`,
+                ...contract.answerRequirements
+            ].slice(0, 8);
+        }
+    }
     const selectedQuestionIdentity = request.kind === "question"
         ? bilingualIdentityFromDefinitionQuestion(originalQuestion)
         : undefined;
@@ -2958,6 +3018,7 @@ export async function generateUnifiedReadWeaveAnswer(
         .replace(/存在显著差异/gu, "存在明显差异")
         .replace(/显著不同/gu, "明显不同");
     if (request.kind === "term") body = compactFocusedTermBody(body);
+    if (request.kind === "term") body = enforceReadWeaveDefinitionOpening(body, termIdentity);
     issues = Array.from(new Set([
         ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, request, termIdentity, verifiedNonExpandableArtifact)
     ]));
