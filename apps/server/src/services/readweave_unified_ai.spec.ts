@@ -939,12 +939,28 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.usage?.modelCalls).toBe(1);
     });
 
+    it("makes the answer-plan checkbox observable in the writer input", async () => {
+        const enabled = { ...request("为什么缓存能提速？"), autoApplyPlan: true };
+        await generateUnifiedReadWeaveAnswer(enabled);
+        const enabledPrompt = JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body)) as { messages: Array<{ content: string }> };
+        expect(enabledPrompt.messages.map(message => message.content).join("\n")).toContain("回答构造流（必须按这个顺序组织正文");
+
+        vi.mocked(fetch).mockClear();
+        const disabled = { ...request("为什么缓存能提速？"), autoApplyPlan: false };
+        const result = await generateUnifiedReadWeaveAnswer(disabled);
+        const disabledPrompt = JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body)) as { messages: Array<{ content: string }> };
+        const prompt = disabledPrompt.messages.map(message => message.content).join("\n");
+        expect(prompt).toContain("回答构造流已经生成，但本次没有勾选自动采用");
+        expect(prompt).not.toContain("回答构造流（必须按这个顺序组织正文");
+        expect(result.answerPlan?.autoApplied).toBe(false);
+    });
+
     it("turns the Creative Commons BY marker into a required bilingual definition", async () => {
         installModel([ "authoritative direct evidence" ], "BY 是 Creative Commons 许可中的署名条件，要求再利用者保留作者署名");
 
         const result = await generateUnifiedReadWeaveAnswer(request("BY 是什么意思？", "term"));
 
-        expect(result.body).toMatch(/^[-] BY 署名（Attribution）：/u);
+        expect(result.body).toMatch(/^BY 署名（Attribution）：/u);
         expect(result.body).toContain("保留作者署名");
         expect(result.termIdentity).toEqual({
             abbreviation: "BY",
@@ -952,6 +968,16 @@ describe("ReadWeave one-pass workflow", () => {
             englishName: "Attribution"
         });
         expect(result.audit?.questionContract.answerRequirements.join("\n")).toContain("BY");
+    });
+
+    it("normalizes a non-abbreviation English term to an unindented bilingual definition", async () => {
+        installModel([ "authoritative direct evidence" ], "Historian 在语义上指历史学家，即研究、记录和解释历史的人或角色");
+
+        const result = await generateUnifiedReadWeaveAnswer(request("Historian 是什么意思？", "term"));
+
+        expect(result.body).toMatch(/^历史学家（Historian）：/u);
+        expect(result.body).not.toMatch(/^\s*[-*•]\s/u);
+        expect(result.body).toContain("研究、记录和解释历史");
     });
 });
 
@@ -1094,6 +1120,18 @@ describe("ReadWeave natural paragraph formatting", () => {
     it("preserves the ASCII colon in network endpoints while localizing prose punctuation", () => {
         expect(formatReadWeaveBody("代理端口为 127.0.0.1:7892,状态:可用。"))
             .toBe("代理端口为 127.0.0.1:7892，状态：可用");
+    });
+
+    it("keeps a definition on one unindented line", () => {
+        expect(formatReadWeaveBody("DOI 数字对象标识符（Digital Object Identifier）：数字对象标识符是用于唯一标识数字对象的系统。"))
+            .toBe("DOI 数字对象标识符（Digital Object Identifier）：数字对象标识符是用于唯一标识数字对象的系统");
+    });
+
+    it("lays out three or more colon-introduced parallel items as an indented list", () => {
+        expect(formatReadWeaveBody("主要处理对象：学术论文、数据集、技术报告。"))
+            .toBe("主要处理对象：\n  - 学术论文\n  - 数据集\n  - 技术报告");
+        expect(formatReadWeaveBody("回答包括：\n第一项\n第二项\n第三项"))
+            .toBe("回答包括：\n  - 第一项\n  - 第二项\n  - 第三项");
     });
 
     it("moves mixed-language examples out of naming parentheses", () => {

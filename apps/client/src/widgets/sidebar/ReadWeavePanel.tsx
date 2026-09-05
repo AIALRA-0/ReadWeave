@@ -91,7 +91,7 @@ import {
 } from "./readweave_question_templates.js";
 import RightPanelWidget from "./RightPanelWidget.js";
 
-const BLOCK_SELECTOR = "p,h1,h2,h3,h4,h5,h6,li,blockquote,pre";
+const BLOCK_SELECTOR = "p,h1,h2,h3,h4,h5,h6,li,blockquote,pre,table,td,th,caption,figure,figcaption,div.mermaid,div.mermaid-diagram";
 const RANGE_ANCHOR_SELECTOR = READWEAVE_RANGE_ANCHOR_SELECTOR;
 const PARAGRAPH_ANCHOR_SELECTOR = READWEAVE_PARAGRAPH_ANCHOR_SELECTOR;
 const READWEAVE_LOCKED_ANCHOR_BY_ROOT = new WeakMap<HTMLElement, string>();
@@ -2052,7 +2052,7 @@ export default function ReadWeavePanel() {
                             {reuseObjectId && <p class="readweave-status">{t("readweave.reusing_object")}</p>}
                             {contextDecision && <p class="readweave-status">{readWeaveCompactStatusText(t("readweave.context_used", { count: contextDecision.characterCount, budget: contextDecision.characterBudget, expansions: contextDecision.expansionLevel }))}</p>}
                             {workflow && <p class="readweave-status">{readWeaveCompactStatusText(t("readweave.workflow_used", { generations: workflow.generationAttempts, checks: workflow.validationPasses }))}</p>}
-                            {displayedJob?.result?.answerPlan && <p class="readweave-status" data-testid="readweave-answer-plan">结构：{displayedJob.result.answerPlan.summary}</p>}
+                            {displayedJob?.result?.answerPlan && <p class="readweave-status" data-testid="readweave-answer-plan">结构：{displayedJob.result.answerPlan.summary} · {displayedJob.result.answerPlan.autoApplied ? "已采用" : "未自动采用"}</p>}
                             {displayedJob?.result?.usage && (
                                 <p class="readweave-status" data-testid="readweave-usage-cost">
                                     {t("readweave.usage_cost", {
@@ -2519,14 +2519,14 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
         function onAnchorMouseOver(event: MouseEvent) {
             const root = editorRoot;
             if (!root || !(event.target instanceof Element) || !root.contains(event.target)) return;
-            const exactAnchor = event.target.closest<HTMLElement>(RANGE_ANCHOR_SELECTOR);
+            const exactAnchor = event.target.closest<HTMLElement>(`${RANGE_ANCHOR_SELECTOR},${PARAGRAPH_ANCHOR_SELECTOR}`);
             if (!exactAnchor || !root.contains(exactAnchor)) return;
             const block = exactAnchor.closest<HTMLElement>(BLOCK_SELECTOR);
             if (!block || !root.contains(block)) return;
             const exactAnchorId = preferredAnchorIdOf(exactAnchor, optionsRef.current.summaries, optionsRef.current.generationJobs);
             if (!exactAnchorId || suppressedAnchorRef.current === exactAnchorId || READWEAVE_LOCKED_ANCHOR_BY_ROOT.has(root)) return;
             const relatedAnchorId = event.relatedTarget instanceof Element
-                ? preferredAnchorIdOf(event.relatedTarget.closest<HTMLElement>(RANGE_ANCHOR_SELECTOR), optionsRef.current.summaries, optionsRef.current.generationJobs)
+                ? preferredAnchorIdOf(event.relatedTarget.closest<HTMLElement>(`${RANGE_ANCHOR_SELECTOR},${PARAGRAPH_ANCHOR_SELECTOR}`), optionsRef.current.summaries, optionsRef.current.generationJobs)
                 : undefined;
             const previewEntries = previewEntriesForElement(
                 optionsRef.current.summaries,
@@ -2552,10 +2552,10 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
         function onAnchorMouseOut(event: MouseEvent) {
             const root = editorRoot;
             if (!root || !(event.target instanceof Element) || !root.contains(event.target)) return;
-            const exactAnchor = event.target.closest<HTMLElement>(RANGE_ANCHOR_SELECTOR);
+            const exactAnchor = event.target.closest<HTMLElement>(`${RANGE_ANCHOR_SELECTOR},${PARAGRAPH_ANCHOR_SELECTOR}`);
             if (!exactAnchor || !root.contains(exactAnchor)) return;
             const relatedAnchor = event.relatedTarget instanceof Element
-                ? event.relatedTarget.closest<HTMLElement>(RANGE_ANCHOR_SELECTOR)
+                ? event.relatedTarget.closest<HTMLElement>(`${RANGE_ANCHOR_SELECTOR},${PARAGRAPH_ANCHOR_SELECTOR}`)
                 : null;
             const exactAnchorId = preferredAnchorIdOf(exactAnchor, optionsRef.current.summaries, optionsRef.current.generationJobs);
             if (preferredAnchorIdOf(relatedAnchor, optionsRef.current.summaries, optionsRef.current.generationJobs) === exactAnchorId) return;
@@ -2596,6 +2596,11 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
 
         async function editorAndRoot() {
             const currentContext = optionsRef.current.noteContext;
+            const staticRoot = optionsRef.current.contentElement;
+            if (staticRoot?.dataset.readweaveContentRoot === "readonly"
+                || staticRoot?.classList.contains("note-detail-readonly-text-content")) {
+                return { editor: null, root: staticRoot, mode: "readonly" as const };
+            }
             const editor: CKTextEditor | null = currentContext
                 ? await currentContext.getTextEditor().catch(() => null)
                 : null;
@@ -2773,6 +2778,11 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             scheduleSelectionActions();
         }
 
+        function onPointerUp(event: PointerEvent) {
+            if (!(event.target instanceof Element) || event.target.closest(".readweave-selection-actions,.readweave-panel,.readweave-hover-preview")) return;
+            scheduleSelectionActions();
+        }
+
         function onSelectionChange() {
             scheduleSelectionActions();
         }
@@ -2915,6 +2925,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
         }
         void attachEditorWhenReady();
         document.addEventListener("mouseup", onMouseUp, true);
+        document.addEventListener("pointerup", onPointerUp, true);
         document.addEventListener("selectionchange", onSelectionChange, true);
         document.addEventListener("click", onClick, true);
         document.addEventListener("scroll", positionBubble, true);
@@ -2942,6 +2953,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             hoveredAnchorRef.current = undefined;
             suppressedAnchorRef.current = undefined;
             document.removeEventListener("mouseup", onMouseUp, true);
+            document.removeEventListener("pointerup", onPointerUp, true);
             document.removeEventListener("selectionchange", onSelectionChange, true);
             document.removeEventListener("click", onClick, true);
             document.removeEventListener("scroll", positionBubble, true);

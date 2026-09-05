@@ -70,6 +70,7 @@ export const KNOWN_PRODUCT_CANONICAL_FORMS = new Map([
     [ "ETL", "ETL 抽取、转换与加载（Extract, Transform, and Load）" ],
     [ "FEA", "FEA 有限元分析（Finite Element Analysis）" ],
     [ "Fellow", "会士（Fellow）" ],
+    [ "Historian", "历史学家（Historian）" ],
     [ "FFT", "FFT 快速傅里叶变换（Fast Fourier Transform）" ],
     [ "DFT", "DFT 离散傅里叶变换（Discrete Fourier Transform）" ],
     [ "GIS", "GIS 地理信息系统（Geographic Information System）" ],

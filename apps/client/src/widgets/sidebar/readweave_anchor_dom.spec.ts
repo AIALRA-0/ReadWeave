@@ -140,6 +140,31 @@ describe("ReadWeave nested DOM anchors", () => {
         expect(block.contains(restored?.startContainer ?? null)).toBe(true);
     });
 
+    it("recognizes table cells and rendered flowchart containers as selectable blocks", () => {
+        const root = document.createElement("div");
+        const blockSelector = "p,table,td,th,figure,figcaption,div.mermaid,div.mermaid-diagram";
+        root.innerHTML = "<table><tbody><tr><td>表格中的目标对象</td></tr></tbody></table><div class='mermaid-diagram'><svg><text>流程图中的目标对象</text></svg></div>";
+        document.body.append(root);
+
+        const tableCell = root.querySelector("td")!;
+        const tableText = tableCell.firstChild!;
+        const tableRange = document.createRange();
+        tableRange.setStart(tableText, 0);
+        tableRange.setEnd(tableText, tableText.textContent!.length);
+        const tableLocator = readWeaveSourceLocatorForRange(root, tableCell as HTMLElement, tableRange, blockSelector);
+        expect(tableLocator?.blockIndex).toBe(0);
+        expect(readWeaveRangeForSourceLocator(root, blockSelector, tableLocator!, "表格中的目标对象")?.toString()).toBe("表格中的目标对象");
+
+        const diagram = root.querySelector(".mermaid-diagram")!;
+        const diagramText = diagram.querySelector("text")!.firstChild!;
+        const diagramRange = document.createRange();
+        diagramRange.selectNodeContents(diagramText);
+        const diagramLocator = readWeaveSourceLocatorForRange(root, diagram as HTMLElement, diagramRange, blockSelector);
+        expect(diagramLocator?.blockIndex).toBe(1);
+        expect(readWeaveRangeForSourceLocator(root, blockSelector, diagramLocator!, "流程图中的目标对象")?.toString()).toBe("流程图中的目标对象");
+        root.remove();
+    });
+
     it("marks read-only selections in runtime-only spans and unwraps them without changing text", () => {
         const root = document.createElement("div");
         root.innerHTML = "<p>只读正文中的目标片段。</p>";
