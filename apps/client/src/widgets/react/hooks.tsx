@@ -191,13 +191,20 @@ export function useEditorSpacedUpdate({ note, noteType, noteContext, getData, on
         const lastSuccessfulSubmission = lastSuccessfulSubmissionRef.current;
         const isSuccessfulSelfEcho = lastSuccessfulSubmission?.noteId === note.noteId
             && lastSuccessfulSubmission.content === blob.content;
+        const inFlightSubmission = inFlightSubmissionRef.current;
+        const isInFlightSelfEcho = inFlightSubmission?.noteId === note.noteId
+            && inFlightSubmission.content === blob.content;
         // A later, different blob is evidence that the server (or another
         // client) has moved on. Do not keep an old self-echo marker around
         // long enough to swallow a genuine remote revert to that content.
         if (lastSuccessfulSubmission?.noteId === note.noteId && !isSuccessfulSelfEcho) {
             lastSuccessfulSubmissionRef.current = undefined;
         }
-        if (!isSuccessfulSelfEcho) {
+        // A blob notification can arrive while the PUT promise is still
+        // settling.  It is still our own snapshot, not a remote edit.  Do not
+        // feed it back into CKEditor, otherwise an older echo can briefly
+        // replace newer text and cause the native editor to flash.
+        if (!isSuccessfulSelfEcho && !isInFlightSelfEcho) {
             spacedUpdate.allowUpdateWithoutChange(() => onContentChange(blob.content));
         }
         loadedNoteIdRef.current = note.noteId;
@@ -917,7 +924,7 @@ export function useLegacyWidget<T extends BasicWidget>(widgetFactory: () => T, {
 
     useDebugValue(widget);
 
-    return [ <div className={containerClassName} style={containerStyle} ref={ref} />, widget ];
+    return [ <div key="widget-container" className={containerClassName} style={containerStyle} ref={ref} />, widget ];
 }
 
 /**
@@ -1269,7 +1276,7 @@ export function useNoteTreeDrag(containerRef: MutableRef<HTMLElement | null | un
         const container = containerRef.current;
         if (!container) return;
 
-        function onDragEnter(e: DragEvent) {
+        function onDragEnter(_e: DragEvent) {
             if (!dragEnabled) {
                 toast.showPersistent({
                     ...dragNotEnabledMessage,

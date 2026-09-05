@@ -125,6 +125,47 @@ describe("ReadWeave repository", () => {
         });
     });
 
+    it("round-trips generated and manual content types without changing the legacy kind", () => {
+        cls.init(() => {
+            const article = noteService.createNewNote({
+                parentNoteId: "root",
+                title: "ReadWeave content type article",
+                type: "text",
+                mime: "text/html",
+                content: "<p>Content type source.</p>"
+            }).note;
+            const manualNote = saveReadWeaveEntry({
+                articleId: article.noteId,
+                anchorId: "rw_content_note",
+                anchorType: "range",
+                kind: "question",
+                contentType: "note",
+                origin: "manual",
+                title: "阅读笔记",
+                body: "这是用户手写的旁路笔记",
+                sourceExcerpt: "Content type source.",
+                calloutType: "warning"
+            });
+            const definition = saveReadWeaveEntry({
+                articleId: article.noteId,
+                anchorId: "rw_content_definition",
+                anchorType: "range",
+                kind: "term",
+                title: "NPU",
+                body: "NPU 神经网络处理单元（Neural Processing Unit）是专用处理单元",
+                sourceExcerpt: "Content type source.",
+                calloutType: "tip",
+                termIdentity: { abbreviation: "NPU", chineseName: "神经网络处理单元", englishName: "Neural Processing Unit" }
+            });
+            expect(manualNote.kind).toBe("question");
+            expect(manualNote.contentType).toBe("note");
+            expect(manualNote.origin).toBe("manual");
+            expect(definition.contentType).toBe("definition");
+            expect(definition.origin).toBe("generated");
+            expect(getAnchorSummaries(article.noteId).flatMap(summary => summary.contentTypes ?? [])).toEqual(["definition", "note"]);
+        });
+    });
+
     it("deletes only the selected link and cleans up an object after its final link is removed", () => {
         cls.init(() => {
             const firstArticle = noteService.createNewNote({

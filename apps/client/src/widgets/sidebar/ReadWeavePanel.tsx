@@ -6,6 +6,7 @@ import {
     type ReadWeaveAnchorSummary,
     type ReadWeaveAnchorType,
     type ReadWeaveCalloutType,
+    type ReadWeaveContentType,
     type ReadWeaveCandidate,
     type ReadWeaveContextFragment,
     type ReadWeaveDeleteResult,
@@ -20,7 +21,9 @@ import {
     type ReadWeaveObjectKind,
     type ReadWeaveResolvedEntry,
     type ReadWeaveSourceLocator,
-    type ReadWeaveTermIdentity
+    type ReadWeaveTermIdentity,
+    readWeaveContentOriginForType,
+    readWeaveKindForContentType
 } from "@triliumnext/commons";
 import type { JSX } from "preact";
 import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
@@ -69,6 +72,7 @@ import {
     normalizeReadWeaveReadableMath,
     normalizeReadWeaveTermIdentityForReview,
     readWeaveCompactStatusText,
+    readWeaveContentTypeLabel,
     readWeaveGenerationProgressForDisplay,
     type ReadWeaveReviewIssueBaseline,
     recoverReadWeaveGenerationFields,
@@ -107,6 +111,10 @@ const CALLOUT_ICONS: Record<ReadWeaveCalloutType, string> = {
     caution: "bx bx-error-alt"
 };
 
+function readWeaveJobContentType(job: Pick<ReadWeaveGenerationJob, "kind" | "contentType">): ReadWeaveContentType {
+    return job.contentType ?? (job.kind === "term" ? "definition" : "problem");
+}
+
 interface AnchorSelection {
     anchorId: string;
     anchorType: ReadWeaveAnchorType;
@@ -119,6 +127,7 @@ interface AnchorSelection {
 
 interface Draft {
     kind: ReadWeaveObjectKind;
+    contentType?: ReadWeaveContentType;
     questionTitle: string;
     optimizeQuestion: boolean;
     autoApplyPlan: boolean;
@@ -180,6 +189,7 @@ export default function ReadWeavePanel() {
     const [entriesLoadedAnchorId, setEntriesLoadedAnchorId] = useState<string>();
     const [anchorSummaries, setAnchorSummaries] = useState<ReadWeaveAnchorSummary[]>([]);
     const [kind, setKind] = useState<ReadWeaveObjectKind>("question");
+    const [contentType, setContentType] = useState<ReadWeaveContentType>("problem");
     const [parentLinkId, setParentLinkId] = useState<string>();
     const [questionTitle, setQuestionTitle] = useState("");
     const [optimizeQuestion, setOptimizeQuestion] = useState(true);
@@ -268,6 +278,7 @@ export default function ReadWeavePanel() {
         && transientGenerationJob.articleId === noteId
         && transientGenerationJob.anchorId === selection?.anchorId
         && transientGenerationJob.kind === kind
+        && readWeaveJobContentType(transientGenerationJob) === contentType
         && transientGenerationJob.parentLinkId === parentLinkId
         ? transientGenerationJob
         : undefined;
@@ -277,6 +288,7 @@ export default function ReadWeavePanel() {
             job.articleId === noteId
             && job.anchorId === selection.anchorId
             && job.kind === kind
+            && readWeaveJobContentType(job) === contentType
             && job.parentLinkId === parentLinkId)
         : [];
     const backgroundJobs = generationJobs.filter(job =>
@@ -354,6 +366,7 @@ export default function ReadWeavePanel() {
         const savedDraft = readDraft(job.articleId, job.anchorId, job.parentLinkId, job.draftId);
         setLocalDraftId(job.draftId);
         setNewQuestionDraft(false);
+        setContentType(job.contentType ?? savedDraft?.contentType ?? (job.kind === "term" ? "definition" : "problem"));
         setParentLinkId(job.parentLinkId);
         setGenerationJobId(job.jobId);
         setGenerationProgress(job.progress);
@@ -401,7 +414,6 @@ export default function ReadWeavePanel() {
         const root = activeContentRootRef.current;
         if (root) {
             applyGenerationJobStatusDecorations(root, jobsForDecoration);
-            window.requestAnimationFrame(() => applyGenerationJobStatusDecorations(root, jobsForDecoration));
         }
         return mergedJobs;
     }
@@ -508,16 +520,21 @@ export default function ReadWeavePanel() {
         setParentLinkId(undefined);
         const draft = readDraft(noteId!, nextSelection.anchorId);
         const nextKind = preferredKind ?? draft?.kind ?? "question";
-        const matchingDraft = draft?.kind === nextKind ? draft : undefined;
+        const requestedContentType = draft?.kind === nextKind
+            ? draft.contentType ?? (nextKind === "term" ? "definition" : "problem")
+            : nextKind === "term" ? "definition" : "problem";
+        const matchingDraft = draft?.kind === nextKind && requestedContentType === (draft.contentType ?? requestedContentType) ? draft : undefined;
         const matchingJob = matchingDraft?.newQuestionDraft
             ? undefined
             : generationJobs.find(job =>
                 job.anchorId === nextSelection.anchorId
                 && job.kind === nextKind
+                && readWeaveJobContentType(job) === requestedContentType
                 && !job.parentLinkId);
         const confirmingPendingSelection = selection?.pending
             && normalizedAnchorText(selection.excerpt) === normalizedAnchorText(nextSelection.excerpt);
         setKind(nextKind);
+        setContentType(matchingJob?.contentType ?? matchingDraft?.contentType ?? requestedContentType);
         setNewQuestionDraft(!!matchingDraft?.newQuestionDraft && nextKind === "question");
         setQuestionTitle(matchingDraft?.questionTitle
             ?? (nextKind === "question"
@@ -599,6 +616,7 @@ export default function ReadWeavePanel() {
         setEditState(undefined);
         setDeleteState(undefined);
         setKind("question");
+        setContentType("problem");
         setNewQuestionDraft(false);
         setParentLinkId(undefined);
         setQuestionTitle("");
@@ -765,11 +783,12 @@ export default function ReadWeavePanel() {
             job.articleId === noteId
             && job.anchorId === selection.anchorId
             && job.kind === kind
+            && readWeaveJobContentType(job) === contentType
             && job.parentLinkId === parentLinkId);
         if (!restored) return;
         hydrateGenerationJob(restored);
         if (isReadWeaveGenerationReviewable(restored.status) && restored.unread) void markJobViewed(restored);
-    }, [generationJobs, selection?.anchorId, selection?.pending, kind, parentLinkId, generationJobId, newQuestionDraft]);
+    }, [generationJobs, selection?.anchorId, selection?.pending, kind, contentType, parentLinkId, generationJobId, newQuestionDraft]);
 
     useEffect(() => {
         const requested = generateAfterSelectionConfirmation.current;
@@ -797,11 +816,11 @@ export default function ReadWeavePanel() {
 
     useEffect(() => {
         if (!noteId || !selection) return;
-        const draft: Draft = { kind, questionTitle, optimizeQuestion, autoApplyPlan, termIdentity, termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision, generationJobId, reviewIssues, reviewIssueBaseline, parentLinkId, newQuestionDraft };
+        const draft: Draft = { kind, contentType, questionTitle, optimizeQuestion, autoApplyPlan, termIdentity, termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision, generationJobId, reviewIssues, reviewIssueBaseline, parentLinkId, newQuestionDraft };
         const isolatedDraftId = currentJob?.draftId ?? generationJobId ?? localDraftId;
         sessionStorage.setItem(draftKey(noteId, selection.anchorId, parentLinkId, isolatedDraftId), JSON.stringify(draft));
         sessionStorage.setItem(draftKey(noteId, selection.anchorId, parentLinkId), JSON.stringify(draft));
-    }, [noteId, selection, kind, parentLinkId, questionTitle, optimizeQuestion, autoApplyPlan, termIdentity, termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision, generationJobId, currentJob?.draftId, localDraftId, reviewIssues, reviewIssueBaseline, newQuestionDraft]);
+    }, [noteId, selection, kind, contentType, parentLinkId, questionTitle, optimizeQuestion, autoApplyPlan, termIdentity, termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision, generationJobId, currentJob?.draftId, localDraftId, reviewIssues, reviewIssueBaseline, newQuestionDraft]);
 
     useEffect(() => {
         localStorage.setItem(READWEAVE_QUESTION_TEMPLATE_STORAGE_KEY, JSON.stringify(questionTemplates));
@@ -930,6 +949,7 @@ export default function ReadWeavePanel() {
             anchorId: selection.anchorId,
             anchorType: selection.anchorType,
             kind,
+            contentType,
             parentLinkId,
             title: currentTitle,
             sourceExcerpt: selection.excerpt,
@@ -956,6 +976,8 @@ export default function ReadWeavePanel() {
                 anchorId: selection.anchorId,
                 anchorType: selection.anchorType,
                 kind,
+                contentType,
+                origin: readWeaveContentOriginForType(contentType),
                 calloutType,
                 parentLinkId,
                 rootSourceExcerpt: selection.excerpt,
@@ -1119,6 +1141,8 @@ export default function ReadWeavePanel() {
                     anchorId: selection.anchorId,
                     anchorType: selection.anchorType,
                     kind,
+                    contentType,
+                    origin: readWeaveContentOriginForType(contentType),
                     parentLinkId,
                     title: reviewedTitle,
                     body: reviewedBody,
@@ -1206,6 +1230,7 @@ export default function ReadWeavePanel() {
             anchorId: target.anchorId,
             anchorType: selection!.anchorType,
             kind: target.kind,
+            contentType,
             parentLinkId: target.parentLinkId,
             title: currentTitle,
             sourceExcerpt: currentSourceExcerpt || selection!.excerpt,
@@ -1224,6 +1249,8 @@ export default function ReadWeavePanel() {
                 feedback: regenerationFeedback.trim() || undefined,
                 title: currentTitle,
                 optimizeQuestion: kind === "question" ? optimizeQuestion : undefined,
+                contentType,
+                origin: readWeaveContentOriginForType(contentType),
                 autoApplyPlan,
                 calloutType,
                 termIdentity: kind === "term" ? cleanPartialTermIdentity(termIdentity) : undefined,
@@ -1345,6 +1372,7 @@ export default function ReadWeavePanel() {
         setLocalRewriteInstruction("");
         setLocalRewriteResult(undefined);
         setKind(object.kind);
+        setContentType(object.contentType ?? (object.kind === "term" ? "definition" : "problem"));
         if (object.kind === "question") setQuestionTitle(object.title);
         else {
             setTermIdentity(object.termIdentity ?? { chineseName: object.title });
@@ -1366,29 +1394,20 @@ export default function ReadWeavePanel() {
         setStatusTone("normal");
     }
 
-    function changeKind(nextKind: ReadWeaveObjectKind) {
-        if (nextKind === kind) return;
+    function chooseContentType(nextContentType: ReadWeaveContentType) {
+        if (nextContentType === contentType) return;
+        if (selection?.pending && confirmPendingSelection(readWeaveKindForContentType(nextContentType))) return;
+        const nextKind = readWeaveKindForContentType(nextContentType);
         selectionActionRevision.current += 1;
         selectionIdentityRevision.current += 1;
-        const nextCallout = calloutAfterKindChange(calloutType, nextKind);
-        const nextParentLinkId = nextKind === "question" ? parentLinkId : undefined;
+        setContentType(nextContentType);
         setKind(nextKind);
         setNewQuestionDraft(false);
-        setParentLinkId(nextParentLinkId);
+        setParentLinkId(nextContentType === "problem" ? parentLinkId : undefined);
         resetEditor(nextKind);
-        setCalloutType(nextCallout);
+        setCalloutType(calloutAfterKindChange(calloutType, nextKind));
         setStatus(undefined);
         setStatusTone("normal");
-        const matchingJob = selection && generationJobs.find(job =>
-            job.anchorId === selection.anchorId
-            && job.kind === nextKind
-            && job.parentLinkId === nextParentLinkId);
-        if (matchingJob) hydrateGenerationJob(matchingJob);
-    }
-
-    function chooseKind(nextKind: ReadWeaveObjectKind) {
-        if (selection?.pending && confirmPendingSelection(nextKind)) return;
-        changeKind(nextKind);
     }
 
     function changeDraft() {
@@ -1422,6 +1441,7 @@ export default function ReadWeavePanel() {
         setLocalRewriteInstruction("");
         setLocalRewriteResult(undefined);
         setKind("question");
+        setContentType("problem");
         setNewQuestionDraft(true);
         setGenerationJobId(undefined);
         setLocalDraftId(`readweave-draft-${utils.randomString(20)}`);
@@ -1562,6 +1582,7 @@ export default function ReadWeavePanel() {
         selectionIdentityRevision.current += 1;
         setParentLinkId(entry.linkId);
         setKind("question");
+        setContentType("problem");
         setNewQuestionDraft(!!restoredDraft?.newQuestionDraft);
         setQuestionTitle(restoredFields.questionTitle);
         setOptimizeQuestion(restoredDraft?.optimizeQuestion ?? true);
@@ -1861,13 +1882,9 @@ export default function ReadWeavePanel() {
                                     <button type="button" class="btn btn-sm btn-link" onClick={() => setParentLinkId(undefined)}>{t("readweave.exit_follow_up")}</button>
                                 </div>
                             )}
-                            <div class="readweave-kind" role="group" aria-label={t("readweave.kind_label")}>
-                                <button type="button" class={kind === "question" ? "active" : ""} disabled={editorLocked} onClick={() => chooseKind("question")}>{t("readweave.question")}</button>
-                                <button type="button" class={kind === "term" ? "active" : ""} disabled={editorLocked} onClick={() => chooseKind("term")}>{t("readweave.term")}</button>
-                                <button type="button" disabled title="注解自动生成暂未启用">注解</button>
-                            </div>
+                            <ContentTypeSelector value={contentType} disabled={editorLocked} onChange={chooseContentType} />
                             {selection.pending && <p class="readweave-hint">{t("readweave.selection_pending_hint")}</p>}
-                            {kind === "question" ? (
+                            {contentType !== "definition" && contentType !== "note" && contentType !== "key-point" ? (
                                 <>
                                     <div class="readweave-question-template-bar" aria-label={t("readweave.question_templates")}>
                                         {suggestedTemplates.map(template => (
@@ -1931,19 +1948,26 @@ export default function ReadWeavePanel() {
                                             data-testid="readweave-question"
                                         />
                                     </label>
-                                    <label class="readweave-question-optimization">
+                                    <label class="readweave-question-optimization" title={t("readweave.optimize_question_hint")}>
                                         <input type="checkbox" checked={optimizeQuestion} disabled={editorLocked} onChange={event => setOptimizeQuestion(event.currentTarget.checked)} data-testid="readweave-optimize-question" />
-                                        <span><strong>{t("readweave.optimize_question")}</strong><small>{t("readweave.optimize_question_hint")}</small></span>
+                                        <span><strong>{t("readweave.optimize_question")}</strong></span>
                                     </label>
-                                    <label class="readweave-question-optimization">
+                                    <label class="readweave-question-optimization" title="关闭后仍会生成，但会保留你的原问题文字">
                                         <input type="checkbox" checked={autoApplyPlan} disabled={editorLocked} onChange={event => setAutoApplyPlan(event.currentTarget.checked)} data-testid="readweave-auto-apply-plan" />
-                                        <span><strong>自动采用问题和回答结构</strong><small>关闭后仍会生成，但保留你的原问题文字</small></span>
+                                        <span><strong>自动采用问题和回答结构</strong></span>
                                     </label>
                                 </>
-                            ) : (
+                            ) : contentType === "definition" ? (
                                 <>
                                     <TermFields value={termIdentity} disabled={editorLocked} onChange={changeTermIdentity} />
                                     {currentTitle && <p class="readweave-term-preview">{currentTitle}</p>}
+                                </>
+                            ) : (
+                                <>
+                                    <label>{contentType === "note" ? "笔记标题" : "要点标题"}
+                                        <input value={questionTitle} disabled={editorLocked} onInput={event => { setQuestionTitle(event.currentTarget.value); changeDraft(); }} />
+                                    </label>
+                                    <p class="readweave-hint">这是旁路手写内容，不调用模型，也不会改写正文</p>
                                 </>
                             )}
 
@@ -2001,7 +2025,7 @@ export default function ReadWeavePanel() {
                                 </section>
                             )}
                             <CalloutSelector value={calloutType} disabled={editorLocked} onChange={setCalloutType} />
-                            <button
+                            {contentType !== "note" && contentType !== "key-point" && <button
                                 type="button"
                                 class={`btn btn-secondary readweave-generate-${kind}`}
                                 disabled={generationDisabled}
@@ -2011,9 +2035,17 @@ export default function ReadWeavePanel() {
                             >
                                 {generationBusy && <i class="bx bx-loader-alt bx-spin" aria-hidden="true" />}
                                 {generationBusy ? t("readweave.generating") : t(kind === "question" ? "readweave.generate_answer" : "readweave.generate_definition")}
-                            </button>
+                            </button>}
+                            {generationBusy && currentJob && (
+                                <button
+                                    type="button"
+                                    class="btn btn-outline-danger readweave-cancel-generation"
+                                    onClick={() => void cancelGenerationJob(currentJob)}
+                                    data-testid="readweave-cancel-generation"
+                                >中断生成</button>
+                            )}
                             <div class="readweave-body-heading">
-                                <span id="readweave-draft-body-label">{t(kind === "question" ? "readweave.answer_label" : "readweave.definition_label")}</span>
+                                <span id="readweave-draft-body-label">{contentType === "definition" ? t("readweave.definition_label") : contentType === "problem" ? t("readweave.answer_label") : contentType === "annotation" ? "注解内容" : contentType === "note" ? "笔记内容" : "要点内容"}</span>
                                 {!!body.trim() && !currentJob?.savedLinkId && (
                                     <button
                                         type="button"
@@ -2123,7 +2155,7 @@ export default function ReadWeavePanel() {
                                     disabled={editorLocked || !saveReady}
                                     onClick={save}
                                     data-testid="readweave-save"
-                                >{t("readweave.review_and_save")}</button>
+                                >{contentType === "note" || contentType === "key-point" ? "保存" : t("readweave.review_and_save")}</button>
                             )}
                             {currentJob?.savedLinkId && <p class="readweave-status">{t("readweave.saved")}</p>}
                             {currentJob && (
@@ -2386,7 +2418,7 @@ function SavedEntry({
     return (
         <article class={`readweave-entry readweave-callout-${entry.calloutType}`} tabindex={0}>
             <div class="readweave-entry-title">
-                <span><i class={CALLOUT_ICONS[entry.calloutType]} />{entry.title}</span>
+                <span><i class={CALLOUT_ICONS[entry.calloutType]} /><span class="readweave-entry-type">{readWeaveContentTypeLabel(entry.contentType ?? (entry.kind === "term" ? "definition" : "problem"))}</span>{entry.title}</span>
                 <span class="readweave-entry-heading-actions">
                     {entry.isDisplayOverride && <span class="readweave-badge">{t("readweave.local_display")}</span>}
                     {entry.parentStale && <span class="readweave-badge readweave-stale-badge">{t("readweave.parent_changed")}</span>}
@@ -2418,6 +2450,23 @@ function CalloutSelector({ value, disabled = false, onChange }: { value: ReadWea
                 <button type="button" class={`readweave-callout-choice readweave-callout-${type} ${value === type ? "active" : ""}`} title={t(`readweave.callout_${type}`)} aria-label={t(`readweave.callout_${type}`)} aria-pressed={value === type} disabled={disabled} onClick={() => onChange(type)} key={type}>
                     <i class={CALLOUT_ICONS[type]} /><span>{t(`readweave.callout_${type}`)}</span>
                 </button>
+            ))}
+        </div>
+    );
+}
+
+function ContentTypeSelector({ value, disabled = false, onChange }: { value: ReadWeaveContentType; disabled?: boolean; onChange: (value: ReadWeaveContentType) => void }) {
+    const options: Array<{ value: ReadWeaveContentType; label: string }> = [
+        { value: "problem", label: "问题" },
+        { value: "definition", label: "定义" },
+        { value: "annotation", label: "注解" },
+        { value: "note", label: "笔记" },
+        { value: "key-point", label: "要点" }
+    ];
+    return (
+        <div class="readweave-kind readweave-content-type-selector" role="group" aria-label="内容类型">
+            {options.map(option => (
+                <button type="button" class={value === option.value ? "active" : ""} disabled={disabled} aria-pressed={value === option.value} onClick={() => onChange(option.value)} key={option.value}>{option.label}</button>
             ))}
         </div>
     );
@@ -3082,9 +3131,10 @@ function previewEntriesForElement(
     const completedJobs = generationJobs
         .filter(job => job.anchorId === anchorId && isReadWeaveGenerationReviewable(job.status) && !!job.result?.body.trim())
         .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
-    const latestByKind = new Map<ReadWeaveObjectKind, ReadWeaveGenerationJob>();
+    const latestByKind = new Map<ReadWeaveContentType, ReadWeaveGenerationJob>();
     for (const job of completedJobs) {
-        if (!latestByKind.has(job.kind)) latestByKind.set(job.kind, job);
+        const contentType = readWeaveJobContentType(job);
+        if (!latestByKind.has(contentType)) latestByKind.set(contentType, job);
     }
     const pendingReviewEntries = Array.from(latestByKind.values()).flatMap(job => {
         const result = job.result!;
@@ -3108,6 +3158,8 @@ function previewEntriesForElement(
             rootLinkId: job.parentLinkId,
             depth: job.parentLinkId ? 1 : 0,
             kind: job.kind,
+            contentType: job.contentType ?? (job.kind === "term" ? "definition" : "problem"),
+            origin: job.origin ?? "generated",
             title,
             body: result.body,
             calloutType,
@@ -3139,13 +3191,20 @@ function applyGenerationJobStatus(element: HTMLElement, job: ReadWeaveGeneration
 }
 
 function applyGenerationJobStatusDecorations(root: HTMLElement, generationJobs: ReadWeaveGenerationJob[]) {
+    const allElements = Array.from(root.querySelectorAll<HTMLElement>(`${RANGE_ANCHOR_SELECTOR},${PARAGRAPH_ANCHOR_SELECTOR}`));
+    allElements.forEach(element => {
+        element.classList.remove("readweave-anchor-status", ...READWEAVE_GENERATION_STATUS_CLASSES);
+        delete element.dataset.readweaveJobUpdatedAt;
+    });
     if (!generationJobs.length) return;
-    const jobsByAnchor = new Map(generationJobs.map(job => [ job.anchorId, job ]));
-    const elements = Array.from(root.querySelectorAll<HTMLElement>(`${RANGE_ANCHOR_SELECTOR},${PARAGRAPH_ANCHOR_SELECTOR}`))
-        .filter(element => readWeaveAnchorIdsOf(element).some(anchorId => jobsByAnchor.has(anchorId)));
-
+    const jobsByAnchor = new Map<string, ReadWeaveGenerationJob>();
     for (const job of generationJobs) {
-        const matching = elements.filter(element => readWeaveAnchorIdsOf(element).includes(job.anchorId));
+        const existing = jobsByAnchor.get(job.anchorId);
+        if (!existing || compareGenerationJobVisualPriority(job, existing) > 0) jobsByAnchor.set(job.anchorId, job);
+    }
+
+    for (const job of jobsByAnchor.values()) {
+        const matching = allElements.filter(element => readWeaveAnchorIdsOf(element).includes(job.anchorId));
         const groups = new Map<HTMLElement, HTMLElement[]>();
         for (const element of matching) {
             const block = element.closest<HTMLElement>(BLOCK_SELECTOR) ?? element;
@@ -3164,6 +3223,17 @@ function applyGenerationJobStatusDecorations(root: HTMLElement, generationJobs: 
             applyGenerationJobStatus(head, job);
         }
     }
+}
+
+function compareGenerationJobVisualPriority(left: ReadWeaveGenerationJob, right: ReadWeaveGenerationJob): number {
+    const priority = (job: ReadWeaveGenerationJob) => {
+        if (job.status === "queued" || job.status === "running" || job.status === "saving") return 5;
+        if (job.status === "failed") return 4;
+        if (job.status === "paused") return 3;
+        if (job.unread && isReadWeaveGenerationReviewable(job.status)) return 2;
+        return 1;
+    };
+    return priority(left) - priority(right) || left.updatedAt.localeCompare(right.updatedAt) || left.jobId.localeCompare(right.jobId);
 }
 
 function applyAnchorSummaryDecorations(root: HTMLElement, summaries: ReadWeaveAnchorSummary[], generationJobs: ReadWeaveGenerationJob[]) {
@@ -3196,7 +3266,9 @@ function applyAnchorSummaryDecorations(root: HTMLElement, summaries: ReadWeaveAn
     });
     for (const [ anchorId, elements ] of grouped) {
         const summary = summaryForAnchorGroup(summaries, anchorId, elements);
-        const job = generationJobs.find(candidate => candidate.anchorId === anchorId);
+        const job = generationJobs
+            .filter(candidate => candidate.anchorId === anchorId)
+            .toSorted((left, right) => compareGenerationJobVisualPriority(right, left))[0];
         if (!summary?.entries.length && !job) continue;
         const anchorType = summary?.entries.length ? anchorCalloutType(summary) : (job?.kind === "term" ? "tip" : "note");
         const termType = calloutTypeForKind(summary, "term");
@@ -3745,6 +3817,7 @@ function createTransientGenerationJob(input: {
     anchorId: string;
     anchorType: ReadWeaveAnchorType;
     kind: ReadWeaveObjectKind;
+    contentType?: ReadWeaveContentType;
     parentLinkId?: string;
     title: string;
     sourceExcerpt: string;
@@ -3784,6 +3857,7 @@ function createOptimisticRegenerationJob(input: {
     anchorId: string;
     anchorType: ReadWeaveAnchorType;
     kind: ReadWeaveObjectKind;
+    contentType?: ReadWeaveContentType;
     parentLinkId?: string;
     title: string;
     sourceExcerpt: string;
@@ -3795,6 +3869,7 @@ function createOptimisticRegenerationJob(input: {
         anchorId: input.anchorId,
         anchorType: input.anchorType,
         kind: input.kind,
+        contentType: input.contentType,
         parentLinkId: input.parentLinkId,
         title: input.title,
         sourceExcerpt: input.sourceExcerpt,

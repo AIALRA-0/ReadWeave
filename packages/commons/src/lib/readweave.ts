@@ -6,6 +6,30 @@ export type ReadWeaveObjectKind = "question" | "term";
 export type ReadWeaveEditMode = "global" | "article-variant" | "display-only";
 export type ReadWeaveAnchorType = "paragraph" | "range";
 export type ReadWeaveCalloutType = "note" | "tip" | "important" | "warning" | "caution";
+/**
+ * The user-facing meaning of a ReadWeave entry.  `kind` remains the stable
+ * storage/API discriminator for backwards compatibility; this field lets the
+ * UI distinguish generated annotations from user-authored notes without a
+ * database migration.
+ */
+export type ReadWeaveContentType = "problem" | "definition" | "annotation" | "note" | "key-point";
+export type ReadWeaveContentOrigin = "generated" | "manual";
+
+export function readWeaveContentTypeForKind(
+    kind: ReadWeaveObjectKind,
+    contentType?: ReadWeaveContentType
+): ReadWeaveContentType {
+    if (contentType) return contentType;
+    return kind === "term" ? "definition" : "problem";
+}
+
+export function readWeaveContentOriginForType(contentType: ReadWeaveContentType): ReadWeaveContentOrigin {
+    return contentType === "note" || contentType === "key-point" ? "manual" : "generated";
+}
+
+export function readWeaveKindForContentType(contentType: ReadWeaveContentType): ReadWeaveObjectKind {
+    return contentType === "definition" ? "term" : "question";
+}
 export type ReadWeaveContextRole = "selected" | "heading" | "previous" | "next" | "section" | "document";
 export type ReadWeaveQualityState = "legacy-unverified" | "verified" | "provisional";
 export type ReadWeaveEvidenceState = "not-checked" | "local-only" | "externally-checked" | "conflicted" | "insufficient";
@@ -169,6 +193,8 @@ export interface ReadWeaveGenerationJob {
     anchorId: string;
     anchorType: ReadWeaveAnchorType;
     kind: ReadWeaveObjectKind;
+    contentType?: ReadWeaveContentType;
+    origin?: ReadWeaveContentOrigin;
     parentLinkId?: string;
     title: string;
     sourceExcerpt: string;
@@ -193,6 +219,8 @@ export interface ReadWeaveObject {
     schemaVersion: typeof READWEAVE_SCHEMA_VERSION;
     objectId: string;
     kind: ReadWeaveObjectKind;
+    contentType?: ReadWeaveContentType;
+    origin?: ReadWeaveContentOrigin;
     title: string;
     body: string;
     normalizedTitle: string;
@@ -218,6 +246,8 @@ export interface ReadWeaveLink {
     anchorId: string;
     anchorType: ReadWeaveAnchorType;
     objectId: string;
+    contentType?: ReadWeaveContentType;
+    origin?: ReadWeaveContentOrigin;
     parentLinkId?: string;
     rootLinkId?: string;
     depth?: number;
@@ -243,6 +273,8 @@ export interface ReadWeaveResolvedEntry {
     depth: number;
     parentStale?: boolean;
     kind: ReadWeaveObjectKind;
+    contentType?: ReadWeaveContentType;
+    origin?: ReadWeaveContentOrigin;
     title: string;
     body: string;
     calloutType: ReadWeaveCalloutType;
@@ -265,6 +297,7 @@ export interface ReadWeaveAnchorSummary {
     anchorType: ReadWeaveAnchorType;
     excerpt: string;
     sourceLocator?: ReadWeaveSourceLocator;
+    contentTypes?: ReadWeaveContentType[];
     questionCount: number;
     termCount: number;
     entries: ReadWeaveResolvedEntry[];
@@ -295,6 +328,8 @@ export interface ReadWeaveGenerateRequest {
     anchorId: string;
     anchorType: ReadWeaveAnchorType;
     kind: ReadWeaveObjectKind;
+    contentType?: ReadWeaveContentType;
+    origin?: ReadWeaveContentOrigin;
     calloutType?: ReadWeaveCalloutType;
     parentLinkId?: string;
     rootSourceExcerpt?: string;
@@ -310,6 +345,8 @@ export interface ReadWeaveGenerateRequest {
 
 export interface ReadWeaveGenerateResponse {
     body: string;
+    contentType?: ReadWeaveContentType;
+    origin?: ReadWeaveContentOrigin;
     optimizedTitle?: string;
     termIdentity?: ReadWeaveTermIdentity;
     verifiedNonExpandableArtifact?: ReadWeaveVerifiedNonExpandableArtifact;
@@ -361,6 +398,8 @@ export interface ReadWeaveSaveRequest {
     anchorId: string;
     anchorType: ReadWeaveAnchorType;
     kind: ReadWeaveObjectKind;
+    contentType?: ReadWeaveContentType;
+    origin?: ReadWeaveContentOrigin;
     parentLinkId?: string;
     title: string;
     body: string;
@@ -381,6 +420,8 @@ export interface ReadWeaveEditRequest {
     title: string;
     body: string;
     calloutType: ReadWeaveCalloutType;
+    contentType?: ReadWeaveContentType;
+    origin?: ReadWeaveContentOrigin;
     termIdentity?: ReadWeaveTermIdentity;
     verifiedNonExpandableArtifact?: ReadWeaveVerifiedNonExpandableArtifact;
     evidenceSources?: ReadWeaveEvidenceSource[];

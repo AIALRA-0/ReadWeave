@@ -127,7 +127,7 @@ describe("ReadWeave panel state", () => {
         expect(readWeaveGenerationVisualState({ status: "failed", unread: false })).toBe("error");
         expect(readWeaveGenerationVisualState({ status: "ready-for-review", unread: true, qualityState: "verified" })).toBe("unread");
         expect(readWeaveGenerationVisualState({ status: "ready-for-review", unread: false, qualityState: "verified" })).toBeUndefined();
-        expect(readWeaveGenerationVisualState({ status: "ready-for-review", unread: false, qualityState: "provisional" })).toBe("draft");
+        expect(readWeaveGenerationVisualState({ status: "ready-for-review", unread: false, qualityState: "provisional" })).toBeUndefined();
     });
 
     it("removes an anchor when its final saved link and completed job are deleted together", () => {

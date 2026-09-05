@@ -417,17 +417,17 @@ describe("ReadWeave persisted generation jobs", () => {
         expect(generateMock).toHaveBeenCalledTimes(1);
     });
 
-    it("retries transport failures once and then waits for a manual retry", async () => {
+    it("does not automatically replay a transport failure and waits for a manual retry", async () => {
         generateMock.mockRejectedValue(new Error("upstream timeout"));
 
         const started = startReadWeaveGenerationJob({ ...request, anchorId: "range_jobs_transport" });
         const paused = await waitForStatus(started.jobId, "paused");
 
-        expect(generateMock).toHaveBeenCalledTimes(2);
+        expect(generateMock).toHaveBeenCalledTimes(1);
         expect(paused.failureClass).toBe("transport");
-        expect(paused.progress.some(event => event.message.includes("自动恢复第 2 次"))).toBe(true);
+        expect(paused.progress.some(event => event.message.includes("自动恢复"))).toBe(false);
         await new Promise(resolve => setTimeout(resolve, 80));
-        expect(generateMock).toHaveBeenCalledTimes(2);
+        expect(generateMock).toHaveBeenCalledTimes(1);
     });
 
     it("pauses without replay when evidence is only bibliographic metadata", async () => {
