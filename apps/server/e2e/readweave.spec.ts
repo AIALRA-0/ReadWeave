@@ -241,10 +241,7 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     expect(await questionKind.evaluate(element => getComputedStyle(element).color)).toBe(await termKind.evaluate(element => getComputedStyle(element).color));
     const noteCallout = panel.getByRole("button", { name: "Note", exact: true });
     const tipCallout = panel.getByRole("button", { name: "Tip", exact: true });
-    const importantCallout = panel.getByRole("button", { name: "Important", exact: true });
-    const warningCallout = panel.getByRole("button", { name: "Warning", exact: true });
-    const cautionCallout = panel.getByRole("button", { name: "Caution", exact: true });
-    for (const callout of [ noteCallout, tipCallout, importantCallout, warningCallout, cautionCallout ]) {
+    for (const callout of [ noteCallout, tipCallout ]) {
         await expect(callout).toBeEnabled();
     }
     await expect(noteCallout).toHaveAttribute("aria-pressed", "true");
@@ -252,7 +249,7 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
         const style = getComputedStyle(element);
         return { background: style.backgroundColor, borderWidth: style.borderTopWidth, color: style.color, outline: style.outlineStyle };
     });
-    const inactiveStyles = await Promise.all([ tipCallout, importantCallout, warningCallout, cautionCallout ].map(calloutStyle));
+    const inactiveStyles = await Promise.all([ tipCallout ].map(calloutStyle));
     expect(new Set(inactiveStyles.map(style => JSON.stringify(style))).size).toBe(1);
     const selectedNoteStyle = await calloutStyle(noteCallout);
     expect(selectedNoteStyle.background).not.toBe(inactiveStyles[0].background);
@@ -264,13 +261,12 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await expect(panel.getByRole("textbox", { name: "Answer", exact: true })).toBeVisible();
     await question.fill("NPU 是啥，有啥用？");
     await panel.getByTestId("readweave-optimize-question").check();
-    await importantCallout.click();
-    await expect(importantCallout).toHaveAttribute("aria-pressed", "true");
-    expect(await calloutStyle(noteCallout)).toEqual(await calloutStyle(tipCallout));
-    const selectedImportantStyle = await calloutStyle(importantCallout);
-    expect(selectedImportantStyle.background).not.toBe((await calloutStyle(tipCallout)).background);
-    expect(selectedImportantStyle.borderWidth).toBe("1px");
-    expect(selectedImportantStyle.outline).toBe("none");
+    await tipCallout.click();
+    await expect(tipCallout).toHaveAttribute("aria-pressed", "true");
+    const selectedTipStyle = await calloutStyle(tipCallout);
+    expect(selectedTipStyle.background).not.toBe((await calloutStyle(noteCallout)).background);
+    expect(selectedTipStyle.borderWidth).toBe("1px");
+    expect(selectedTipStyle.outline).toBe("none");
     const generateAnswer = panel.getByTestId("readweave-generate");
     await expect(generateAnswer).toHaveAccessibleName("Generate answer");
     await generateAnswer.click();
@@ -433,7 +429,7 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await expect(hoverPreview).toBeHidden();
 
     await panel.getByRole("button", { name: "Term", exact: true }).click();
-    await expect(panel.getByRole("button", { name: "Important", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await expect(panel.getByRole("button", { name: "Tip", exact: true })).toHaveAttribute("aria-pressed", "true");
     await expect(panel.getByRole("textbox", { name: "Abbreviation (optional)", exact: true })).toHaveValue("");
     await expect(panel.getByRole("textbox", { name: "Definition", exact: true })).toBeVisible();
     await panel.getByRole("button", { name: "Generate definition", exact: true }).click();
@@ -487,10 +483,10 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     const impact = panel.locator(".readweave-impact");
     await expect(impact).toContainText("This object has 1 links across 1 articles.");
     await impact.locator("textarea").fill(professionalAnswer("这是经过全局审核的直接答案"));
-    await impact.getByRole("button", { name: "Warning", exact: true }).click();
+    await impact.getByRole("button", { name: "Tip", exact: true }).click();
     await impact.getByRole("radio", { name: "Update globally", exact: true }).check();
     await impact.getByRole("button", { name: "Apply change", exact: true }).click();
-    await expect(questionEntry).toHaveClass(/readweave-callout-warning/);
+    await expect(questionEntry).toHaveClass(/readweave-callout-tip/);
 
     await questionEntry.hover();
     await questionEntry.getByRole("button", { name: /^Edit /u }).click();
@@ -1543,7 +1539,7 @@ test("ReadWeave handles diverse source articles and keeps cross-article term ref
     const answer = panel.getByTestId("readweave-answer");
     await question.fill("Why does QUIC use UDP, how is TLS involved, and what happens to unrelated streams after packet loss?");
     await panel.getByTestId("readweave-optimize-question").check();
-    await panel.getByRole("button", { name: "Warning", exact: true }).click();
+    await panel.getByRole("button", { name: "Tip", exact: true }).click();
     await panel.getByRole("button", { name: "Generate answer", exact: true }).click();
     await expect(answer).toContainText(/定义与命名：/);
     await expect(answer).toContainText(/实现选择与证据闭环：/);
