@@ -92,6 +92,7 @@ import {
 import RightPanelWidget from "./RightPanelWidget.js";
 
 const BLOCK_SELECTOR = "p,h1,h2,h3,h4,h5,h6,li,blockquote,pre,table,td,th,caption,figure,figcaption,div.mermaid,div.mermaid-diagram";
+const CONTENT_ROOT_SELECTOR = `[data-readweave-content-root], .note-detail-readonly-text-content, [contenteditable="true"][role="textbox"]`;
 const RANGE_ANCHOR_SELECTOR = READWEAVE_RANGE_ANCHOR_SELECTOR;
 const PARAGRAPH_ANCHOR_SELECTOR = READWEAVE_PARAGRAPH_ANCHOR_SELECTOR;
 const READWEAVE_LOCKED_ANCHOR_BY_ROOT = new WeakMap<HTMLElement, string>();
@@ -2594,12 +2595,20 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             }
         }
 
-        async function editorAndRoot() {
+        async function editorAndRoot(preferredRoot?: HTMLElement) {
             const currentContext = optionsRef.current.noteContext;
             const staticRoot = optionsRef.current.contentElement;
-            if (staticRoot?.dataset.readweaveContentRoot === "readonly"
-                || staticRoot?.classList.contains("note-detail-readonly-text-content")) {
-                return { editor: null, root: staticRoot, mode: "readonly" as const };
+            const isReadonlyRoot = (root: HTMLElement | null | undefined) => root?.dataset.readweaveContentRoot === "readonly"
+                || root?.classList.contains("note-detail-readonly-text-content");
+            // Use the root that actually owns the browser selection. The
+            // content-element hook can lag one render behind a read-only note,
+            // and returning that stale element makes the preview appear while
+            // the action bubble is discarded by the root identity check.
+            if (isReadonlyRoot(preferredRoot)) {
+                return { editor: null, root: preferredRoot!, mode: "readonly" as const };
+            }
+            if (isReadonlyRoot(staticRoot)) {
+                return { editor: null, root: staticRoot!, mode: "readonly" as const };
             }
             const editor: CKTextEditor | null = currentContext
                 ? await currentContext.getTextEditor().catch(() => null)
@@ -2641,7 +2650,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             const nativeRange = trimRangeWhitespace(nativeSelection.getRangeAt(0));
             const excerpt = nativeRange.toString().replace(/\s+/g, " ").trim().slice(0, 10_000);
             const common = nativeRange.commonAncestorContainer instanceof Element ? nativeRange.commonAncestorContainer : nativeRange.commonAncestorContainer.parentElement;
-            const root = common?.closest<HTMLElement>(`[data-readweave-content-root], [contenteditable="true"][role="textbox"]`);
+            const root = common?.closest<HTMLElement>(CONTENT_ROOT_SELECTOR);
             if (!root || !excerpt) {
                 removeBubble();
                 return;
@@ -2650,7 +2659,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
                 positionBubble();
                 return;
             }
-            const { editor, root: actualRoot, mode } = await editorAndRoot();
+            const { editor, root: actualRoot, mode } = await editorAndRoot(root);
             if (disposed || revision !== selectionRevision || !actualRoot || actualRoot !== root) return;
             const block = common?.closest<HTMLElement>(BLOCK_SELECTOR);
             if (!block || !root.contains(block) || (mode === "readonly" && !rangeIsContainedByBlock(block, nativeRange))) {
@@ -2798,8 +2807,8 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             if (nativeSelection && !nativeSelection.isCollapsed && nativeSelection.rangeCount) {
                 const common = nativeSelection.getRangeAt(0).commonAncestorContainer;
                 const commonElement = common instanceof Element ? common : common.parentElement;
-                const selectionRoot = commonElement?.closest('[data-readweave-content-root], [contenteditable="true"][role="textbox"]');
-                const clickRoot = event.target.closest('[data-readweave-content-root], [contenteditable="true"][role="textbox"]');
+                const selectionRoot = commonElement?.closest(CONTENT_ROOT_SELECTOR);
+                const clickRoot = event.target.closest(CONTENT_ROOT_SELECTOR);
                 // A selection may survive navigation and restoration. Clicking a
                 // precise ReadWeave fragment must still open/lock that fragment;
                 // only plain editor clicks should remain reserved for selection.
@@ -3303,7 +3312,7 @@ function calloutTypeForKind(summary: ReadWeaveAnchorSummary | undefined, kind: R
 
 function findEditableBlock(target: EventTarget | null): { root: HTMLElement; block: HTMLElement } | null {
     if (!(target instanceof Element)) return null;
-    const root = target.closest<HTMLElement>('[data-readweave-content-root], [contenteditable="true"][role="textbox"]');
+    const root = target.closest<HTMLElement>(CONTENT_ROOT_SELECTOR);
     if (!root) return null;
     const block = target.closest<HTMLElement>(BLOCK_SELECTOR);
     return block && root.contains(block) ? { root, block } : null;
