@@ -966,6 +966,7 @@ interface ReadWeaveRegenerateRequest {
     feedback?: unknown;
     title?: unknown;
     optimizeQuestion?: unknown;
+    autoApplyPlan?: unknown;
     calloutType?: unknown;
     termIdentity?: unknown;
     fragments?: unknown;
@@ -1001,6 +1002,12 @@ export function regenerateReadWeaveGenerationJob(jobId: string, inputValue: unkn
             throw new ValidationError("optimizeQuestion must be boolean.");
         }
         request.optimizeQuestion = input.optimizeQuestion as boolean | undefined;
+    }
+    if (Object.hasOwn(input, "autoApplyPlan")) {
+        if (input.autoApplyPlan !== undefined && typeof input.autoApplyPlan !== "boolean") {
+            throw new ValidationError("autoApplyPlan must be boolean.");
+        }
+        request.autoApplyPlan = input.autoApplyPlan as boolean | undefined;
     }
     if (Object.hasOwn(input, "calloutType")) {
         if (input.calloutType !== "note" && input.calloutType !== "tip" && input.calloutType !== "important"

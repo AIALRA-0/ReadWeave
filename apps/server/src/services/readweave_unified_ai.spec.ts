@@ -159,6 +159,12 @@ describe("ReadWeave unified evidence workflow", () => {
 
         expect(result.audit?.workflowVersion).toBe("quality-closure-v2");
         expect(result.audit?.questionContract.objective).toBe("直接回答用户明确询问的命题");
+        expect(result.answerPlan?.steps.length).toBeGreaterThanOrEqual(3);
+        const prompts = vi.mocked(fetch).mock.calls.map(([, init]) => {
+            const payload = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+            return payload.messages.map(message => message.content).join("\n");
+        });
+        expect(prompts.some(prompt => prompt.includes("回答构造流（必须按这个顺序组织正文"))).toBe(true);
         expect(result.body).not.toContain("。");
         if (title.includes("Moongon Jung")) expect(result.body).toContain("Moongon Jung 是");
         else if (title.includes("CXL.io")) expect(result.body).toContain("CXL.io 是一组逻辑协议");

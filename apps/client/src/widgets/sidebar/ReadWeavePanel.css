@@ -7,6 +7,32 @@
     box-shadow: none;
 }
 
+.readweave-local-rewrite {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 5px;
+}
+
+.readweave-local-rewrite-form {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 7px 8px;
+    border-inline-start: 2px solid var(--admonition-note-accent-color);
+    background: color-mix(in srgb, var(--admonition-note-accent-color) 7%, transparent);
+}
+
+.readweave-local-rewrite-form textarea {
+    min-height: 58px;
+}
+
+.readweave-local-rewrite-result {
+    margin-top: 3px;
+    color: var(--muted-text-color);
+    font-size: 0.86em;
+}
+
 [data-readweave-range-anchor-id].readweave-anchor-active {
     background: transparent;
 }

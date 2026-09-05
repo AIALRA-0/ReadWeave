@@ -201,6 +201,7 @@ function register(app: express.Application) {
     apiRoute(PATCH, "/api/readweave/links/:linkId", readweaveRoute.editLink);
     apiRoute(DEL, "/api/readweave/links/:linkId", readweaveRoute.deleteLink);
     asyncApiRoute(PST, "/api/readweave/generate", readweaveRoute.generate);
+    asyncApiRoute(PST, "/api/readweave/rewrite-local", readweaveRoute.rewriteLocal);
     apiRoute(PST, "/api/readweave/generation-jobs", readweaveRoute.startGenerationJob);
     apiRoute(GET, "/api/readweave/generation-jobs", readweaveRoute.listGlobalGenerationJobs);
     apiRoute(GET, "/api/readweave/articles/:articleId/generation-jobs", readweaveRoute.listGenerationJobs);

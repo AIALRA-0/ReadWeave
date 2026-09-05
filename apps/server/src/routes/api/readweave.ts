@@ -2,6 +2,7 @@ import type {
     ReadWeaveAiSettingsUpdate,
     ReadWeaveEditRequest,
     ReadWeaveGenerateRequest,
+    ReadWeaveLocalRewriteRequest,
     ReadWeaveObjectKind,
     ReadWeaveSaveRequest,
     ReadWeaveTermIdentity
@@ -54,6 +55,7 @@ import {
     listReadWeaveModels,
     updateReadWeaveAiSettings
 } from "../../services/readweave_settings.js";
+import { generateReadWeaveLocalRewrite } from "../../services/readweave_unified_ai.js";
 
 function getEntries(req: Request<{ articleId: string; anchorId: string }>) {
     return { entries: getEntriesForAnchor(req.params.articleId, req.params.anchorId) };
@@ -97,6 +99,10 @@ function deleteLink(req: Request<{ linkId: string }>) {
 
 async function generate(req: Request) {
     return await generateReadWeaveAnswer(req.body as ReadWeaveGenerateRequest);
+}
+
+async function rewriteLocal(req: Request) {
+    return await generateReadWeaveLocalRewrite(req.body as ReadWeaveLocalRewriteRequest);
 }
 
 function startGenerationJob(req: Request) {
@@ -233,6 +239,7 @@ export default {
     editLink,
     deleteLink,
     generate,
+    rewriteLocal,
     startGenerationJob,
     getGenerationJob,
     listGenerationJobs,

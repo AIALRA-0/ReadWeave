@@ -15,6 +15,7 @@ import {
     type ReadWeaveGenerationProgress,
     type ReadWeaveHarnessProfile,
     type ReadWeaveImpact,
+    type ReadWeaveLocalRewriteResponse,
     type ReadWeaveObject,
     type ReadWeaveObjectKind,
     type ReadWeaveResolvedEntry,
@@ -30,6 +31,7 @@ import server from "../../services/server.js";
 import utils from "../../services/utils.js";
 import { useActiveNoteContext, useContentElement } from "../react/hooks.js";
 import {
+    applyReadWeaveRuntimeRangeAnchor,
     clearReadWeaveProvisionalAnchors,
     exactReadWeaveAnchorIdForExcerpt,
     exactReadWeaveExcerptRange,
@@ -43,10 +45,9 @@ import {
     READWEAVE_RANGE_ANCHOR_SELECTOR,
     readWeaveAnchorGroupRange,
     readWeaveAnchorIdsOf,
-    releaseReadWeaveProvisionalAnchors,
-    applyReadWeaveRuntimeRangeAnchor,
     readWeaveRangeForSourceLocator,
     readWeaveSourceLocatorForRange,
+    releaseReadWeaveProvisionalAnchors,
     removeReadWeaveRuntimeRangeAnchors,
     uniqueReadWeaveExcerptRangeWithLocator
 } from "./readweave_anchor_dom.js";
@@ -55,6 +56,7 @@ import {
     READWEAVE_GENERATION_STATUS_CLASSES,
     readWeaveGenerationStatusClass
 } from "./readweave_anchor_visuals.js";
+import { applyReadWeaveLocalReplacement } from "./readweave_local_rewrite.js";
 import {
     calloutAfterKindChange,
     createReadWeaveReviewIssueBaseline,
@@ -63,7 +65,6 @@ import {
     isReadWeaveGenerationDisabled,
     isReadWeaveGenerationReviewable,
     isReadWeaveJobAutoRestoreAllowed,
-    isReadWeaveReviewSaveAllowed,
     mergeReadWeaveGenerationJobSnapshot,
     normalizeReadWeaveReadableMath,
     normalizeReadWeaveTermIdentityForReview,
@@ -97,6 +98,7 @@ type ReadWeaveHandledMouseEvent = MouseEvent & {
     __readweaveClickHandled?: true;
 };
 const CALLOUT_TYPES: ReadWeaveCalloutType[] = [ "note", "tip", "important", "warning", "caution" ];
+const CALLOUT_SELECTOR_TYPES: ReadWeaveCalloutType[] = [ "note", "tip" ];
 const CALLOUT_ICONS: Record<ReadWeaveCalloutType, string> = {
     note: "bx bx-info-circle",
     tip: "bx bx-bulb",
@@ -119,6 +121,7 @@ interface Draft {
     kind: ReadWeaveObjectKind;
     questionTitle: string;
     optimizeQuestion: boolean;
+    autoApplyPlan: boolean;
     termIdentity: Partial<ReadWeaveTermIdentity>;
     termIdentityEdited?: boolean;
     body: string;
@@ -180,6 +183,7 @@ export default function ReadWeavePanel() {
     const [parentLinkId, setParentLinkId] = useState<string>();
     const [questionTitle, setQuestionTitle] = useState("");
     const [optimizeQuestion, setOptimizeQuestion] = useState(true);
+    const [autoApplyPlan, setAutoApplyPlan] = useState(true);
     const [termIdentity, setTermIdentity] = useState<Partial<ReadWeaveTermIdentity>>({});
     const [termIdentityEdited, setTermIdentityEdited] = useState(false);
     const [body, setBody] = useState("");
@@ -207,6 +211,10 @@ export default function ReadWeavePanel() {
     const [busy, setBusy] = useState(false);
     const [bodyEditing, setBodyEditing] = useState(true);
     const [bodyEdited, setBodyEdited] = useState(false);
+    const [localRewriteOpen, setLocalRewriteOpen] = useState(false);
+    const [localRewriteInstruction, setLocalRewriteInstruction] = useState("");
+    const [localRewriteBusy, setLocalRewriteBusy] = useState(false);
+    const [localRewriteResult, setLocalRewriteResult] = useState<ReadWeaveLocalRewriteResponse>();
     const [editState, setEditState] = useState<EditState>();
     const [deleteState, setDeleteState] = useState<DeleteState>();
     const [hoverPreview, setHoverPreview] = useState<HoverPreview>();
@@ -285,14 +293,10 @@ export default function ReadWeavePanel() {
     const currentSourceExcerpt = selection
         ? resolveSourceExcerpt(selection, currentJob)
         : "";
-    const reviewSaveAllowed = isReadWeaveReviewSaveAllowed({
-        reviewIssues,
-        baseline: reviewIssueBaseline,
-        body,
-        kind,
-        termIdentity
-    });
-    const draftEditedAfterFailedReview = reviewIssues.length > 0 && reviewSaveAllowed;
+    // Review findings are retained in the trace, but evidence/style advice
+    // must not block a non-empty draft from being saved. Hard failures stop
+    // before a job reaches this editor state.
+    const reviewSaveAllowed = true;
     const saveReady = !!selection && !selection.pending && !definitionExists && !!currentTitle && !!body.trim() && !!currentSourceExcerpt && reviewSaveAllowed;
     const generationBusy = displayedJob?.status === "queued" || displayedJob?.status === "running" || displayedJob?.status === "saving";
     const hasActiveGenerationJobs = hasActiveReadWeaveGenerationJobs(generationJobs);
@@ -520,6 +524,7 @@ export default function ReadWeavePanel() {
                 ? confirmingPendingSelection && questionTitle.trim() ? questionTitle : matchingJob?.title || defaultQuestionForExcerpt(decodeReadWeaveText(nextSelection.excerpt))
                 : ""));
         setOptimizeQuestion(matchingDraft?.optimizeQuestion ?? (confirmingPendingSelection ? optimizeQuestion : true));
+        setAutoApplyPlan(matchingDraft?.autoApplyPlan ?? true);
         const restoredFields = recoverReadWeaveGenerationFields({
             draft: matchingDraft,
             fallbackBody: confirmingPendingSelection ? body : "",
@@ -598,6 +603,7 @@ export default function ReadWeavePanel() {
         setParentLinkId(undefined);
         setQuestionTitle("");
         setOptimizeQuestion(true);
+        setAutoApplyPlan(true);
         setTermIdentity({});
         setTermIdentityEdited(false);
         setBody("");
@@ -791,11 +797,11 @@ export default function ReadWeavePanel() {
 
     useEffect(() => {
         if (!noteId || !selection) return;
-        const draft: Draft = { kind, questionTitle, optimizeQuestion, termIdentity, termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision, generationJobId, reviewIssues, reviewIssueBaseline, parentLinkId, newQuestionDraft };
+        const draft: Draft = { kind, questionTitle, optimizeQuestion, autoApplyPlan, termIdentity, termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision, generationJobId, reviewIssues, reviewIssueBaseline, parentLinkId, newQuestionDraft };
         const isolatedDraftId = currentJob?.draftId ?? generationJobId ?? localDraftId;
         sessionStorage.setItem(draftKey(noteId, selection.anchorId, parentLinkId, isolatedDraftId), JSON.stringify(draft));
         sessionStorage.setItem(draftKey(noteId, selection.anchorId, parentLinkId), JSON.stringify(draft));
-    }, [noteId, selection, kind, parentLinkId, questionTitle, optimizeQuestion, termIdentity, termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision, generationJobId, currentJob?.draftId, localDraftId, reviewIssues, reviewIssueBaseline, newQuestionDraft]);
+    }, [noteId, selection, kind, parentLinkId, questionTitle, optimizeQuestion, autoApplyPlan, termIdentity, termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision, generationJobId, currentJob?.draftId, localDraftId, reviewIssues, reviewIssueBaseline, newQuestionDraft]);
 
     useEffect(() => {
         localStorage.setItem(READWEAVE_QUESTION_TEMPLATE_STORAGE_KEY, JSON.stringify(questionTemplates));
@@ -956,6 +962,7 @@ export default function ReadWeavePanel() {
                 sourceLocator: selection.sourceLocator,
                 title: currentTitle,
                 optimizeQuestion: kind === "question" ? optimizeQuestion : undefined,
+                autoApplyPlan,
                 termIdentity: kind === "term" ? cleanPartialTermIdentity(termIdentity) : undefined,
                 fragments: nestedParent
                     ? nestedQuestionFragments(entries, nestedParent, selection.fragments)
@@ -1021,6 +1028,53 @@ export default function ReadWeavePanel() {
             return;
         }
         void generate();
+    }
+
+    async function applyLocalRewrite() {
+        const textarea = bodyTextareaRef.current;
+        if (!textarea || !localRewriteInstruction.trim()) return;
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        if (start === end) {
+            setStatus("请先在回答中选中需要修改的文字");
+            setStatusTone("warning");
+            return;
+        }
+        const selectedText = body.slice(start, end);
+        setLocalRewriteBusy(true);
+        setStatus("正在只修改选中文字");
+        setStatusTone("normal");
+        try {
+            const result = await server.post<ReadWeaveLocalRewriteResponse>("readweave/rewrite-local", {
+                body,
+                selectedText,
+                contextBefore: body.slice(Math.max(0, start - 500), start),
+                contextAfter: body.slice(end, Math.min(body.length, end + 500)),
+                instruction: localRewriteInstruction
+            });
+            if (result.scope !== "selection-only" || result.original !== selectedText) {
+                throw new Error("局部改写范围校验失败，原回答未修改");
+            }
+            const nextBody = applyReadWeaveLocalReplacement({ body, selectedText, replacement: result.replacement, start, end });
+            setBody(nextBody);
+            setBodyEdited(true);
+            setLocalRewriteResult(result);
+            setLocalRewriteOpen(false);
+            setLocalRewriteInstruction("");
+            setStatus("已完成局部修改，选区之外的内容未改变");
+            setStatusTone("normal");
+            window.requestAnimationFrame(() => {
+                const nextTextarea = bodyTextareaRef.current;
+                if (!nextTextarea) return;
+                nextTextarea.focus();
+                nextTextarea.setSelectionRange(start, start + result.replacement.length);
+            });
+        } catch (error) {
+            setStatus(readableError(error, "局部修改未应用，原回答保持不变"));
+            setStatusTone("error");
+        } finally {
+            setLocalRewriteBusy(false);
+        }
     }
 
     async function save() {
@@ -1170,6 +1224,7 @@ export default function ReadWeavePanel() {
                 feedback: regenerationFeedback.trim() || undefined,
                 title: currentTitle,
                 optimizeQuestion: kind === "question" ? optimizeQuestion : undefined,
+                autoApplyPlan,
                 calloutType,
                 termIdentity: kind === "term" ? cleanPartialTermIdentity(termIdentity) : undefined,
                 fragments: nestedParent
@@ -1247,6 +1302,9 @@ export default function ReadWeavePanel() {
     }
 
     function resetEditor(currentKind: ReadWeaveObjectKind) {
+        setLocalRewriteOpen(false);
+        setLocalRewriteInstruction("");
+        setLocalRewriteResult(undefined);
         setNewQuestionDraft(false);
         setQuestionTitle(currentKind === "question" && selection && !selection.pending
             ? defaultQuestionForExcerpt(selection.excerpt)
@@ -1283,6 +1341,9 @@ export default function ReadWeavePanel() {
             setCandidateDetails(current => ({ ...current, [candidate.objectId]: object }));
         }
         if (!isSelectionActionCurrent(target)) return;
+        setLocalRewriteOpen(false);
+        setLocalRewriteInstruction("");
+        setLocalRewriteResult(undefined);
         setKind(object.kind);
         if (object.kind === "question") setQuestionTitle(object.title);
         else {
@@ -1334,6 +1395,9 @@ export default function ReadWeavePanel() {
         selectionActionRevision.current += 1;
         selectionIdentityRevision.current += 1;
         setGenerationJobId(undefined);
+        setLocalRewriteOpen(false);
+        setLocalRewriteInstruction("");
+        setLocalRewriteResult(undefined);
         setGenerationProgress([]);
         setNewQuestionDraft(kind === "question");
         setBusy(false);
@@ -1354,6 +1418,9 @@ export default function ReadWeavePanel() {
         selectionActionRevision.current += 1;
         selectionIdentityRevision.current += 1;
         activeGenerationJobId.current = undefined;
+        setLocalRewriteOpen(false);
+        setLocalRewriteInstruction("");
+        setLocalRewriteResult(undefined);
         setKind("question");
         setNewQuestionDraft(true);
         setGenerationJobId(undefined);
@@ -1498,6 +1565,7 @@ export default function ReadWeavePanel() {
         setNewQuestionDraft(!!restoredDraft?.newQuestionDraft);
         setQuestionTitle(restoredFields.questionTitle);
         setOptimizeQuestion(restoredDraft?.optimizeQuestion ?? true);
+        setAutoApplyPlan(restoredDraft?.autoApplyPlan ?? true);
         setTermIdentity({});
         setTermIdentityEdited(false);
         setBody(restoredFields.body);
@@ -1796,6 +1864,7 @@ export default function ReadWeavePanel() {
                             <div class="readweave-kind" role="group" aria-label={t("readweave.kind_label")}>
                                 <button type="button" class={kind === "question" ? "active" : ""} disabled={editorLocked} onClick={() => chooseKind("question")}>{t("readweave.question")}</button>
                                 <button type="button" class={kind === "term" ? "active" : ""} disabled={editorLocked} onClick={() => chooseKind("term")}>{t("readweave.term")}</button>
+                                <button type="button" disabled title="注解自动生成暂未启用">注解</button>
                             </div>
                             {selection.pending && <p class="readweave-hint">{t("readweave.selection_pending_hint")}</p>}
                             {kind === "question" ? (
@@ -1865,6 +1934,10 @@ export default function ReadWeavePanel() {
                                     <label class="readweave-question-optimization">
                                         <input type="checkbox" checked={optimizeQuestion} disabled={editorLocked} onChange={event => setOptimizeQuestion(event.currentTarget.checked)} data-testid="readweave-optimize-question" />
                                         <span><strong>{t("readweave.optimize_question")}</strong><small>{t("readweave.optimize_question_hint")}</small></span>
+                                    </label>
+                                    <label class="readweave-question-optimization">
+                                        <input type="checkbox" checked={autoApplyPlan} disabled={editorLocked} onChange={event => setAutoApplyPlan(event.currentTarget.checked)} data-testid="readweave-auto-apply-plan" />
+                                        <span><strong>自动采用问题和回答结构</strong><small>关闭后仍会生成，但保留你的原问题文字</small></span>
                                     </label>
                                 </>
                             ) : (
@@ -1976,10 +2049,44 @@ export default function ReadWeavePanel() {
                                     testId="readweave-answer"
                                 />
                             )}
+                            {body.trim() && (
+                                <section class="readweave-local-rewrite" data-testid="readweave-local-rewrite">
+                                    <button
+                                        type="button"
+                                        class="btn btn-sm btn-link"
+                                        disabled={editorLocked || !bodyEditing}
+                                        aria-expanded={localRewriteOpen}
+                                        onClick={() => setLocalRewriteOpen(current => !current)}
+                                    >只修改选中文字</button>
+                                    {localRewriteOpen && (
+                                        <div class="readweave-local-rewrite-form">
+                                            <p class="readweave-hint">先在回答框中选中一小段文字，再说明希望怎么改，系统不会重写整段</p>
+                                            <textarea
+                                                rows={3}
+                                                value={localRewriteInstruction}
+                                                disabled={localRewriteBusy || editorLocked}
+                                                onInput={event => setLocalRewriteInstruction(event.currentTarget.value)}
+                                                placeholder="例如：改得更自然，但不要改变事实"
+                                                data-testid="readweave-local-rewrite-instruction"
+                                            />
+                                            <button type="button" class="btn btn-secondary" disabled={localRewriteBusy || editorLocked || !localRewriteInstruction.trim()} onClick={() => void applyLocalRewrite()}>
+                                                {localRewriteBusy && <i class="bx bx-loader-alt bx-spin" aria-hidden="true" />} 应用局部修改
+                                            </button>
+                                        </div>
+                                    )}
+                                </section>
+                            )}
+                            {localRewriteResult && (
+                                <details class="readweave-local-rewrite-result">
+                                    <summary>本次局部修改</summary>
+                                    <p>{localRewriteResult.reason}</p>
+                                </details>
+                            )}
                             <EvidenceSources sources={displayedJob?.result?.evidenceSources} claims={displayedJob?.result?.claims} />
                             {reuseObjectId && <p class="readweave-status">{t("readweave.reusing_object")}</p>}
                             {contextDecision && <p class="readweave-status">{readWeaveCompactStatusText(t("readweave.context_used", { count: contextDecision.characterCount, budget: contextDecision.characterBudget, expansions: contextDecision.expansionLevel }))}</p>}
                             {workflow && <p class="readweave-status">{readWeaveCompactStatusText(t("readweave.workflow_used", { generations: workflow.generationAttempts, checks: workflow.validationPasses }))}</p>}
+                            {displayedJob?.result?.answerPlan && <p class="readweave-status" data-testid="readweave-answer-plan">结构：{displayedJob.result.answerPlan.summary}</p>}
                             {displayedJob?.result?.usage && (
                                 <p class="readweave-status" data-testid="readweave-usage-cost">
                                     {t("readweave.usage_cost", {
@@ -2003,24 +2110,17 @@ export default function ReadWeavePanel() {
                                 />
                             )}
                             {reviewIssues.length > 0 && (
-                                <section
-                                    id="readweave-review-gate"
-                                    class={`readweave-review-gate ${draftEditedAfterFailedReview ? "edited" : "blocked"}`}
-                                    role="alert"
-                                    tabindex={0}
-                                    data-testid="readweave-review-gate"
-                                >
-                                    <strong>{t("readweave.automatic_review_failed")}</strong>
+                                <details id="readweave-review-gate" class="readweave-review-gate advisory" data-testid="readweave-review-gate">
+                                    <summary>查看生成记录</summary>
+                                    <p>这些是内部质量记录，不会阻止当前正文保存</p>
                                     <ul>{reviewIssues.map(issue => <li key={issue}>{readWeaveCompactStatusText(issue)}</li>)}</ul>
-                                    <p>{t(draftEditedAfterFailedReview ? "readweave.review_issues_edited" : "readweave.review_issues_blocked")}</p>
-                                </section>
+                                </details>
                             )}
                             {!currentJob?.savedLinkId && (
                                 <button
                                     type="button"
                                     class="btn btn-primary"
                                     disabled={editorLocked || !saveReady}
-                                    aria-describedby={reviewIssues.length > 0 ? "readweave-review-gate" : undefined}
                                     onClick={save}
                                     data-testid="readweave-save"
                                 >{t("readweave.review_and_save")}</button>
@@ -2314,7 +2414,7 @@ function SavedEntry({
 function CalloutSelector({ value, disabled = false, onChange }: { value: ReadWeaveCalloutType; disabled?: boolean; onChange: (value: ReadWeaveCalloutType) => void }) {
     return (
         <div class="readweave-callout-selector" role="group" aria-label={t("readweave.visual_type")}>
-            {CALLOUT_TYPES.map(type => (
+            {CALLOUT_SELECTOR_TYPES.map(type => (
                 <button type="button" class={`readweave-callout-choice readweave-callout-${type} ${value === type ? "active" : ""}`} title={t(`readweave.callout_${type}`)} aria-label={t(`readweave.callout_${type}`)} aria-pressed={value === type} disabled={disabled} onClick={() => onChange(type)} key={type}>
                     <i class={CALLOUT_ICONS[type]} /><span>{t(`readweave.callout_${type}`)}</span>
                 </button>
@@ -3175,14 +3275,14 @@ function generationJobStateClass(job: Pick<ReadWeaveGenerationJob, "status" | "q
     if (job.status === "failed") return "error";
     if (job.status === "paused") return "paused";
     if (job.status === "queued" || job.status === "running" || job.status === "saving") return "running";
-    if (job.status === "ready-for-review") return job.qualityState === "verified" ? "complete" : "draft";
+    if (job.status === "ready-for-review") return "complete";
     if (job.status === "saved") return "complete";
     return "paused";
 }
 
 function generationJobStatusLabel(job: Pick<ReadWeaveGenerationJob, "status" | "qualityState">): string {
     if (job.status === "queued" || job.status === "running" || job.status === "saving") return "生成中";
-    if (job.status === "ready-for-review") return job.qualityState === "verified" ? "已核验，可入库" : "草稿可审核";
+    if (job.status === "ready-for-review") return "已生成";
     if (job.status === "paused") return "已暂停";
     if (job.status === "failed") return "失败";
     if (job.status === "saved") return "已入库";
