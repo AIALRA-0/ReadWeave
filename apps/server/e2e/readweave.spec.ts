@@ -300,7 +300,7 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await ensureGeneratedItemSaved(panel);
     await expect(reviewAndSave).toHaveCount(0);
     await expect(paragraph).toHaveAttribute("data-readweave-paragraph-question-count", "1");
-    await expect(rangeAnchor).toHaveClass(/readweave-anchor-callout-important/);
+    await expect(rangeAnchor).toHaveClass(/readweave-anchor-callout-tip/);
     expect(await rangeAnchor.evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgba(0, 0, 0, 0)");
     expect(await paragraph.evaluate(element => getComputedStyle(element).boxShadow)).toBe("none");
     await rangeAnchor.hover();
@@ -351,7 +351,7 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     expect(badgeMetrics.color).not.toBe("rgba(0, 0, 0, 0)");
     expect(await paragraph.evaluate(element => getComputedStyle(element, "::after").content)).toBe("none");
     const questionEntry = panel.locator(".readweave-entry", { hasText: "NPU 是什么，有什么用途？" });
-    await expect(questionEntry).toHaveClass(/readweave-callout-important/);
+    await expect(questionEntry).toHaveClass(/readweave-callout-tip/);
     await expect(questionEntry.getByRole("button", { name: /^Edit /u })).toBeVisible();
     await expect(questionEntry.getByRole("button", { name: /^Delete /u })).toBeVisible();
     const savedEntryHeadingLayout = await questionEntry.evaluate(element => {
@@ -1578,7 +1578,7 @@ test("ReadWeave handles diverse source articles and keeps cross-article term ref
     await abbreviation.fill("TESS");
     await chineseName.fill("凌日系外行星巡天卫星");
     await englishName.fill("Transiting Exoplanet Survey Satellite");
-    await panel.getByRole("button", { name: "Important", exact: true }).click();
+    await panel.getByRole("button", { name: "Tip", exact: true }).click();
     await panel.getByRole("button", { name: "Generate definition", exact: true }).click();
     await expect(abbreviation).toHaveValue("TESS");
     await expect(chineseName).toHaveValue("凌日系外行星巡天卫星");
