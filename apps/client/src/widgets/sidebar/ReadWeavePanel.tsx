@@ -60,7 +60,6 @@ import {
 } from "./readweave_anchor_visuals.js";
 import { applyReadWeaveLocalReplacement } from "./readweave_local_rewrite.js";
 import {
-    calloutAfterKindChange,
     createReadWeaveReviewIssueBaseline,
     defaultReadWeaveCallout,
     hasActiveReadWeaveGenerationJobs,
@@ -71,6 +70,7 @@ import {
     normalizeReadWeaveReadableMath,
     normalizeReadWeaveTermIdentityForReview,
     readWeaveCompactStatusText,
+    readWeaveCalloutForContentType,
     readWeaveContentTypeLabel,
     readWeaveGenerationProgressForDisplay,
     type ReadWeaveReviewIssueBaseline,
@@ -101,7 +101,6 @@ type ReadWeaveHandledMouseEvent = MouseEvent & {
     __readweaveClickHandled?: true;
 };
 const CALLOUT_TYPES: ReadWeaveCalloutType[] = [ "note", "tip", "important", "warning", "caution" ];
-const CALLOUT_SELECTOR_TYPES: ReadWeaveCalloutType[] = [ "note", "tip" ];
 const CALLOUT_ICONS: Record<ReadWeaveCalloutType, string> = {
     note: "bx bx-info-circle",
     tip: "bx bx-bulb",
@@ -235,6 +234,7 @@ export default function ReadWeavePanel() {
         }
     });
     const [templateManagerOpen, setTemplateManagerOpen] = useState(false);
+    const [settingsOpen, setSettingsOpen] = useState(false);
     const [activeTemplateId, setActiveTemplateId] = useState<string>();
     const [customTemplateLabel, setCustomTemplateLabel] = useState("");
     const [customTemplatePattern, setCustomTemplatePattern] = useState("关于“{selection}”，");
@@ -296,7 +296,7 @@ export default function ReadWeavePanel() {
         ? decodeReadWeaveText(questionTitle)
         : formatPartialTermIdentity(termIdentity) || selection?.excerpt.trim() || "";
     const nestedParent = parentLinkId ? entries.find(entry => entry.linkId === parentLinkId) : undefined;
-    const suggestedTemplates = rankedReadWeaveQuestionTemplates(questionTemplates, questionTitle, 5);
+    const suggestedTemplates = rankedReadWeaveQuestionTemplates(questionTemplates, questionTitle, questionTemplates.length);
     const currentSourceExcerpt = selection
         ? resolveSourceExcerpt(selection, currentJob)
         : "";
@@ -361,7 +361,9 @@ export default function ReadWeavePanel() {
         const savedDraft = readDraft(job.articleId, job.anchorId, job.parentLinkId, job.draftId);
         setLocalDraftId(job.draftId);
         setNewQuestionDraft(false);
-        setContentType(job.contentType ?? savedDraft?.contentType ?? (job.kind === "term" ? "definition" : "problem"));
+        const restoredContentType = job.contentType ?? savedDraft?.contentType ?? (job.kind === "term" ? "definition" : "problem");
+        setContentType(restoredContentType);
+        setCalloutType(savedDraft?.calloutType ?? readWeaveCalloutForContentType(restoredContentType));
         setParentLinkId(job.parentLinkId);
         setGenerationJobId(job.jobId);
         setGenerationProgress(job.progress);
@@ -527,12 +529,7 @@ export default function ReadWeavePanel() {
         setTermIdentityEdited(restoredFields.termIdentityEdited);
         setBody(nextBody);
         setBodyEdited(!!matchingDraft?.bodyEdited && !!matchingDraft.body.trim());
-        const pendingCallout = confirmingPendingSelection && nextKind !== kind
-            ? calloutAfterKindChange(calloutType, nextKind)
-            : calloutType;
-        setCalloutType(matchingDraft
-            ? calloutAfterKindChange(matchingDraft.calloutType, nextKind)
-            : confirmingPendingSelection ? pendingCallout : defaultReadWeaveCallout(nextKind));
+        setCalloutType(matchingDraft?.calloutType ?? readWeaveCalloutForContentType(requestedContentType));
         setReuseObjectId(matchingDraft?.reuseObjectId);
         setContextDecision(matchingDraft?.contextDecision ?? matchingJob?.result?.context);
         setWorkflow(matchingJob?.result?.workflow);
@@ -1358,9 +1355,15 @@ export default function ReadWeavePanel() {
     }
 
     function chooseContentType(nextContentType: ReadWeaveContentType) {
-        if (nextContentType === contentType) return;
-        if (selection?.pending && confirmPendingSelection(readWeaveKindForContentType(nextContentType))) return;
         const nextKind = readWeaveKindForContentType(nextContentType);
+        if (selection?.pending) {
+            // The content type selector is the only confirmation control. A
+            // pending read-only range is finalized by the same click that
+            // chooses its content type.
+            if (!confirmPendingSelection(nextKind)) return;
+            return;
+        }
+        if (nextContentType === contentType) return;
         selectionActionRevision.current += 1;
         selectionIdentityRevision.current += 1;
         setContentType(nextContentType);
@@ -1368,7 +1371,7 @@ export default function ReadWeavePanel() {
         setNewQuestionDraft(false);
         setParentLinkId(nextContentType === "problem" ? parentLinkId : undefined);
         resetEditor(nextKind);
-        setCalloutType(calloutAfterKindChange(calloutType, nextKind));
+        setCalloutType(readWeaveCalloutForContentType(nextContentType));
         setStatus(undefined);
         setStatusTone("normal");
     }
@@ -1711,6 +1714,7 @@ export default function ReadWeavePanel() {
         anchor.download = "readweave-index.json";
         anchor.click();
         URL.revokeObjectURL(url);
+        setSettingsOpen(false);
     }
 
     return (
@@ -1726,17 +1730,6 @@ export default function ReadWeavePanel() {
                                 : selection.anchorType === "range" ? t("readweave.selected_range") : t("readweave.selected_paragraph")}</div>
                             <p>{selection.excerpt}</p>
                         </section>
-                        {selection.pending && selection.readonly && (
-                            <div class="readweave-selection-actions readweave-selection-actions-panel" role="toolbar" aria-label="只读选区操作">
-                                <button type="button" onClick={() => confirmPendingSelection("question")}>
-                                    {t("readweave.ask_action")}
-                                </button>
-                                <button type="button" onClick={() => confirmPendingSelection("term")}>
-                                    {t("readweave.define_action")}
-                                </button>
-                            </div>
-                        )}
-
                         <section class="readweave-existing">
                             <div class="readweave-section-title">{t("readweave.saved_items")}</div>
                             {entries.length === 0 && <p class="readweave-hint">{t("readweave.no_saved_items")}</p>}
@@ -1803,7 +1796,6 @@ export default function ReadWeavePanel() {
                                     <label>{t("readweave.title_label")}<input ref={editTitleInputRef} value={editState.title} disabled={editorLocked} onInput={event => setEditState({ ...editState, title: event.currentTarget.value })} /></label>
                                 )}
                                 <label>{t(editState.entry.kind === "question" ? "readweave.answer_label" : "readweave.definition_label")}<textarea ref={editBodyTextareaRef} rows={7} value={editState.body} disabled={editorLocked} onInput={event => setEditState({ ...editState, body: event.currentTarget.value })} /></label>
-                                <CalloutSelector value={editState.calloutType} disabled={editorLocked} onChange={value => setEditState({ ...editState, calloutType: value })} />
                                 <div class="readweave-edit-modes">
                                     {(["global", "article-variant", "display-only"] as ReadWeaveEditMode[]).map(mode => (
                                         <label key={mode}>
@@ -1828,7 +1820,6 @@ export default function ReadWeavePanel() {
                                 </div>
                             )}
                             <ContentTypeSelector value={contentType} disabled={editorLocked} onChange={chooseContentType} />
-                            {selection.pending && <p class="readweave-hint">{t("readweave.selection_pending_hint")}</p>}
                             {contentType !== "definition" && contentType !== "note" && contentType !== "key-point" ? (
                                 <>
                                     <div class="readweave-question-template-bar" aria-label={t("readweave.question_templates")}>
@@ -1912,7 +1903,6 @@ export default function ReadWeavePanel() {
                                     <label>{contentType === "note" ? "笔记标题" : "要点标题"}
                                         <input value={questionTitle} disabled={editorLocked} onInput={event => { setQuestionTitle(event.currentTarget.value); changeDraft(); }} />
                                     </label>
-                                    <p class="readweave-hint">这是旁路手写内容，不调用模型，也不会改写正文</p>
                                 </>
                             )}
 
@@ -1969,7 +1959,6 @@ export default function ReadWeavePanel() {
                                     </div>
                                 </section>
                             )}
-                            <CalloutSelector value={calloutType} disabled={editorLocked} onChange={setCalloutType} />
                             {contentType !== "note" && contentType !== "key-point" && <button
                                 type="button"
                                 class={`btn btn-secondary readweave-generate-${kind}`}
@@ -2122,8 +2111,31 @@ export default function ReadWeavePanel() {
                     </>
                 )}
                 {status && <p class={`readweave-status ${statusTone === "error" ? "readweave-status-error" : statusTone === "warning" ? "readweave-status-warning" : ""}`} role={statusTone === "error" ? "alert" : "status"}>{readWeaveCompactStatusText(status)}</p>}
-                <button type="button" class="btn btn-sm btn-link readweave-export" onClick={exportArticle} disabled={!noteId}>{t("readweave.export_article")}</button>
+                <div class="readweave-panel-toolbar">
+                    <button type="button" class="btn btn-sm readweave-settings-button" onClick={() => setSettingsOpen(true)} aria-label="ReadWeave 设置" title="设置">
+                        <i class="bx bx-cog" aria-hidden="true" />
+                        设置
+                    </button>
+                </div>
             </div>
+
+            {settingsOpen && (
+                <div class="readweave-settings-backdrop" role="presentation" onClick={event => { if (event.target === event.currentTarget) setSettingsOpen(false); }}>
+                    <section class="readweave-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="readweave-settings-title">
+                        <div class="readweave-settings-heading">
+                            <strong id="readweave-settings-title">ReadWeave 设置</strong>
+                            <button type="button" class="btn btn-sm btn-link" onClick={() => setSettingsOpen(false)} aria-label="关闭设置">×</button>
+                        </div>
+                        <div class="readweave-settings-section">
+                            <strong>本文数据</strong>
+                            <p>导出当前文章的旁路问题、定义、注解、笔记、要点和锚点索引</p>
+                            <button type="button" class="btn btn-secondary" onClick={() => void exportArticle()} disabled={!noteId}>
+                                导出本文的问题—锚点索引
+                            </button>
+                        </div>
+                    </section>
+                </div>
+            )}
 
             {hoverPreview && (
                 <aside
@@ -2387,18 +2399,6 @@ function SavedEntry({
     );
 }
 
-function CalloutSelector({ value, disabled = false, onChange }: { value: ReadWeaveCalloutType; disabled?: boolean; onChange: (value: ReadWeaveCalloutType) => void }) {
-    return (
-        <div class="readweave-callout-selector" role="group" aria-label={t("readweave.visual_type")}>
-            {CALLOUT_SELECTOR_TYPES.map(type => (
-                <button type="button" class={`readweave-callout-choice readweave-callout-${type} ${value === type ? "active" : ""}`} title={t(`readweave.callout_${type}`)} aria-label={t(`readweave.callout_${type}`)} aria-pressed={value === type} disabled={disabled} onClick={() => onChange(type)} key={type}>
-                    <i class={CALLOUT_ICONS[type]} /><span>{t(`readweave.callout_${type}`)}</span>
-                </button>
-            ))}
-        </div>
-    );
-}
-
 function ContentTypeSelector({ value, disabled = false, onChange }: { value: ReadWeaveContentType; disabled?: boolean; onChange: (value: ReadWeaveContentType) => void }) {
     const options: Array<{ value: ReadWeaveContentType; label: string }> = [
         { value: "problem", label: "问题" },
@@ -2408,10 +2408,25 @@ function ContentTypeSelector({ value, disabled = false, onChange }: { value: Rea
         { value: "key-point", label: "要点" }
     ];
     return (
-        <div class="readweave-kind readweave-content-type-selector" role="group" aria-label="内容类型">
-            {options.map(option => (
-                <button type="button" class={value === option.value ? "active" : ""} title={option.label} aria-label={option.value === "problem" ? "Question" : option.value === "definition" ? "Term" : option.label} disabled={disabled} aria-pressed={value === option.value} onClick={() => onChange(option.value)} key={option.value}>{option.label}</button>
-            ))}
+        <div class="readweave-kind readweave-callout-selector readweave-content-type-selector" role="group" aria-label="内容类型">
+            {options.map(option => {
+                const calloutType = readWeaveCalloutForContentType(option.value);
+                return (
+                    <button
+                        type="button"
+                        class={`readweave-callout-choice readweave-callout-${calloutType} ${value === option.value ? "active" : ""}`}
+                        title={option.label}
+                        aria-label={option.label}
+                        disabled={disabled}
+                        aria-pressed={value === option.value}
+                        onClick={() => onChange(option.value)}
+                        key={option.value}
+                    >
+                        <i class={CALLOUT_ICONS[calloutType]} aria-hidden="true" />
+                        <span>{option.label}</span>
+                    </button>
+                );
+            })}
         </div>
     );
 }
@@ -3033,8 +3048,24 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
 
     return (preferredKind: ReadWeaveObjectKind): boolean => {
         const action = pendingSelectionActionsRef.current[preferredKind];
-        if (!action) return false;
-        action();
+        if (action) {
+            action();
+            return true;
+        }
+        // The panel can render between the selection preview and the final
+        // registration of the readonly activation callback. Keep the user's
+        // single click alive for that short attachment window instead of
+        // silently doing nothing.
+        let attempts = 0;
+        const retry = () => {
+            const pendingAction = pendingSelectionActionsRef.current[preferredKind];
+            if (pendingAction) {
+                pendingAction();
+                return;
+            }
+            if (attempts++ < 12) window.setTimeout(retry, 16);
+        };
+        window.setTimeout(retry, 0);
         return true;
     };
 }
@@ -3111,7 +3142,7 @@ function previewEntriesForElement(
             && normalizedAnchorText(entry.title) === normalizedAnchorText(title)
             && normalizedAnchorText(entry.body) === normalizedAnchorText(result.body));
         if (duplicatesSaved || (job.kind === "term" && saved.some(entry => entry.kind === "term"))) return [];
-        const calloutType = defaultReadWeaveCallout(job.kind);
+        const calloutType = readWeaveCalloutForContentType(job.contentType ?? (job.kind === "term" ? "definition" : "problem"));
         return [ {
             linkId: `readweave-generation:${job.jobId}`,
             articleId: job.articleId,
@@ -3235,7 +3266,11 @@ function applyAnchorSummaryDecorations(root: HTMLElement, summaries: ReadWeaveAn
             .filter(candidate => candidate.anchorId === anchorId)
             .toSorted((left, right) => compareGenerationJobVisualPriority(right, left))[0];
         if (!summary?.entries.length && !job) continue;
-        const anchorType = summary?.entries.length ? anchorCalloutType(summary) : (job?.kind === "term" ? "tip" : "note");
+        const anchorType = summary?.entries.length
+            ? anchorCalloutType(summary)
+            : job
+                ? readWeaveCalloutForContentType(job.contentType ?? (job.kind === "term" ? "definition" : "problem"))
+                : "note";
         const termType = calloutTypeForKind(summary, "term");
         elements.forEach(element => element.classList.add(element.matches(RANGE_ANCHOR_SELECTOR) ? "readweave-range-anchor" : "readweave-paragraph-anchor"));
         elements.forEach(element => element.classList.add(`readweave-anchor-callout-${anchorType}`));

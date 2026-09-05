@@ -31,6 +31,14 @@ describe("ReadWeave question templates", () => {
         expect(rankedReadWeaveQuestionTemplates(learned, "为什么会失败", 2)[0].id).toBe("why");
     });
 
+    it("returns the complete template set when the panel requests all templates", () => {
+        expect(rankedReadWeaveQuestionTemplates(
+            DEFAULT_READWEAVE_QUESTION_TEMPLATES,
+            "",
+            DEFAULT_READWEAVE_QUESTION_TEMPLATES.length
+        )).toHaveLength(DEFAULT_READWEAVE_QUESTION_TEMPLATES.length);
+    });
+
     it("rejects malformed stored templates and restores defaults when necessary", () => {
         expect(normalizeReadWeaveQuestionTemplates([ { id: "bad", label: "坏", pattern: "没有占位符" } ]))
             .toHaveLength(DEFAULT_READWEAVE_QUESTION_TEMPLATES.length);

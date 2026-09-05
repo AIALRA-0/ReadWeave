@@ -25,6 +25,22 @@ export function readWeaveContentTypeLabel(contentType: ReadWeaveContentType): st
     }[contentType];
 }
 
+/**
+ * The five user-facing content types replace the old visual callout selector.
+ * Keep the existing colours and icons in storage/rendering, but expose only
+ * one choice to the reader.
+ */
+export function readWeaveCalloutForContentType(contentType: ReadWeaveContentType): ReadWeaveCalloutType {
+    const mapping: Record<ReadWeaveContentType, ReadWeaveCalloutType> = {
+        problem: "note",
+        definition: "tip",
+        annotation: "important",
+        note: "warning",
+        "key-point": "caution"
+    };
+    return mapping[contentType];
+}
+
 export interface ReadWeaveReviewIssueBaseline {
     body: string;
     termIdentity?: Partial<ReadWeaveTermIdentity>;

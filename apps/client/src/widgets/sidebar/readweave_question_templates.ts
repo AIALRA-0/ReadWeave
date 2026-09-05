@@ -109,7 +109,7 @@ export function rankedReadWeaveQuestionTemplates(
             score: template.uses * 10 + (template.id === intentId ? 1000 : 0) - index
         }))
         .toSorted((left, right) => right.score - left.score)
-        .slice(0, Math.max(1, Math.min(12, limit)))
+        .slice(0, Math.max(1, Math.min(40, limit)))
         .map(item => item.template);
 }
 

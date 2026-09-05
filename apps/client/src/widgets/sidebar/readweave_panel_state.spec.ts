@@ -14,6 +14,7 @@ import {
     READWEAVE_CANDIDATE_LIMIT,
     READWEAVE_CANDIDATE_MIN_CONFIDENCE,
     readWeaveCompactStatusText,
+    readWeaveCalloutForContentType,
     readWeaveGenerationProgressForDisplay,
     readWeaveGenerationVisualState,
     recoverReadWeaveGenerationFields,
@@ -48,6 +49,16 @@ function generationJob(overrides: Partial<ReadWeaveGenerationJob> = {}): ReadWea
 }
 
 describe("ReadWeave panel state", () => {
+    it("uses one colour/icon mapping for the five content types", () => {
+        expect([
+            readWeaveCalloutForContentType("problem"),
+            readWeaveCalloutForContentType("definition"),
+            readWeaveCalloutForContentType("annotation"),
+            readWeaveCalloutForContentType("note"),
+            readWeaveCalloutForContentType("key-point")
+        ]).toEqual([ "note", "tip", "important", "warning", "caution" ]);
+    });
+
     it("switches semantic defaults with the kind while retaining an explicit emphasis style", () => {
         expect(calloutAfterKindChange("note", "term")).toBe("tip");
         expect(calloutAfterKindChange("tip", "question")).toBe("note");

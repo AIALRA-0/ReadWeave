@@ -244,13 +244,6 @@
     background: var(--accented-background-color);
 }
 
-.readweave-selection-actions-panel {
-    position: static;
-    width: fit-content;
-    box-shadow: none;
-    animation: none;
-}
-
 .readweave-panel {
     display: flex;
     flex-direction: column;
@@ -1272,8 +1265,69 @@
     transform: translateY(0);
 }
 
-.readweave-export {
-    align-self: stretch;
+.readweave-panel-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    border-top: 1px solid var(--main-border-color);
+    padding-top: 6px;
+}
+
+.readweave-settings-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--muted-text-color);
+}
+
+.readweave-settings-backdrop {
+    position: fixed;
+    z-index: 10030;
+    inset: 0;
+    display: grid;
+    padding: 16px;
+    place-items: center;
+    background: rgb(0 0 0 / 35%);
+}
+
+.readweave-settings-dialog {
+    display: flex;
+    width: min(420px, calc(100vw - 32px));
+    max-height: min(560px, calc(100vh - 32px));
+    flex-direction: column;
+    gap: 12px;
+    overflow: auto;
+    padding: 14px;
+    border: 1px solid var(--main-border-color);
+    border-radius: 10px;
+    background: var(--main-background-color);
+    box-shadow: 0 18px 48px rgb(0 0 0 / 32%);
+}
+
+.readweave-settings-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 0.95rem;
+}
+
+.readweave-settings-heading > button {
+    padding: 0 5px !important;
+    font-size: 1.2rem;
+}
+
+.readweave-settings-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 10px;
+    border-top: 1px solid var(--main-border-color);
+}
+
+.readweave-settings-section p {
+    margin: 0;
+    color: var(--muted-text-color);
+    font-size: 0.78rem;
 }
 
 .readweave-hover-preview {
