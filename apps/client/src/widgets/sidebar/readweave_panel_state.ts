@@ -1,6 +1,7 @@
 import type {
     ReadWeaveCalloutType,
     ReadWeaveCandidate,
+    ReadWeaveContentType,
     ReadWeaveGenerationJob,
     ReadWeaveGenerationProgress,
     ReadWeaveObjectKind,
@@ -11,6 +12,18 @@ export const READWEAVE_CANDIDATE_MIN_CONFIDENCE = 0.55;
 export const READWEAVE_CANDIDATE_LIMIT = 3;
 
 export type ReadWeaveGenerationVisualState = "running" | "unread" | "draft" | "paused" | "error";
+
+export const READWEAVE_CONTENT_TYPES: ReadWeaveContentType[] = [ "problem", "definition", "annotation", "note", "key-point" ];
+
+export function readWeaveContentTypeLabel(contentType: ReadWeaveContentType): string {
+    return {
+        problem: "问题",
+        definition: "定义",
+        annotation: "注解",
+        note: "笔记",
+        "key-point": "要点"
+    }[contentType];
+}
 
 export interface ReadWeaveReviewIssueBaseline {
     body: string;
@@ -125,7 +138,6 @@ export function readWeaveGenerationVisualState(job: Pick<ReadWeaveGenerationJob,
     if (job.status === "failed") return "error";
     if (job.status === "paused") return "paused";
     if (job.status === "queued" || job.status === "running" || job.status === "saving") return "running";
-    if (isReadWeaveGenerationReviewable(job.status) && job.qualityState !== "verified") return "draft";
     if (isReadWeaveGenerationReviewable(job.status) && job.unread) return "unread";
     return undefined;
 }

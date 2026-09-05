@@ -5,6 +5,8 @@ import {
     type ReadWeaveAnchorSummary,
     type ReadWeaveAnchorType,
     type ReadWeaveCalloutType,
+    type ReadWeaveContentOrigin,
+    type ReadWeaveContentType,
     type ReadWeaveDeleteResult,
     type ReadWeaveEditRequest,
     type ReadWeaveExport,
@@ -16,7 +18,9 @@ import {
     type ReadWeaveSaveRequest,
     type ReadWeaveSourceLocator,
     type ReadWeaveTermIdentity,
-    type ReadWeaveVerifiedNonExpandableArtifact
+    type ReadWeaveVerifiedNonExpandableArtifact,
+    readWeaveContentOriginForType,
+    readWeaveContentTypeForKind
 } from "@triliumnext/commons";
 import { becca, type BNote, note_service as noteService, NotFoundError, ValidationError } from "@triliumnext/core";
 import crypto from "crypto";
@@ -32,6 +36,7 @@ import { newEntityId } from "./utils.js";
 const OBJECTS_ROOT_ID = "_readweaveObjects";
 const LINKS_ROOT_ID = "_readweaveLinks";
 const CALLOUT_TYPES = new Set<ReadWeaveCalloutType>([ "note", "tip", "important", "warning", "caution" ]);
+const CONTENT_TYPES = new Set<ReadWeaveContentType>([ "problem", "definition", "annotation", "note", "key-point" ]);
 
 function now(): string {
     return new Date().toISOString();
@@ -60,6 +65,21 @@ function requireCalloutType(value: unknown, kind: ReadWeaveObject["kind"]): Read
     if (value === undefined) return kind === "term" ? "tip" : "note";
     if (!CALLOUT_TYPES.has(value as ReadWeaveCalloutType)) throw new ValidationError("Unknown ReadWeave visual type.");
     return value as ReadWeaveCalloutType;
+}
+
+function normalizeContentMetadata(
+    kind: ReadWeaveObject["kind"],
+    value: unknown,
+    originValue?: unknown
+): { contentType: ReadWeaveContentType; origin: ReadWeaveContentOrigin } {
+    const contentType = value === undefined ? readWeaveContentTypeForKind(kind) : value;
+    if (!CONTENT_TYPES.has(contentType as ReadWeaveContentType)) throw new ValidationError("Unknown ReadWeave content type.");
+    const normalizedType = contentType as ReadWeaveContentType;
+    if (normalizedType === "definition" && kind !== "term") throw new ValidationError("A definition must use kind term.");
+    if (normalizedType !== "definition" && kind !== "question") throw new ValidationError("This content type must use kind question.");
+    const expectedOrigin = readWeaveContentOriginForType(normalizedType);
+    if (originValue !== undefined && originValue !== expectedOrigin) throw new ValidationError("ReadWeave content origin does not match content type.");
+    return { contentType: normalizedType, origin: expectedOrigin };
 }
 
 function normalizeVerifiedNonExpandableArtifact(
@@ -111,6 +131,7 @@ function parseObject(note: BNote): ReadWeaveObject | null {
         : undefined;
     const structuredTitle = termIdentity ? formatReadWeaveTermIdentity(termIdentity) : "";
     const title = structuredTitle || value.title;
+    const content = normalizeContentMetadata(value.kind, value.contentType, value.origin);
     return {
         ...value,
         schemaVersion: READWEAVE_SCHEMA_VERSION,
@@ -118,6 +139,7 @@ function parseObject(note: BNote): ReadWeaveObject | null {
             ? value.qualityState
             : "legacy-unverified",
         title,
+        ...content,
         normalizedTitle: normalizeReadWeaveTitle(title),
         calloutType: requireCalloutType(value.calloutType, value.kind),
         termIdentity
@@ -139,7 +161,9 @@ function parseLink(note: BNote): ReadWeaveLink | null {
         sourceExcerpt: typeof value.sourceExcerpt === "string" ? value.sourceExcerpt : "",
         sourceLocator: (() => {
             try { return normalizeSourceLocator(value.sourceLocator); } catch { return undefined; }
-        })()
+        })(),
+        contentType: value.contentType,
+        origin: value.origin
     } as ReadWeaveLink;
 }
 
@@ -241,6 +265,8 @@ function resolveLink(link: ReadWeaveLink): ReadWeaveResolvedEntry | null {
         depth: link.depth ?? 0,
         parentStale: parentStale || undefined,
         kind: object.kind,
+        contentType: link.contentType ?? object.contentType ?? readWeaveContentTypeForKind(object.kind),
+        origin: link.origin ?? object.origin ?? readWeaveContentOriginForType(link.contentType ?? object.contentType ?? readWeaveContentTypeForKind(object.kind)),
         title: link.displayTitle || object.title,
         body: link.displayBody || object.body,
         calloutType: link.displayCalloutType || object.calloutType,
@@ -293,6 +319,7 @@ export function getAnchorSummaries(articleIdValue: unknown): ReadWeaveAnchorSumm
             anchorType: links.find(link => link.anchorType === "range")?.anchorType ?? "paragraph",
             excerpt: links.find(link => link.sourceExcerpt)?.sourceExcerpt ?? "",
             sourceLocator: links.find(link => link.sourceLocator)?.sourceLocator,
+            contentTypes: Array.from(new Set(entries.map(entry => entry.contentType).filter((value): value is NonNullable<typeof value> => !!value))),
             questionCount: new Set(entries.filter(entry => entry.kind === "question").map(entry => entry.objectId)).size,
             termCount: new Set(entries.filter(entry => entry.kind === "term").map(entry => entry.objectId)).size,
             entries
@@ -300,9 +327,10 @@ export function getAnchorSummaries(articleIdValue: unknown): ReadWeaveAnchorSumm
     }).toSorted((left, right) => left.anchorId.localeCompare(right.anchorId));
 }
 
-function normalizeObjectInput(request: Pick<ReadWeaveSaveRequest, "kind" | "title" | "body" | "calloutType" | "termIdentity" | "verifiedNonExpandableArtifact" | "evidenceSources" | "claims" | "audit" | "qualityState">) {
+function normalizeObjectInput(request: Pick<ReadWeaveSaveRequest, "kind" | "contentType" | "origin" | "title" | "body" | "calloutType" | "termIdentity" | "verifiedNonExpandableArtifact" | "evidenceSources" | "claims" | "audit" | "qualityState">) {
     const kind = request.kind;
     if (kind !== "question" && kind !== "term") throw new ValidationError("kind must be question or term.");
+    const content = normalizeContentMetadata(kind, request.contentType, request.origin);
     const rawIdentity = request.termIdentity && typeof request.termIdentity === "object"
         ? request.termIdentity as Partial<ReadWeaveTermIdentity>
         : undefined;
@@ -345,6 +373,7 @@ function normalizeObjectInput(request: Pick<ReadWeaveSaveRequest, "kind" | "titl
         : "legacy-unverified";
     return {
         kind,
+        ...content,
         qualityState,
         termIdentity,
         title,
@@ -447,6 +476,8 @@ function createLink(request: ReadWeaveSaveRequest, object: ReadWeaveObject): Rea
         parentRevision: tree.parentRevision,
         sourceExcerpt,
         sourceLocator,
+        contentType: object.contentType,
+        origin: object.origin,
         createdAt: timestamp,
         updatedAt: timestamp
     };
@@ -530,6 +561,8 @@ function updateCanonicalObject(note: BNote, object: ReadWeaveObject, request: Re
     const input = normalizeObjectInput({
         kind: object.kind,
         ...request,
+        contentType: request.contentType ?? object.contentType,
+        origin: request.origin ?? object.origin,
         verifiedNonExpandableArtifact: request.verifiedNonExpandableArtifact ?? object.verifiedNonExpandableArtifact,
         evidenceSources: request.evidenceSources ?? object.evidenceSources,
         claims: request.claims ?? object.claims,
@@ -563,6 +596,8 @@ export function editReadWeaveLink(linkIdValue: unknown, request: ReadWeaveEditRe
             anchorId: link.anchorId,
             anchorType: link.anchorType,
             kind: object.kind,
+            contentType: object.contentType,
+            origin: object.origin,
             title: request.title,
             body: request.body,
             sourceExcerpt: object.sourceExcerpt,
@@ -584,6 +619,8 @@ export function editReadWeaveLink(linkIdValue: unknown, request: ReadWeaveEditRe
         const input = normalizeObjectInput({
             kind: object.kind,
             ...request,
+            contentType: request.contentType ?? object.contentType,
+            origin: request.origin ?? object.origin,
             verifiedNonExpandableArtifact: request.verifiedNonExpandableArtifact ?? object.verifiedNonExpandableArtifact,
             evidenceSources: request.evidenceSources ?? object.evidenceSources,
             claims: request.claims ?? object.claims,

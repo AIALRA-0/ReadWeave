@@ -1,13 +1,15 @@
-import type {
-    ReadWeaveCalloutType,
-    ReadWeaveEvidenceState,
-    ReadWeaveFailureClass,
-    ReadWeaveGenerateRequest,
-    ReadWeaveGenerateResponse,
-    ReadWeaveGenerationIssue,
-    ReadWeaveGenerationIssueCategory,
-    ReadWeaveGenerationJob,
-    ReadWeaveGenerationProgress
+import {
+    type ReadWeaveCalloutType,
+    type ReadWeaveEvidenceState,
+    type ReadWeaveFailureClass,
+    type ReadWeaveGenerateRequest,
+    type ReadWeaveGenerateResponse,
+    type ReadWeaveGenerationIssue,
+    type ReadWeaveGenerationIssueCategory,
+    type ReadWeaveGenerationJob,
+    type ReadWeaveGenerationProgress,
+    readWeaveContentOriginForType,
+    readWeaveContentTypeForKind
 } from "@triliumnext/commons";
 import { becca, cls, NotFoundError, protected_session as protectedSessionModule, ValidationError } from "@triliumnext/core";
 import { randomUUID } from "crypto";
@@ -301,6 +303,7 @@ function publicJob(row: JobRow, includeProgress = true): ReadWeaveGenerationJob 
         }
     }
     const storedRequest = parseJson<ReadWeaveGenerateRequest>(decodeStoredValue(row.requestJson, row.isProtected));
+    const contentType = readWeaveContentTypeForKind(row.kind, storedRequest?.contentType);
     return {
         jobId: row.jobId,
         draftId: row.draftId || row.jobId,
@@ -311,6 +314,8 @@ function publicJob(row: JobRow, includeProgress = true): ReadWeaveGenerationJob 
         anchorId: row.anchorId,
         anchorType: row.anchorType,
         kind: row.kind,
+        contentType,
+        origin: storedRequest?.origin ?? readWeaveContentOriginForType(contentType),
         parentLinkId: storedRequest?.parentLinkId,
         title: decodeStoredValue(row.title, row.isProtected) ?? "",
         sourceExcerpt: decodeStoredValue(row.sourceExcerpt, row.isProtected) ?? "",
@@ -475,12 +480,16 @@ function persistGeneratedResult(
             ? formatReadWeaveTermIdentity(termIdentity)
             : request.title.trim();
     const calloutType = request.calloutType ?? defaultCalloutType(request.kind);
+    const contentType = readWeaveContentTypeForKind(request.kind, request.contentType);
+    const origin = readWeaveContentOriginForType(contentType);
     if (row.savedLinkId) {
         return editReadWeaveLink(row.savedLinkId, {
             mode: "article-variant",
             title,
             body: result.body,
             calloutType,
+            contentType,
+            origin,
             termIdentity,
             verifiedNonExpandableArtifact: result.verifiedNonExpandableArtifact,
             evidenceSources: result.evidenceSources,
@@ -494,6 +503,8 @@ function persistGeneratedResult(
         anchorId: request.anchorId,
         anchorType: request.anchorType,
         kind: request.kind,
+        contentType,
+        origin,
         parentLinkId: request.parentLinkId,
         title,
         body: result.body,
@@ -681,10 +692,16 @@ function runJob(jobId: string) {
             });
             return;
         }
-        const unresolvedIssues = Array.from(new Set([ ...(result.unresolvedIssues ?? []), ...(result.reviewIssues ?? []) ]));
-        const issues = issueDetails(unresolvedIssues, result.qualityState === "verified" ? undefined : "semantic");
+        const contentType = readWeaveContentTypeForKind(request.kind, request.contentType);
+        const resultWithMetadata = {
+            ...result,
+            contentType,
+            origin: readWeaveContentOriginForType(contentType)
+        } satisfies ReadWeaveGenerateResponse;
+        const unresolvedIssues = Array.from(new Set([ ...(resultWithMetadata.unresolvedIssues ?? []), ...(resultWithMetadata.reviewIssues ?? []) ]));
+        const issues = issueDetails(unresolvedIssues, resultWithMetadata.qualityState === "verified" ? undefined : "semantic");
         setJobState(jobId, "ready-for-review", {
-            result,
+            result: resultWithMetadata,
             unread: true,
             unresolvedIssues,
             issues,
@@ -694,7 +711,7 @@ function runJob(jobId: string) {
         appendProgress(jobId, {
             stage: "complete",
             round: 0,
-            message: result.qualityState === "verified" ? "回答已通过核验，等待确认入库" : "回答已保存为待审核草稿",
+            message: resultWithMetadata.qualityState === "verified" ? "回答已通过格式检查，等待确认入库" : "回答已保存为待审核草稿",
             issues: unresolvedIssues
         });
     }).catch(error => {
@@ -820,6 +837,10 @@ export function startReadWeaveGenerationJob(request: ReadWeaveGenerateRequest): 
         throw new ValidationError("ReadWeave generation request is incomplete.");
     }
     validateSourceLocator(request.sourceLocator);
+    const contentType = readWeaveContentTypeForKind(request.kind, request.contentType);
+    if (contentType === "note" || contentType === "key-point") {
+        throw new ValidationError("笔记和要点是手写内容，不创建生成任务。");
+    }
     const article = requireReadableArticle(request.articleId);
     const isProtected = article.isProtected === true;
     if (request.kind === "term") {
@@ -836,7 +857,7 @@ export function startReadWeaveGenerationJob(request: ReadWeaveGenerateRequest): 
     const draftId = randomUUID();
     const attemptId = randomUUID();
     const harnessVersion = getPublishedReadWeaveHarnessProfile().versionId;
-    const storedRequest = structuredClone(request);
+    const storedRequest = { ...structuredClone(request), contentType, origin: "generated" as const };
     sql.execute(/* sql */`
         INSERT INTO readweave_generation_jobs (
             jobId, draftId, savedLinkId, stateVersion, activeAttemptId, articleId, anchorId, anchorType, kind, title, sourceExcerpt,
