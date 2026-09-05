@@ -69,10 +69,10 @@ interface EventRow {
 const activeJobs = new Map<string, { attemptId: string; controller: AbortController }>();
 let commitFaultForTests: "after-object" | "after-link" | "before-task-update" | undefined;
 const protectedSession = protectedSessionModule.default;
-// A transient provider failure gets one automatic retry. Everything else is
-// surfaced as a durable task state so the scheduler cannot spend tokens in a
-// retry loop while a configuration or evidence problem remains unresolved.
-const MAX_BACKGROUND_GENERATION_ATTEMPTS = 2;
+// One user action runs one generation attempt. Transport failures are kept as
+// a durable task state for an explicit user retry; the scheduler must not
+// silently spend another model call.
+const MAX_BACKGROUND_GENERATION_ATTEMPTS = 1;
 const MAX_CONCURRENT_GENERATION_JOBS = 2;
 const LEASE_DURATION_MS = 30_000;
 const LEASE_HEARTBEAT_MS = 10_000;

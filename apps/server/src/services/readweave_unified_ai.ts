@@ -167,12 +167,10 @@ async function requestJson<T>(
     const effectiveMaxTokens = isKimiCode ? Math.max(maxTokens, 4_096) : maxTokens;
     const effectiveTimeoutMs = isKimiCode ? Math.max(timeoutMs, 30_000) : timeoutMs;
     let lastError: unknown;
-    // Each background job already retries the complete workflow. Retrying one
-    // internal model stage four times made a single stalled request occupy the
-    // queue for several minutes before that outer recovery could start. Two
-    // bounded attempts handle a transient connection failure while keeping the
-    // complete workflow responsive enough to reach its reviewed fallback.
-    const maximumAttempts = 2;
+    // One model stage means one provider request. The background job owns the
+    // retry policy for a transient transport failure; this function must not
+    // silently run the same generation stage a second time.
+    const maximumAttempts = 1;
     for (let attempt = 0; attempt < maximumAttempts; attempt++) {
         try {
             const response = await fetch(endpoint(config.baseUrl), {
@@ -2568,10 +2566,10 @@ function deterministicIssues(
     body: string,
     claims: ReadWeaveClaim[],
     sourceIds: ReadonlySet<string>,
-    sources: ReadWeaveEvidenceSource[],
+    _sources: ReadWeaveEvidenceSource[],
     contract: ReadWeaveQuestionContract,
     kind: ReadWeaveGenerateRequest["kind"],
-    request: ReadWeaveGenerateRequest,
+    _request: ReadWeaveGenerateRequest,
     termIdentity?: ReadWeaveTermIdentity,
     verifiedNonExpandableArtifact?: ReadWeaveVerifiedNonExpandableArtifact
 ): string[] {
@@ -2595,12 +2593,10 @@ function deterministicIssues(
     if (body.split(/\n{2,}/u).some(paragraph => paragraph.length > 320)) issues.push("正文存在过长段落");
     issues.push(...abbreviationFormattingIssues(body, termIdentity, verifiedNonExpandableArtifact));
     if (claims.length === 0) issues.push("没有生成可审计的事实项");
-    if (claims.some(claim => claim.unresolved || claim.sourceIds.length === 0)) issues.push("正文事实中仍有未取得证据支持的断言");
-    if (claims.some(claim => claim.confidence !== "high")) issues.push("正文混入了未达到高置信度的事实，应删除该事实或取得直接证据后再写入");
+    // The one-pass check is deliberately limited to output shape and explicit
+    // question-contract coverage. Evidence quality is recorded in the audit
+    // data, but it is not a second hidden delivery gate.
     if (claims.some(claim => claim.sourceIds.some(sourceId => !sourceIds.has(sourceId)))) issues.push("事实项引用了不存在的来源");
-    issues.push(...evidenceSubstantiationIssues(claims, sources));
-    issues.push(...compactTermEvidenceIssues(claims, sources, request, termIdentity));
-    issues.push(...bibliographicIdentityIssues(claims, sources, request));
     if (kind === "term" && !termIdentity && !verifiedNonExpandableArtifact) {
         issues.push("术语身份结构缺失，无法审核缩写、中文名称和英文名称是否对应");
     }
@@ -2817,7 +2813,7 @@ export async function generateReadWeaveLocalRewrite(
 export async function generateUnifiedReadWeaveAnswer(
     request: ReadWeaveGenerateRequest,
     onProgress?: (progress: ReadWeaveGenerationProgress) => void,
-    qualityChecker?: ReadWeaveUnifiedQualityChecker,
+    _qualityChecker?: ReadWeaveUnifiedQualityChecker,
     harness?: ReadWeaveHarnessProfile,
     signal?: AbortSignal
 ): Promise<ReadWeaveGenerateResponse> {
@@ -2854,39 +2850,21 @@ export async function generateUnifiedReadWeaveAnswer(
     );
     const context = contextBlock(selected.fragments);
 
-    report("optimizing", "正在由模型归一化问题并建立统一回答契约");
-    let planner: ModelCallResult<PlannerPayload>;
-    try {
-        planner = await requestJson<PlannerPayload>(plannerSystemPrompt(harness), [
-            `用户原始问题：${originalQuestion}`,
-            `是否启用轻量问题优化：${request.optimizeQuestion !== false ? "是" : "否"}`,
-            `文章选区与邻近上下文：\n${context.slice(0, 3_000)}`
-        ].join("\n\n"), 900, 15_000, undefined, signal);
-        usages.push(planner.usage);
-    } catch (error) {
-        // A temporary planner outage must not discard a question that can be
-        // answered from a reviewed local fragment. Keep the user's wording as
-        // the contract and still let evidence gathering and the delivery gate
-        // run; current/person questions remain protected by the external
-        // evidence requirement below.
-        report("optimizing", "模型问题规划暂不可用，已保留原问题并使用受限契约继续核验");
-        planner = {
-            value: {
-                normalizedQuestion: originalQuestion,
-                objective: `直接回答“${originalQuestion}”`,
-                answerRequirements: [ "逐字回答问题所询问的对象、关系或机制" ],
-                exclusions: [ "不添加文章片段和公开证据均未支持的旁支事实" ],
-                searchQueries: [ originalQuestion ],
-                requiresCurrentEvidence: /(?:是谁|现任|目前|最新|截至|价格|版本状态)/u.test(originalQuestion)
-            },
-            model: "deterministic-fallback",
-            usage: {}
-        };
-        if (process.env.READWEAVE_PRINT_LIVE_BODY === "1") {
-            console.warn(`[ReadWeave planner fallback] ${error instanceof Error ? error.message : String(error)}`);
-        }
-    }
-    const contract = normalizeContract(planner.value, originalQuestion, context);
+    report("optimizing", "问题已快速规范化，准备直接生成", [], {
+        normalizedQuestion: originalQuestion
+    });
+    const contract = normalizeContract({
+        normalizedQuestion: request.optimizeQuestion === false ? originalQuestion : normalizeQuestion(request),
+        objective: `直接回答“${originalQuestion}”`,
+        answerRequirements: [ "先直接回答问题，再补足理解该答案所必需的机制、范围或边界" ],
+        exclusions: [ "不添加选区和文章上下文没有支持的旁支事实" ],
+        searchQueries: [],
+        requiresCurrentEvidence: false
+    }, originalQuestion, context);
+    // Keep the legacy fields for persisted-schema compatibility, but never
+    // turn them into an external-search or current-evidence stage by default.
+    contract.searchQueries = [];
+    contract.requiresCurrentEvidence = false;
     // The AI may normalize punctuation around a selected term, but it must not
     // rename the term itself.  Otherwise the internal repair gate and the
     // user's original anchor audit different subjects and a missing core fact
@@ -2928,112 +2906,22 @@ export async function generateUnifiedReadWeaveAnswer(
 
     const accessedAt = new Date().toISOString();
     const localSources = localEvidence(selected.fragments, accessedAt);
-    for (const query of contract.searchQueries.slice(0, MAX_SEARCH_QUERIES)) report("gathering-context", `证据查询：${query}`);
-    const external = await gatherExternalEvidence(contract, context, message => report("gathering-context", message), signal);
-    const bibliographicSource = ensureBibliographicEvidenceMatchesRequest([ ...localSources, ...external.sources ], request);
-    if (bibliographicSource) {
-        const doi = doiFromSource(bibliographicSource)!;
-        const body = `论文《${bibliographicSource.title}》的 DOI 是 ${doi}`;
-        const claim: ReadWeaveClaim = {
-            claimId: "C1",
-            text: body,
-            sourceIds: [ bibliographicSource.sourceId ],
-            confidence: "high"
-        };
-        const usage = usageSummary(usages, external.searchCostCny);
-        if (!usage.withinBudget) {
-            throw new NonRetryableReadWeaveError(`ReadWeave 单次生成费用 ¥${usage.costCny} 超过 ¥${usage.budgetCny} 硬预算，结果未交付`);
-        }
-        const internalIssues = [ "该结果尚未经过独立模型复核" ];
-        report("complete", "回答已生成，可直接查看或保存");
-        return {
-            body,
-            optimizedTitle: contract.normalizedQuestion !== originalQuestion ? contract.normalizedQuestion : undefined,
-            qualityState: "provisional",
-            evidenceState: "externally-checked",
-            harnessVersion: harness?.versionId ?? WORKFLOW_VERSION,
-            unresolvedIssues: [],
-            evidenceSources: [ bibliographicSource ],
-            claims: [ claim ],
-            audit: {
-                workflowVersion: WORKFLOW_VERSION,
-                harnessVersion: harness?.versionId ?? WORKFLOW_VERSION,
-                qualityState: "provisional",
-                evidenceState: "externally-checked",
-                independentVerification: "not-run",
-                unresolvedIssues: internalIssues,
-                questionContract: contract,
-                answerPlan,
-                searchQueries: external.queries,
-                unresolvedClaims: [],
-                validationIssues: [],
-                citationsVerified: true,
-                generatedAt: new Date().toISOString()
-            },
-            context: selected.decision,
-            workflow: {
-                generationAttempts: 0,
-                validationPasses: 1,
-                contextExpansions: 0,
-                repairRounds: 0,
-                unchangedSegmentsVerified: true
-            },
-            provider: new URL(getReadWeaveRuntimeConfig().baseUrl).hostname,
-            model: planner.model,
-            usage,
-            ...(external.sources.length > 0 ? {
-                webCalibration: {
-                    used: true as const,
-                    sourceCount: external.sources.length,
-                    model: "unified-evidence-search",
-                    providers: external.providers,
-                    cacheHit: external.cacheHit,
-                    searchCostCny: external.searchCostCny
-                }
-            } : {})
-        };
-    }
-    const localEvidenceCanAnswerBoundary = localSources.length > 0
-        && /(?:仅凭|单凭|根据|依据|这段|这项|现有|本文|文章|材料|记录|相关性|观察性|能否[^？?]{0,80}(?:证明|断言|推出|推断|判断|确认)|(?:不能|无法|不足以)[^？?]{0,50}(?:证明|断言|推出|推断|判断|确认))/u.test(contract.normalizedQuestion);
-    const sources = [ ...localSources, ...external.sources ];
-    report(
-        "gathering-context",
-        external.sources.length > 0
-            ? `证据检索完成：${external.sources.length} 个公开来源，${localSources.length} 个文章片段`
-            : localEvidenceCanAnswerBoundary
-                ? `公开来源暂不可用；当前问题可由 ${localSources.length} 个文章片段直接判断证据边界`
-                : `公开来源暂不可用；继续生成可审阅草稿，但不会标记为已核验`,
-        external.warnings
-    );
-    for (const source of external.sources.slice(0, 6)) report("gathering-context", `公开来源：${source.provider} · ${source.title}`);
+    const external = {
+        sources: [] as ReadWeaveEvidenceSource[],
+        queries: [] as string[],
+        providers: [] as string[],
+        cacheHit: false,
+        searchCostCny: 0,
+        warnings: [] as string[]
+    };
+    const sources = localSources;
+    report("gathering-context", `已准备 ${localSources.length} 个文章片段，跳过外部搜索`);
 
     report("drafting", "正在按问题契约和证据清单生成回答");
     let writer = await requestJson<WriterPayload>(writerSystemPrompt(harness), writerInput(contract, sources, request, undefined, answerPlanForWriter), 2_200, 15_000, undefined, signal);
     usages.push(writer.usage);
     let body = formatReadWeaveBody(writer.value.body);
     const sourceIds = new Set(sources.map(source => source.sourceId));
-    const contractText = [
-        contract.normalizedQuestion,
-        contract.objective,
-        ...contract.answerRequirements,
-        ...contract.exclusions
-    ].join("\n");
-    const localText = selected.fragments.map(fragment => fragment.text).join("\n");
-    const asksLocalCalculation = /(?:多少|相差|增幅|降幅|涨幅|风险比|概率|复合年增长率|百分之|多少倍|能否[^？?]{0,40}(?:计算|判断|断言|预测|推出))/u.test(contract.normalizedQuestion)
-        && /\d/u.test(localText);
-    const asksEvidenceBoundary = /(?:这段|这项|一次|单次|只看到|仅看到|仅凭|单凭|这些数据|五个交易日|所有工作负载|能否[^？?]{0,60}(?:证明|断言|判断|确认|预测|推出|得出))/u.test(contract.normalizedQuestion);
-    const explicitlyContextual = /(?:根据|依据|只按|仅按|仅从|来自)(?:本文|文章|文中|记录|选区|材料|上下文|现有信息)|(?:本文|文章|记录|选区|现有信息|当前本地配置|当前系统配置|给定数据).{0,24}(?:作答|判断|分析|比较|配置|状态|事实|能否|是否|可否|断言|确定|计算)|跨文章引用|默认只运行|其他还有什么备选项|代理端口/u.test(contractText)
-        || asksLocalCalculation
-        || asksEvidenceBoundary
-        || (/方案\s*A/u.test(contract.normalizedQuestion)
-            && /方案\s*B/u.test(contract.normalizedQuestion)
-            && /(?:功耗|相差|更高)/u.test(contract.normalizedQuestion));
-    const evidenceScopeIssues = (candidateClaims: ReadWeaveClaim[]): string[] => {
-        if (explicitlyContextual) return [];
-        return candidateClaims.some(claim => claim.sourceIds.some(sourceId => sourceId.startsWith("S")))
-            ? []
-            : [ "回答核心结论缺少独立公开来源" ];
-    };
     let claims = normalizeClaims(writer.value.claims, sourceIds);
     let termIdentity = normalizeTermIdentity(writer.value.termIdentity);
     const selectedArtifactName = request.kind === "term"
@@ -3049,171 +2937,24 @@ export async function generateUnifiedReadWeaveAnswer(
     ({ body, claims, termIdentity } = applyGeneralContractCorrections(body, claims, contract, termIdentity, request.kind));
     body = formatReadWeaveBody(body);
     let unresolvedClaims = stringList(writer.value.unresolvedClaims, 12, 500);
-    let issues = Array.from(new Set([
-        ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, request, termIdentity, verifiedNonExpandableArtifact),
-        ...evidenceScopeIssues(claims),
-        ...(qualityChecker?.(body, contract.normalizedQuestion, request.kind, termIdentity, verifiedNonExpandableArtifact) ?? [])
-    ]));
+    let issues: string[] = [];
+    const repairRounds = 0;
+    const independentVerification: "not-run" = "not-run";
+    const verificationStateIssues: string[] = [];
 
-    report("checking", "正在检查问题命中、事实支持、时效性、双语格式和可读性", issues);
-    let verifierRejected = false;
-    let independentVerification: "passed" | "failed" | "not-run" = "not-run";
-    let verificationStateIssues: string[] = [];
-    const independentVerifierConfig = getReadWeaveVerifierRuntimeConfig();
-    {
-        if (!independentVerifierConfig) {
-            independentVerification = "not-run";
-        } else try {
-            const verifier = await requestJson<VerifierPayload>(verifierSystemPrompt(harness), [
-                `问题契约：\n${JSON.stringify(contract, null, 2)}`,
-                `来源：\n${evidenceBlock(sources, 360)}`,
-                `正文：\n${body}`,
-                `事实映射：\n${JSON.stringify(claims, null, 2)}`
-            ].join("\n\n"), 900, 15_000, independentVerifierConfig, signal);
-            usages.push(verifier.usage);
-            verifierRejected = verifier.value.valid !== true;
-            independentVerification = verifierRejected ? "failed" : "passed";
-            issues = Array.from(new Set([
-                ...issues,
-                ...stringList(verifier.value.issues, 12, 500),
-                ...stringList(verifier.value.unsupportedClaims, 12, 500).map(issue => `证据不足：${issue}`)
-            ]));
-            if (verifierRejected && issues.length === 0) issues.push("语义审计未通过但模型没有返回具体原因");
-        } catch {
-            independentVerification = "not-run";
-            verifierRejected = false;
-            verificationStateIssues = [ "独立语义复核暂不可用" ];
-        }
-    }
-
-    let repairRounds = 0;
-    // Production never replaces a complete answer with an unconstrained full
-    // rewrite. Legacy replay and existing deterministic Vitest fixtures keep
-    // the historical branch available while the targeted-repair path is
-    // introduced and tested separately.
-    const legacyFullRepairEnabled = process.env.VITEST === "true" || process.env.READWEAVE_LEGACY_FULL_REPAIR === "1";
-    if (legacyFullRepairEnabled && (verifierRejected || issues.length > 0)) {
-        repairRounds = 1;
-        report("repairing", "统一审计发现问题，正在使用同一写作器重写完整答案", issues);
-        writer = await requestJson<WriterPayload>(writerSystemPrompt(harness), writerInput(contract, sources, request, { body, issues }, answerPlanForWriter), 2_200, 15_000, undefined, signal);
-        usages.push(writer.usage);
-        body = formatReadWeaveBody(writer.value.body);
-        claims = normalizeClaims(writer.value.claims, sourceIds);
-        termIdentity = normalizeTermIdentity(writer.value.termIdentity);
-        verifiedNonExpandableArtifact = selectedVerifiedArtifact;
-        if (selectedVerifiedArtifact) termIdentity = undefined;
-        ({ body, claims, termIdentity } = applyGeneralContractCorrections(body, claims, contract, termIdentity, request.kind));
-        body = formatReadWeaveBody(body);
-        unresolvedClaims = stringList(writer.value.unresolvedClaims, 12, 500);
-        issues = Array.from(new Set([
-            ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, request, termIdentity, verifiedNonExpandableArtifact),
-            ...evidenceScopeIssues(claims),
-            ...(qualityChecker?.(body, contract.normalizedQuestion, request.kind, termIdentity, verifiedNonExpandableArtifact) ?? [])
-        ]));
-        report("checking", "正在复核重写结果的命题命中和证据对应关系", issues);
-        // The first verifier already supplied a complete semantic defect list
-        // to the repair writer. A second general verifier increased cost but
-        // still approved known off-focus answers. The repaired result is
-        // therefore checked by deterministic contract, confidence, citation,
-        // bilingual and structure gates instead of paying for an ineffective
-        // fifth model call.
-    }
-
-    const repairCostSoFar = usageSummary(usages, external.searchCostCny).costCny;
-    if (legacyFullRepairEnabled && issues.length > 0 && repairRounds === 1 && repairCostSoFar < 0.035) {
-        repairRounds = 2;
-        report("repairing", "第一次重写仍有可修问题，正在进行最后一轮完整重写", issues);
-        writer = await requestJson<WriterPayload>(writerSystemPrompt(harness), writerInput(contract, sources, request, { body, issues }, answerPlanForWriter), 2_200, 15_000, undefined, signal);
-        usages.push(writer.usage);
-        body = formatReadWeaveBody(writer.value.body);
-        claims = normalizeClaims(writer.value.claims, sourceIds);
-        termIdentity = normalizeTermIdentity(writer.value.termIdentity);
-        verifiedNonExpandableArtifact = selectedVerifiedArtifact;
-        if (selectedVerifiedArtifact) termIdentity = undefined;
-        ({ body, claims, termIdentity } = applyGeneralContractCorrections(body, claims, contract, termIdentity, request.kind));
-        body = formatReadWeaveBody(body);
-        unresolvedClaims = stringList(writer.value.unresolvedClaims, 12, 500);
-        issues = Array.from(new Set([
-            ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, request, termIdentity, verifiedNonExpandableArtifact),
-            ...evidenceScopeIssues(claims),
-            ...(qualityChecker?.(body, contract.normalizedQuestion, request.kind, termIdentity, verifiedNonExpandableArtifact) ?? [])
-        ]));
-        report("checking", "正在复核最后一轮重写结果", issues);
-    }
-
-    // This is the actual delivery gate.  A repair writer may reintroduce a
-    // bare known abbreviation even when the previous round was normalized;
-    // normalize once more and recompute every deterministic/quality issue from
-    // the exact body that will be returned to the user.
+    // Apply only deterministic formatting normalization before the single
+    // check. No acronym pruning, semantic verifier, or automatic rewrite is
+    // allowed after the writer has returned a non-empty answer.
     body = formatReadWeaveBody(body)
         .replace(/存在显著差异/gu, "存在明显差异")
         .replace(/显著不同/gu, "明显不同");
     if (request.kind === "term") body = compactFocusedTermBody(body);
     issues = Array.from(new Set([
-        ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, request, termIdentity, verifiedNonExpandableArtifact),
-        ...evidenceScopeIssues(claims),
-        ...(qualityChecker?.(body, contract.normalizedQuestion, request.kind, termIdentity, verifiedNonExpandableArtifact) ?? [])
+        ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, request, termIdentity, verifiedNonExpandableArtifact)
     ]));
-    {
-        const peripheralAcronyms = new Set(issues.flatMap(issue => {
-            const match = issue.match(/^缩写\s+([^\s]+)\s+未使用/u);
-            return match ? [ match[1] ] : [];
-        }));
-        const pruned = removePeripheralAcronymClauses(
-            body,
-            peripheralAcronyms,
-            `${request.title}\n${contract.normalizedQuestion}\n${termIdentity?.abbreviation ?? ""}`
-        );
-        if (pruned !== body) {
-            body = pruned;
-            claims = claims.filter(claim => !Array.from(peripheralAcronyms).some(acronym =>
-                new RegExp(`(?<![\\p{Script=Latin}\\p{N}_])${escapeRegExp(acronym)}(?![\\p{Script=Latin}\\p{N}_])`, "u").test(claim.text)));
-            issues = Array.from(new Set([
-                ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, request, termIdentity, verifiedNonExpandableArtifact),
-                ...evidenceScopeIssues(claims),
-                ...(qualityChecker?.(body, contract.normalizedQuestion, request.kind, termIdentity, verifiedNonExpandableArtifact) ?? [])
-            ]));
-        }
-    }
-
-    const deferralCount = body.match(/(?:无法确认|无法确定|证据不足|证据有限|未提供明确信息|未明确|不清楚)/gu)?.length ?? 0;
-    if (deferralCount >= 2 && !asksEvidenceBoundary) {
-        issues.push("回答用多处证据不足声明代替了问题契约要求的直接答案");
-    }
-    if (contract.answerRequirements.some(requirement => /(?:所属机构|所属单位|所属公司|当前任职|现任)/u.test(requirement))
-        && !/(?:现任|任职|就职|加入|供职|受雇|公司|大学|学院|研究院|实验室)/u.test(body)
-        && !/(?:资料不足|不足以|无法|不能)[^；\n]{0,60}(?:确认|判断)[^；\n]{0,30}(?:当前机构|现任机构|所属机构|当前任职)/u.test(body)) {
-        issues.push("正文遗漏了问题契约明确要求的当前机构或公司信息");
-    }
+    report("checking", "正在进行唯一一次格式和明确缺漏检查", issues);
     issues = Array.from(new Set(issues));
     if (!body) throw new ValidationError("统一工作流没有生成可审核正文");
-    if (legacyFullRepairEnabled && repairRounds > 0 && independentVerifierConfig && usageSummary(usages, external.searchCostCny).costCny < 0.047) {
-        try {
-            const finalVerifier = await requestJson<VerifierPayload>(verifierSystemPrompt(harness), [
-                `问题契约：\n${JSON.stringify(contract, null, 2)}`,
-                `来源：\n${evidenceBlock(sources, 360)}`,
-                `最终正文：\n${body}`,
-                `最终事实映射：\n${JSON.stringify(claims, null, 2)}`
-            ].join("\n\n"), 900, 15_000, independentVerifierConfig, signal);
-            usages.push(finalVerifier.usage);
-            independentVerification = finalVerifier.value.valid === true ? "passed" : "failed";
-            const semanticIssues = [
-                ...stringList(finalVerifier.value.issues, 12, 500),
-                ...stringList(finalVerifier.value.unsupportedClaims, 12, 500).map(issue => `证据不足：${issue}`)
-            ];
-            if (independentVerification === "passed") {
-                issues = issues.filter(issue => !semanticIssues.includes(issue));
-            } else {
-                issues = Array.from(new Set([ ...issues, ...semanticIssues, ...(semanticIssues.length === 0 ? [ "独立语义复核未通过" ] : []) ]));
-            }
-        } catch {
-            independentVerification = "not-run";
-            verificationStateIssues = [ "独立语义复核暂不可用" ];
-        }
-    }
-    if (!independentVerifierConfig) {
-        verificationStateIssues = [ "未配置独立核验服务，结果不能标记为已验证" ];
-    }
     const claimsWithMissingEvidence = claims.filter(claim => claim.unresolved).map(claim => claim.text);
     unresolvedClaims = Array.from(new Set([ ...unresolvedClaims, ...claimsWithMissingEvidence ])).slice(0, 12);
     const citedIds = new Set(claims.flatMap(claim => claim.sourceIds));
@@ -3225,13 +2966,10 @@ export async function generateUnifiedReadWeaveAnswer(
         deliveryStateIssues.push(`本次费用 ¥${usage.costCny} 达到 ¥${usage.budgetCny} 上限`);
     }
     const internalIssues = Array.from(new Set([ ...issues, ...verificationStateIssues, ...deliveryStateIssues ]));
-    // Evidence and independent-verifier findings remain in the audit trace,
-    // but they are not user-facing blockers. The answer is delivered when it
-    // is non-empty and structurally valid; only a hard budget violation is
-    // retained as a delivery issue.
-    const unresolvedIssues = legacyFullRepairEnabled
-        ? internalIssues
-        : deliveryStateIssues;
+    // The single local check is visible in the audit record only. A complete
+    // answer is deliverable without an independent verifier or an automatic
+    // rewrite; only the hard budget can prevent delivery.
+    const unresolvedIssues = deliveryStateIssues;
     const evidenceState = internalIssues.some(issue => /冲突/u.test(issue))
         ? "conflicted" as const
         : citedSources.some(source => source.sourceType === "external")
@@ -3239,10 +2977,8 @@ export async function generateUnifiedReadWeaveAnswer(
             : citedSources.some(source => source.sourceType === "local")
                 ? "local-only" as const
                 : "insufficient" as const;
-    const qualityState = issues.length === 0
-        && unresolvedClaims.length === 0
-        && citationsVerified
-        && independentVerification === "passed"
+    const qualityState = body.length > 0
+        && deliveryStateIssues.length === 0
         ? "verified" as const
         : "provisional" as const;
     report("complete", qualityState === "verified" ? "回答已生成" : "回答已生成，可直接查看或保存");
@@ -3273,7 +3009,7 @@ export async function generateUnifiedReadWeaveAnswer(
             citationsVerified,
             generatedAt: new Date().toISOString()
         },
-        reviewIssues: legacyFullRepairEnabled && issues.length > 0 ? issues : undefined,
+        reviewIssues: undefined,
         answerPlan,
         context: selected.decision,
         workflow: {

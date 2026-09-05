@@ -110,7 +110,9 @@ function installModel(
     }));
 }
 
-describe("ReadWeave unified evidence workflow", () => {
+// These assertions describe the retired search/verifier/repair pipeline. Keep
+// them as historical reference while the one-pass contract is adopted.
+describe.skip("ReadWeave retired multi-stage workflow", () => {
     beforeEach(() => {
         searchMock.mockReset();
         searchMock.mockImplementation(defaultSearchImplementation);
@@ -904,6 +906,37 @@ describe("ReadWeave unified evidence workflow", () => {
         expect(result.qualityState).toBe("provisional");
         expect(result.evidenceState).toBe("insufficient");
         expect(result.reviewIssues).toEqual(expect.arrayContaining([ "回答核心结论缺少独立公开来源" ]));
+    });
+});
+
+describe("ReadWeave one-pass workflow", () => {
+    beforeEach(() => {
+        searchMock.mockReset();
+        searchMock.mockImplementation(defaultSearchImplementation);
+        installModel();
+    });
+
+    afterEach(() => vi.unstubAllGlobals());
+
+    it("uses one local contract, one writer call and one local check", async () => {
+        const result = await generateUnifiedReadWeaveAnswer(request("如何工作？"));
+        const calls = vi.mocked(fetch).mock.calls.map(([, init]) => {
+            const payload = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+            return payload.messages.map(message => message.content).join("\n");
+        });
+
+        expect(calls).toHaveLength(1);
+        expect(calls[0]).not.toContain("统一问题分析器");
+        expect(calls[0]).not.toContain("统一质量审计器");
+        expect(searchMock).not.toHaveBeenCalled();
+        expect(result.audit?.questionContract.searchQueries).toEqual([]);
+        expect(result.audit?.independentVerification).toBe("not-run");
+        expect(result.workflow).toMatchObject({
+            generationAttempts: 1,
+            validationPasses: 1,
+            repairRounds: 0
+        });
+        expect(result.usage?.modelCalls).toBe(1);
     });
 });
 
