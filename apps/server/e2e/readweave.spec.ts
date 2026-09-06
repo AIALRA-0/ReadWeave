@@ -91,7 +91,7 @@ async function selectReadOnlyTextRange(page: Page, paragraph: Locator, selectedT
                 clientY: range.getBoundingClientRect().top
             }));
         }, selectedText);
-        await expect(page.locator(".readweave-selection-actions")).toBeVisible({ timeout: 1_000 });
+        await expect(page.locator("#readweave-panel .readweave-selection")).toBeVisible({ timeout: 1_000 });
     }).toPass({ timeout: 15_000, intervals: [ 100, 250, 500 ] });
 }
 
@@ -236,37 +236,24 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await expect(undecoratedAnchor).not.toHaveClass(/readweave-range-anchor/);
     await expect(panel).toContainText("Selected text anchor");
     await expect(panel.locator(".readweave-selection")).toContainText("NPU");
-    const questionKind = panel.getByRole("button", { name: "Question", exact: true });
-    const termKind = panel.getByRole("button", { name: "Term", exact: true });
-    expect(await questionKind.evaluate(element => getComputedStyle(element).color)).toBe(await termKind.evaluate(element => getComputedStyle(element).color));
-    const noteCallout = panel.getByRole("button", { name: "Note", exact: true });
-    const tipCallout = panel.getByRole("button", { name: "Tip", exact: true });
-    for (const callout of [ noteCallout, tipCallout ]) {
-        await expect(callout).toBeEnabled();
+    const contentTypeGroup = panel.locator('[role="group"][aria-label="内容类型"]');
+    await expect(contentTypeGroup).toBeVisible();
+    await expect(contentTypeGroup.getByRole("button")).toHaveCount(5);
+    const problemType = contentTypeGroup.getByRole("button", { name: "问题", exact: true });
+    const definitionType = contentTypeGroup.getByRole("button", { name: "定义", exact: true });
+    const annotationType = contentTypeGroup.getByRole("button", { name: "注解", exact: true });
+    const noteType = contentTypeGroup.getByRole("button", { name: "笔记", exact: true });
+    const keyPointType = contentTypeGroup.getByRole("button", { name: "要点", exact: true });
+    for (const contentType of [ problemType, definitionType, annotationType, noteType, keyPointType ]) {
+        await expect(contentType).toBeEnabled();
     }
-    await expect(noteCallout).toHaveAttribute("aria-pressed", "true");
-    const calloutStyle = (locator: Locator) => locator.evaluate(element => {
-        const style = getComputedStyle(element);
-        return { background: style.backgroundColor, borderWidth: style.borderTopWidth, color: style.color, outline: style.outlineStyle };
-    });
-    const inactiveStyles = await Promise.all([ tipCallout ].map(calloutStyle));
-    expect(new Set(inactiveStyles.map(style => JSON.stringify(style))).size).toBe(1);
-    const selectedNoteStyle = await calloutStyle(noteCallout);
-    expect(selectedNoteStyle.background).not.toBe(inactiveStyles[0].background);
-    expect(selectedNoteStyle.borderWidth).toBe("1px");
-    expect(selectedNoteStyle.outline).toBe("none");
+    await expect(problemType).toHaveAttribute("aria-pressed", "true");
 
     const question = panel.getByRole("textbox", { name: "Question", exact: true });
     const answer = panel.getByTestId("readweave-answer");
     await expect(panel.getByRole("textbox", { name: "Answer", exact: true })).toBeVisible();
     await question.fill("NPU 是啥，有啥用？");
     await panel.getByTestId("readweave-optimize-question").check();
-    await tipCallout.click();
-    await expect(tipCallout).toHaveAttribute("aria-pressed", "true");
-    const selectedTipStyle = await calloutStyle(tipCallout);
-    expect(selectedTipStyle.background).not.toBe((await calloutStyle(noteCallout)).background);
-    expect(selectedTipStyle.borderWidth).toBe("1px");
-    expect(selectedTipStyle.outline).toBe("none");
     const generateAnswer = panel.getByTestId("readweave-generate");
     await expect(generateAnswer).toHaveAccessibleName("Generate answer");
     await generateAnswer.click();
@@ -300,7 +287,7 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await ensureGeneratedItemSaved(panel);
     await expect(reviewAndSave).toHaveCount(0);
     await expect(paragraph).toHaveAttribute("data-readweave-paragraph-question-count", "1");
-    await expect(rangeAnchor).toHaveClass(/readweave-anchor-callout-tip/);
+    await expect(rangeAnchor).toHaveClass(/readweave-anchor-callout-note/);
     expect(await rangeAnchor.evaluate(element => getComputedStyle(element).backgroundColor)).toBe("rgba(0, 0, 0, 0)");
     expect(await paragraph.evaluate(element => getComputedStyle(element).boxShadow)).toBe("none");
     await rangeAnchor.hover();
@@ -351,7 +338,7 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     expect(badgeMetrics.color).not.toBe("rgba(0, 0, 0, 0)");
     expect(await paragraph.evaluate(element => getComputedStyle(element, "::after").content)).toBe("none");
     const questionEntry = panel.locator(".readweave-entry", { hasText: "NPU 是什么，有什么用途？" });
-    await expect(questionEntry).toHaveClass(/readweave-callout-tip/);
+    await expect(questionEntry).toHaveClass(/readweave-callout-note/);
     await expect(questionEntry.getByRole("button", { name: /^Edit /u })).toBeVisible();
     await expect(questionEntry.getByRole("button", { name: /^Delete /u })).toBeVisible();
     const savedEntryHeadingLayout = await questionEntry.evaluate(element => {
@@ -428,8 +415,8 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await expect(rangeAnchor).not.toHaveClass(/readweave-anchor-locked/);
     await expect(hoverPreview).toBeHidden();
 
-    await panel.getByRole("button", { name: "Term", exact: true }).click();
-    await expect(panel.getByRole("button", { name: "Tip", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await definitionType.click();
+    await expect(definitionType).toHaveAttribute("aria-pressed", "true");
     await expect(panel.getByRole("textbox", { name: "Abbreviation (optional)", exact: true })).toHaveValue("");
     await expect(panel.getByRole("textbox", { name: "Definition", exact: true })).toBeVisible();
     await panel.getByRole("button", { name: "Generate definition", exact: true }).click();
@@ -467,7 +454,7 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await expect(termEditButton).toBeVisible();
     await expect(termEntry.getByRole("button", { name: /^Delete “NPU 神经网络处理单元/u })).toBeVisible();
 
-    await panel.getByRole("button", { name: "Question", exact: true }).click();
+    await problemType.click();
     await question.fill("NPU 是什么，有什么用途？");
     const candidate = panel.locator(".readweave-candidate").first();
     await expect(candidate).toContainText("Reuse");
@@ -483,10 +470,9 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     const impact = panel.locator(".readweave-impact");
     await expect(impact).toContainText("This object has 1 links across 1 articles.");
     await impact.locator("textarea").fill(professionalAnswer("这是经过全局审核的直接答案"));
-    await impact.getByRole("button", { name: "Tip", exact: true }).click();
     await impact.getByRole("radio", { name: "Update globally", exact: true }).check();
     await impact.getByRole("button", { name: "Apply change", exact: true }).click();
-    await expect(questionEntry).toHaveClass(/readweave-callout-tip/);
+    await expect(questionEntry).toHaveClass(/readweave-callout-note/);
 
     await questionEntry.hover();
     await questionEntry.getByRole("button", { name: /^Edit /u }).click();
@@ -540,15 +526,16 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     await expect(secondParagraph.locator("[data-readweave-range-anchor-id]")).toHaveCount(0);
 
     await openSelectionEditor(page, app, secondParagraph, "独立草稿", "Ask");
-    await panel.getByRole("button", { name: "Term", exact: true }).click();
-    await expect(panel.getByRole("button", { name: "Tip", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await panel.getByRole("button", { name: "定义", exact: true }).click();
+    await expect(panel.getByRole("button", { name: "定义", exact: true })).toHaveAttribute("aria-pressed", "true");
     await expect(panel.getByRole("button", { name: "Generate definition", exact: true })).toBeEnabled();
-    await panel.getByRole("button", { name: "Question", exact: true }).click();
-    await expect(panel.getByRole("button", { name: "Note", exact: true })).toHaveAttribute("aria-pressed", "true");
+    await panel.getByRole("button", { name: "问题", exact: true }).click();
+    await expect(panel.getByRole("button", { name: "问题", exact: true })).toHaveAttribute("aria-pressed", "true");
     await expect(panel.getByRole("button", { name: "Generate answer", exact: true })).toBeEnabled();
 
     const downloadPromise = page.waitForEvent("download");
-    await panel.getByRole("button", { name: "Export this article's question-anchor index", exact: true }).click();
+    await panel.getByRole("button", { name: "ReadWeave 设置", exact: true }).click();
+    await panel.getByRole("dialog", { name: "ReadWeave 设置" }).getByRole("button", { name: "导出本文的问题—锚点索引", exact: true }).click();
     const download = await downloadPromise;
     expect(download.suggestedFilename()).toBe("readweave-index.json");
     const stream = await download.createReadStream();
@@ -663,7 +650,7 @@ test("ReadWeave supports read-only questions without changing the article", asyn
     await selectReadOnlyTextRange(page, second, "CDC");
     const panel = app.sidebar.locator("#readweave-panel");
     await expect(panel.locator(".readweave-selection")).toContainText("CDC");
-    await page.locator(".readweave-selection-actions").getByRole("button", { name: "Ask", exact: true }).click();
+    await panel.getByRole("button", { name: "问题", exact: true }).click();
     await expect(panel.getByRole("button", { name: "Generate answer", exact: true })).toBeEnabled();
     await panel.getByRole("button", { name: "Generate answer", exact: true }).click();
     await expect.poll(() => generationStarts.length).toBe(1);
@@ -1270,8 +1257,8 @@ test("ReadWeave ignores a delayed generation response after switching to another
         await expect.poll(() => delayedJobId, { timeout: 10_000 }).toBeTruthy();
         await expect(panel.getByRole("textbox", { name: "Question", exact: true })).toBeDisabled();
         await expect(panel.getByTestId("readweave-answer")).toBeDisabled();
-        await expect(panel.getByRole("button", { name: "Term", exact: true })).toBeDisabled();
-        await expect(panel.getByRole("button", { name: "Note", exact: true })).toBeDisabled();
+        await expect(panel.getByRole("button", { name: "定义", exact: true })).toBeDisabled();
+        await expect(panel.getByRole("button", { name: "笔记", exact: true })).toBeDisabled();
 
         panel = await openSelectionEditor(page, app, paragraphB, "锚点 B", "Ask");
         const selection = panel.locator(".readweave-selection");
@@ -1426,8 +1413,8 @@ test("ReadWeave splits a Tip subrange from its Note anchor and uses hover withou
     // unlock it instead of immediately locking it again under the outer anchor.
     await tipAnchor.click();
     await expect(tipAnchor).toHaveClass(/readweave-anchor-locked/);
-    await panel.getByRole("button", { name: "Question", exact: true }).click();
-    await panel.getByRole("button", { name: "Term", exact: true }).click();
+    await panel.getByRole("button", { name: "问题", exact: true }).click();
+    await panel.getByRole("button", { name: "定义", exact: true }).click();
     await tipAnchor.click();
     await expect(tipAnchor).not.toHaveClass(/readweave-anchor-locked/);
     await expect(preview).toBeHidden();
@@ -1503,8 +1490,8 @@ test("ReadWeave keeps a new question unread on a saved term fragment until the u
         || previewBox!.y >= anchorBox!.y + anchorBox!.height
     );
     expect(overlapsAnchor).toBe(false);
-    await panel.getByRole("button", { name: "Question", exact: true }).click();
-    await panel.getByRole("button", { name: "Term", exact: true }).click();
+    await panel.getByRole("button", { name: "问题", exact: true }).click();
+    await panel.getByRole("button", { name: "定义", exact: true }).click();
     await termAnchor.click();
     await expect(termAnchor).not.toHaveClass(/readweave-anchor-locked/);
     await expect(preview).toBeHidden();
@@ -1539,7 +1526,6 @@ test("ReadWeave handles diverse source articles and keeps cross-article term ref
     const answer = panel.getByTestId("readweave-answer");
     await question.fill("Why does QUIC use UDP, how is TLS involved, and what happens to unrelated streams after packet loss?");
     await panel.getByTestId("readweave-optimize-question").check();
-    await panel.getByRole("button", { name: "Tip", exact: true }).click();
     await panel.getByRole("button", { name: "Generate answer", exact: true }).click();
     await expect(answer).toContainText(/定义与命名：/);
     await expect(answer).toContainText(/实现选择与证据闭环：/);
@@ -1578,7 +1564,6 @@ test("ReadWeave handles diverse source articles and keeps cross-article term ref
     await abbreviation.fill("TESS");
     await chineseName.fill("凌日系外行星巡天卫星");
     await englishName.fill("Transiting Exoplanet Survey Satellite");
-    await panel.getByRole("button", { name: "Tip", exact: true }).click();
     await panel.getByRole("button", { name: "Generate definition", exact: true }).click();
     await expect(abbreviation).toHaveValue("TESS");
     await expect(chineseName).toHaveValue("凌日系外行星巡天卫星");
