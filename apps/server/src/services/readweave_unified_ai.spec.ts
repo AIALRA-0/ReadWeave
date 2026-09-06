@@ -975,7 +975,7 @@ describe("ReadWeave one-pass workflow", () => {
                 version: 1,
                 reviewStatus: "approved",
                 normalizedQuestion: "“肖恩·布鲁克斯”是谁？",
-                answerType: "explanation",
+                answerType: "general",
                 objective: "回答人物身份问题",
                 answerRequirements: [ "说明人物身份" ],
                 exclusions: [],
