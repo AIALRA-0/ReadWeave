@@ -3162,6 +3162,15 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
         document.addEventListener("scroll", positionBubble, true);
         window.addEventListener("resize", positionBubble);
         document.addEventListener("keydown", onKeyDown, true);
+        // Read-only text can publish its content root after this interaction
+        // hook has attached. That rebind intentionally removes the old
+        // bubble, but the browser selection survives the rebind. Re-run the
+        // same selection path so the floating Ask/Define actions are restored
+        // without requiring a second user click.
+        const currentSelection = window.getSelection();
+        if (currentSelection && !currentSelection.isCollapsed && currentSelection.rangeCount > 0) {
+            scheduleSelectionActions();
+        }
         return () => {
             disposed = true;
             if (optionsRef.current.noteId !== noteId) pendingSelectionActionsRef.current = {};
