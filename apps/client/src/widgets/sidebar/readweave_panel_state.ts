@@ -7,6 +7,7 @@ import type {
     ReadWeaveObjectKind,
     ReadWeaveTermIdentity
 } from "@triliumnext/commons";
+import { decodeReadWeaveText } from "./readweave_question_templates.js";
 
 export const READWEAVE_CANDIDATE_MIN_CONFIDENCE = 0.55;
 export const READWEAVE_CANDIDATE_LIMIT = 3;
@@ -276,11 +277,11 @@ export function recoverReadWeaveGenerationFields(input: {
 
     return {
         body,
-        questionTitle: completedResult?.optimizedTitle?.trim()
+        questionTitle: decodeReadWeaveText(completedResult?.optimizedTitle?.trim()
             || input.draft?.questionTitle?.trim()
             || input.fallbackQuestionTitle?.trim()
             || input.job?.title.trim()
-            || "",
+            || ""),
         termIdentity,
         termIdentityEdited
     };

@@ -515,9 +515,12 @@ export default function ReadWeavePanel() {
         setKind(nextKind);
         setContentType(matchingJob?.contentType ?? matchingDraft?.contentType ?? requestedContentType);
         setNewQuestionDraft(!!matchingDraft?.newQuestionDraft && nextKind === "question");
-        setQuestionTitle(matchingDraft?.questionTitle
-            ?? (nextKind === "question"
-                ? confirmingPendingSelection && questionTitle.trim() ? questionTitle : matchingJob?.title || defaultQuestionForExcerpt(decodeReadWeaveText(nextSelection.excerpt))
+        setQuestionTitle(matchingDraft?.questionTitle !== undefined
+            ? decodeReadWeaveText(matchingDraft.questionTitle)
+            : (nextKind === "question"
+                ? confirmingPendingSelection && questionTitle.trim()
+                    ? decodeReadWeaveText(questionTitle)
+                    : decodeReadWeaveText(matchingJob?.title || defaultQuestionForExcerpt(nextSelection.excerpt))
                 : ""));
         setOptimizeQuestion(matchingDraft?.optimizeQuestion ?? (confirmingPendingSelection ? optimizeQuestion : true));
         setAutoApplyPlan(matchingDraft?.autoApplyPlan ?? (matchingJob?.answerPlan?.autoApplied !== false));
@@ -526,7 +529,9 @@ export default function ReadWeavePanel() {
             draft: matchingDraft,
             fallbackBody: confirmingPendingSelection ? body : "",
             fallbackQuestionTitle: nextKind === "question"
-                ? confirmingPendingSelection && questionTitle.trim() ? questionTitle : matchingJob?.title || defaultQuestionForExcerpt(decodeReadWeaveText(nextSelection.excerpt))
+                ? confirmingPendingSelection && questionTitle.trim()
+                    ? decodeReadWeaveText(questionTitle)
+                    : decodeReadWeaveText(matchingJob?.title || defaultQuestionForExcerpt(nextSelection.excerpt))
                 : "",
             fallbackTermIdentity: confirmingPendingSelection ? cleanPartialTermIdentity(termIdentity) : initialTermIdentity(nextSelection.excerpt, nextKind),
             job: matchingJob
@@ -1378,7 +1383,7 @@ export default function ReadWeavePanel() {
         setLocalRewriteResult(undefined);
         setKind(object.kind);
         setContentType(object.contentType ?? (object.kind === "term" ? "definition" : "problem"));
-        if (object.kind === "question") setQuestionTitle(object.title);
+        if (object.kind === "question") setQuestionTitle(decodeReadWeaveText(object.title));
         else {
             setTermIdentity(object.termIdentity ?? { chineseName: object.title });
             setTermIdentityEdited(false);
@@ -2760,7 +2765,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             const job = optionsRef.current.generationJobs.find(job => job.anchorId === anchorId);
             const jobExcerpt = job?.sourceExcerpt;
             const renderedExcerpt = anchorType === "range" ? textOfAnchorElements(elements) : textOf(block);
-            const excerpt = summaryExcerpt || jobExcerpt || renderedExcerpt || "";
+            const excerpt = decodeReadWeaveText(summaryExcerpt || jobExcerpt || renderedExcerpt || "");
             await optionsRef.current.onSelect({
                 anchorId,
                 anchorType,
@@ -2778,7 +2783,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
                 return;
             }
             const nativeRange = trimRangeWhitespace(nativeSelection.getRangeAt(0));
-            const excerpt = nativeRange.toString().replace(/\s+/g, " ").trim().slice(0, 10_000);
+            const excerpt = decodeReadWeaveText(nativeRange.toString().replace(/\s+/g, " ")).slice(0, 10_000);
             const common = nativeRange.commonAncestorContainer instanceof Element ? nativeRange.commonAncestorContainer : nativeRange.commonAncestorContainer.parentElement;
             const root = common?.closest<HTMLElement>(CONTENT_ROOT_SELECTOR);
             if (!root || !excerpt) {

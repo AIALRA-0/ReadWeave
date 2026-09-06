@@ -342,6 +342,18 @@ describe("ReadWeave panel state", () => {
         expect(restored.body).toBe("用户审核后的定义");
     });
 
+    it("decodes an entity-encoded question when restoring a draft or completed job", () => {
+        const restoredFromDraft = recoverReadWeaveGenerationFields({
+            draft: { questionTitle: "“s:&amp;#x2F;&amp;#x2F;example.org”是什么？" }
+        });
+        const restoredFromJob = recoverReadWeaveGenerationFields({
+            job: { status: "queued", title: "s:&amp;#x2F;&amp;#x2F;example.org" }
+        });
+
+        expect(restoredFromDraft.questionTitle).toBe("“s://example.org”是什么？");
+        expect(restoredFromJob.questionTitle).toBe("s://example.org");
+    });
+
     it("repairs legacy method identities before review without changing real abbreviations", () => {
         expect(normalizeReadWeaveTermIdentityForReview({
             abbreviation: "BS-PDN-Last",

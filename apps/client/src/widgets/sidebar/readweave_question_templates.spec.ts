@@ -16,6 +16,7 @@ describe("ReadWeave question templates", () => {
         expect(decodeReadWeaveText("A&amp;B &#47; C")).toBe("A&B / C");
         expect(decodeReadWeaveText("10.1109&amp;#x2F;TEST.2015.7342405")).toBe("10.1109/TEST.2015.7342405");
         expect(decodeReadWeaveText("&amp;amp;#47;")).toBe("/");
+        expect(decodeReadWeaveText("s:&amp;#x2F;&amp;#x2F;programminghistorian.org&amp;#x2F;en")).toBe("s://programminghistorian.org/en");
     });
 
     it("renders a readable question around the exact selected text", () => {
