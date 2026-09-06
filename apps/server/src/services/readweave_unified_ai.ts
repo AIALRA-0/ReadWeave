@@ -10,6 +10,7 @@ import type {
     ReadWeaveHarnessProfile,
     ReadWeaveLocalRewriteRequest,
     ReadWeaveLocalRewriteResponse,
+    ReadWeaveExternalSearchDecision,
     ReadWeaveQuestionContract,
     ReadWeaveTermIdentity,
     ReadWeaveUsageSummary,
@@ -242,6 +243,105 @@ function normalizeQuestion(request: ReadWeaveGenerateRequest): string {
         return `“${term}”是什么？`;
     }
     return title;
+}
+
+function personSubjectFromQuestion(question: string): string | undefined {
+    return question.match(/[“"'‘]([^”"'’\n]{2,120})[”"'’]/u)?.[1]?.trim()
+        ?? question.match(/([\p{Script=Han}·]{2,20})(?=\s*(?:是谁|是何人|人物|个人简介))/u)?.[1]?.trim()
+        ?? question.match(/\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,5}\b/u)?.[0]?.trim();
+}
+
+function deduplicateSearchQueries(queries: string[]): string[] {
+    return Array.from(new Set(queries
+        .map(query => query.normalize("NFKC").replace(/\s+/gu, " ").trim())
+        .filter(Boolean)))
+        .slice(0, MAX_SEARCH_QUERIES);
+}
+
+function automaticExternalSearchQueries(
+    question: string,
+    kind: ReadWeaveGenerateRequest["kind"]
+): string[] {
+    const person = personSubjectFromQuestion(question);
+    if (person && /(?:谁|人物|背景|履历|资料|简介)|\bwho\s+is\b|\bbiograph(?:y|ical)\b/iu.test(question)) {
+        return deduplicateSearchQueries([
+            `${person} 官方主页 机构 职位 研究方向`,
+            `${person} official biography profile`,
+            question
+        ]);
+    }
+    if (kind === "term") return [ `${question} official definition` ];
+    return [ `${question} authoritative source` ];
+}
+
+/**
+ * Decide search before writing starts. The writer cannot be the only place
+ * that notices an external-evidence need because it receives evidence after
+ * this decision has already been made.
+ */
+export function decideReadWeaveExternalSearch(
+    request: ReadWeaveGenerateRequest,
+    normalizedQuestion: string
+): ReadWeaveExternalSearchDecision {
+    const explicitQueries = request.answerPlan?.searchQueries ?? [];
+    const active = request.activeExternalSearch === true;
+    const automatic = request.autoExternalSearch !== false;
+    const normalized = normalizedQuestion.normalize("NFKC").trim();
+    const personIdentity = !!personSubjectFromQuestion(normalized)
+        && /(?:谁|人物|背景|履历|资料|简介)|\bwho\s+is\b|\bbiograph(?:y|ical)\b/iu.test(normalized);
+    const backgroundRequest = /(?:所有|全部|完整|全面|详细|背景|履历|经历|资料|信息|介绍)/u.test(normalized);
+    const freshnessRequest = /(?:现在|目前|现任|最新|当前|截至|today|current|latest|present)/iu
+        .test(normalized);
+    const namedSourceRequest = /(?:\bDOI\b|数字对象标识|论文|文章|报告|规范|标准|出处|引用|期刊|会议)/iu.test(normalized);
+    let reason: ReadWeaveExternalSearchDecision["reason"] = "not-needed";
+    let required = false;
+    let mode: ReadWeaveExternalSearchDecision["mode"] = automatic ? "automatic" : "disabled";
+
+    if (!active && !automatic) {
+        reason = "disabled";
+    } else if (active) {
+        required = true;
+        mode = "forced";
+        reason = "forced";
+    } else if (explicitQueries.length > 0) {
+        required = true;
+        mode = "forced";
+        reason = "manual-query";
+    } else if (automatic) {
+        if (personIdentity) {
+            required = true;
+            reason = "identity";
+        } else if (backgroundRequest) {
+            required = true;
+            reason = "background";
+        } else if (freshnessRequest) {
+            required = true;
+            reason = "freshness";
+        } else if (namedSourceRequest) {
+            required = true;
+            reason = "named-source";
+        } else if (request.kind === "term") {
+            required = true;
+            reason = "definition";
+        }
+    }
+
+    const queries = required
+        ? deduplicateSearchQueries([
+            ...explicitQueries,
+            ...(explicitQueries.length > 0
+                ? []
+                : automaticExternalSearchQueries(normalized, request.kind))
+        ])
+        : [];
+    return {
+        mode,
+        required,
+        reason,
+        queries,
+        executed: false,
+        sourceCount: 0
+    };
 }
 
 function _plannerSystemPrompt(harness?: ReadWeaveHarnessProfile): string {
@@ -2995,8 +3095,9 @@ export async function generateUnifiedReadWeaveAnswer(
         searchQueries: [],
         requiresCurrentEvidence: false
     }, originalQuestion, context);
-    // Keep the legacy fields for persisted-schema compatibility, but never
-    // turn them into an external-search or current-evidence stage by default.
+    // Keep the legacy fields for persisted-schema compatibility. The actual
+    // search decision is filled after the question and any reviewed plan have
+    // been normalized, so it cannot depend on a UI checkbox alone.
     contract.searchQueries = [];
     contract.requiresCurrentEvidence = false;
     // The AI may normalize punctuation around a selected term, but it must not
@@ -3051,22 +3152,37 @@ export async function generateUnifiedReadWeaveAnswer(
         // and every quality gate so all stages evaluate the same subject.
         contract.normalizedQuestion = `“${selectedQuestionIdentity.abbreviation} ${selectedQuestionIdentity.chineseName}（${selectedQuestionIdentity.englishName}）”是什么？`;
     }
-    if (request.answerPlan?.searchQueries?.length) {
-        contract.searchQueries = request.answerPlan.searchQueries.slice(0, MAX_SEARCH_QUERIES);
-    } else if (request.kind === "term") {
-        contract.searchQueries = [ `${contract.normalizedQuestion} official definition` ];
-    }
-    if (request.kind === "term") contract.requiresCurrentEvidence = true;
+    const externalSearchDecision = decideReadWeaveExternalSearch(
+        request,
+        contract.normalizedQuestion
+    );
+    contract.searchQueries = externalSearchDecision.queries;
+    contract.requiresCurrentEvidence = externalSearchDecision.required;
+    contract.externalSearchDecision = externalSearchDecision;
     const generatedAnswerPlan = buildReadWeaveAnswerPlan(contract, request.autoApplyPlan !== false);
-    const answerPlan: ReadWeaveAnswerPlan = request.answerPlan
+    const answerPlanDraft: ReadWeaveAnswerPlan = request.answerPlan
         ? normalizeSuppliedAnswerPlan(request.answerPlan, contract, request.autoApplyPlan !== false)
         : generatedAnswerPlan;
+    // Mandatory queries are server-owned. A reviewed plan may refine them,
+    // but it cannot accidentally turn an identity/background request back
+    // into a local-only answer by omitting the search list.
+    const answerPlan: ReadWeaveAnswerPlan = {
+        ...answerPlanDraft,
+        searchQueries: externalSearchDecision.queries
+    };
     const answerPlanForWriter = answerPlan;
     report("optimizing", `问题已归一化：${contract.normalizedQuestion}`, [], {
         normalizedQuestion: contract.normalizedQuestion,
         answerPlanSummary: answerPlan.summary
     });
     report("gathering-context", `回答构造流已生成${answerPlan.autoApplied ? "并自动采用" : "，本次不自动套用"}：${answerPlan.summary}`);
+    report(
+        "gathering-context",
+        externalSearchDecision.required
+            ? `外部搜索已${externalSearchDecision.mode === "forced" ? "按请求启用" : "按规则启用"}`
+                + `（${externalSearchDecision.queries.length} 个查询；原因：${externalSearchDecision.reason}）`
+            : `外部搜索未启用（原因：${externalSearchDecision.reason}）`
+    );
 
     if (request.kind === "term"
         && /(?:without identifying whether|未(?:说明|确认|指出).{0,24}(?:究竟|具体)?(?:是|指))/iu.test(context)
@@ -3084,9 +3200,7 @@ export async function generateUnifiedReadWeaveAnswer(
         searchCostCny: 0,
         warnings: [] as string[]
     };
-    const shouldGatherExternal = request.kind === "term"
-        || contract.requiresCurrentEvidence
-        || (request.answerPlan?.searchQueries?.length ?? 0) > 0;
+    const shouldGatherExternal = externalSearchDecision.required;
     if (shouldGatherExternal) {
         try {
             external = await _gatherExternalEvidence(contract, context, message => report("gathering-context", message), signal);
@@ -3096,6 +3210,12 @@ export async function generateUnifiedReadWeaveAnswer(
         }
     }
     const sources = [ ...localSources, ...external.sources ];
+    const completedExternalSearchDecision: ReadWeaveExternalSearchDecision = {
+        ...externalSearchDecision,
+        executed: shouldGatherExternal,
+        sourceCount: external.sources.length
+    };
+    contract.externalSearchDecision = completedExternalSearchDecision;
     report("gathering-context", external.sources.length > 0
         ? `已合并 ${localSources.length} 个文章片段和 ${external.sources.length} 个外部来源`
         : `已准备 ${localSources.length} 个文章片段，未取得外部来源`);
@@ -3184,6 +3304,7 @@ export async function generateUnifiedReadWeaveAnswer(
         evidenceSources: citedSources,
         claims,
         definitionFields,
+        externalSearchDecision: completedExternalSearchDecision,
         qualityState,
         evidenceState,
         harnessVersion: harness?.versionId ?? WORKFLOW_VERSION,
@@ -3196,8 +3317,9 @@ export async function generateUnifiedReadWeaveAnswer(
             independentVerification,
             unresolvedIssues: internalIssues,
             questionContract: contract,
+            externalSearchDecision: completedExternalSearchDecision,
             answerPlan,
-            searchQueries: external.queries,
+            searchQueries: completedExternalSearchDecision.queries,
             unresolvedClaims,
             validationIssues: issues,
             citationsVerified,

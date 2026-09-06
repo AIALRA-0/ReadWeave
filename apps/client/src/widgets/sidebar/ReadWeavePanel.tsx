@@ -133,6 +133,8 @@ interface Draft {
     questionTitle: string;
     optimizeQuestion: boolean;
     autoApplyPlan: boolean;
+    activeExternalSearch: boolean;
+    autoExternalSearch: boolean;
     answerPlan?: ReadWeaveAnswerPlan;
     termIdentity: Partial<ReadWeaveTermIdentity>;
     termIdentityEdited?: boolean;
@@ -197,6 +199,8 @@ export default function ReadWeavePanel() {
     const [questionTitle, setQuestionTitle] = useState("");
     const [optimizeQuestion, setOptimizeQuestion] = useState(true);
     const [autoApplyPlan, setAutoApplyPlan] = useState(true);
+    const [activeExternalSearch, setActiveExternalSearch] = useState(false);
+    const [autoExternalSearch, setAutoExternalSearch] = useState(true);
     const [answerPlan, setAnswerPlan] = useState<ReadWeaveAnswerPlan>();
     const [termIdentity, setTermIdentity] = useState<Partial<ReadWeaveTermIdentity>>({});
     const [termIdentityEdited, setTermIdentityEdited] = useState(false);
@@ -376,6 +380,10 @@ export default function ReadWeavePanel() {
         setGenerationProgress(job.progress);
         setBusy(job.status === "queued" || job.status === "running");
         setAutoApplyPlan(savedDraft?.autoApplyPlan ?? (job.answerPlan?.autoApplied !== false));
+        setActiveExternalSearch(
+            savedDraft?.activeExternalSearch ?? job.activeExternalSearch ?? false
+        );
+        setAutoExternalSearch(savedDraft?.autoExternalSearch ?? job.autoExternalSearch ?? true);
         setRegenerationFeedback(job.feedback ?? "");
         if (!job.result) return;
         const resultReviewIssues = job.result.reviewIssues ?? [];
@@ -524,6 +532,12 @@ export default function ReadWeavePanel() {
                 : ""));
         setOptimizeQuestion(matchingDraft?.optimizeQuestion ?? (confirmingPendingSelection ? optimizeQuestion : true));
         setAutoApplyPlan(matchingDraft?.autoApplyPlan ?? (matchingJob?.answerPlan?.autoApplied !== false));
+        setActiveExternalSearch(
+            matchingDraft?.activeExternalSearch ?? matchingJob?.activeExternalSearch ?? false
+        );
+        setAutoExternalSearch(
+            matchingDraft?.autoExternalSearch ?? matchingJob?.autoExternalSearch ?? true
+        );
         setAnswerPlan(matchingDraft?.answerPlan ?? matchingJob?.answerPlan ?? matchingJob?.result?.answerPlan);
         const restoredFields = recoverReadWeaveGenerationFields({
             draft: matchingDraft,
@@ -602,6 +616,8 @@ export default function ReadWeavePanel() {
         setQuestionTitle(defaultQuestionForExcerpt(decodeReadWeaveText(nextSelection.excerpt)));
         setOptimizeQuestion(true);
         setAutoApplyPlan(true);
+        setActiveExternalSearch(false);
+        setAutoExternalSearch(true);
         setAnswerPlan(undefined);
         setTermIdentity({});
         setTermIdentityEdited(false);
@@ -792,11 +808,21 @@ export default function ReadWeavePanel() {
 
     useEffect(() => {
         if (!noteId || !selection) return;
-        const draft: Draft = { kind, contentType, questionTitle, optimizeQuestion, autoApplyPlan, answerPlan, termIdentity, termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision, generationJobId, reviewIssues, reviewIssueBaseline, parentLinkId, newQuestionDraft };
+        const draft: Draft = {
+            kind, contentType, questionTitle, optimizeQuestion, autoApplyPlan,
+            activeExternalSearch, autoExternalSearch, answerPlan, termIdentity,
+            termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId,
+            contextDecision, generationJobId, reviewIssues, reviewIssueBaseline,
+            parentLinkId, newQuestionDraft
+        };
         const isolatedDraftId = currentJob?.draftId ?? generationJobId ?? localDraftId;
         sessionStorage.setItem(draftKey(noteId, selection.anchorId, parentLinkId, isolatedDraftId), JSON.stringify(draft));
         sessionStorage.setItem(draftKey(noteId, selection.anchorId, parentLinkId), JSON.stringify(draft));
-    }, [noteId, selection, kind, contentType, parentLinkId, questionTitle, optimizeQuestion, autoApplyPlan, answerPlan, termIdentity, termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision, generationJobId, currentJob?.draftId, localDraftId, reviewIssues, reviewIssueBaseline, newQuestionDraft]);
+    }, [noteId, selection, kind, contentType, parentLinkId, questionTitle, optimizeQuestion,
+        autoApplyPlan, activeExternalSearch, autoExternalSearch, answerPlan, termIdentity,
+        termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision,
+        generationJobId, currentJob?.draftId, localDraftId, reviewIssues, reviewIssueBaseline,
+        newQuestionDraft]);
 
     useEffect(() => {
         // Keep auto-save safe even while a user is midway through replacing a
@@ -984,6 +1010,8 @@ export default function ReadWeavePanel() {
                 questionStack: readWeaveQuestionStackFromText(currentTitle),
                 optimizeQuestion: kind === "question" ? optimizeQuestion : undefined,
                 autoApplyPlan,
+                activeExternalSearch,
+                autoExternalSearch,
                 answerPlan: preparedPlan,
                 termIdentity: kind === "term" ? cleanPartialTermIdentity(termIdentity) : undefined,
                 fragments: nestedParent
@@ -1260,6 +1288,8 @@ export default function ReadWeavePanel() {
                 contentType,
                 origin: readWeaveContentOriginForType(contentType),
                 autoApplyPlan,
+                activeExternalSearch,
+                autoExternalSearch,
                 answerPlan: preparedPlan,
                 questionStack: readWeaveQuestionStackFromText(currentTitle),
                 calloutType,
@@ -1633,6 +1663,12 @@ export default function ReadWeavePanel() {
         setQuestionTitle(restoredFields.questionTitle);
         setOptimizeQuestion(restoredDraft?.optimizeQuestion ?? true);
         setAutoApplyPlan(restoredDraft?.autoApplyPlan ?? true);
+        setActiveExternalSearch(
+            restoredDraft?.activeExternalSearch ?? restoredJob?.activeExternalSearch ?? false
+        );
+        setAutoExternalSearch(
+            restoredDraft?.autoExternalSearch ?? restoredJob?.autoExternalSearch ?? true
+        );
         setTermIdentity({});
         setTermIdentityEdited(false);
         setBody(restoredFields.body);
@@ -2011,6 +2047,38 @@ export default function ReadWeavePanel() {
                                 </>
                             )}
 
+                            {contentType !== "note" && contentType !== "key-point" && (
+                                <div
+                                    class="readweave-question-optimization
+                                        readweave-external-search-options"
+                                    role="group"
+                                    aria-label="外部搜索设置"
+                                >
+                                    <label title="打开后本次生成一定会执行外部搜索；它会覆盖自动判断">
+                                        <input
+                                            type="checkbox"
+                                            checked={activeExternalSearch}
+                                            disabled={editorLocked}
+                                            onChange={event =>
+                                                setActiveExternalSearch(event.currentTarget.checked)}
+                                            data-testid="readweave-active-external-search"
+                                        />
+                                        <span><strong>主动外部搜索</strong></span>
+                                    </label>
+                                    <label title="打开后，人物身份、背景资料、最新状态、DOI 等需要外部证据的问题会自动搜索">
+                                        <input
+                                            type="checkbox"
+                                            checked={autoExternalSearch}
+                                            disabled={editorLocked}
+                                            onChange={event =>
+                                                setAutoExternalSearch(event.currentTarget.checked)}
+                                            data-testid="readweave-auto-external-search"
+                                        />
+                                        <span><strong>自动外部搜索</strong></span>
+                                    </label>
+                                </div>
+                            )}
+
                             {candidates.length > 0 && (
                                 <div class="readweave-candidates">
                                     <div class="readweave-section-title">{t("readweave.similar_items")}</div>
@@ -2162,6 +2230,18 @@ export default function ReadWeavePanel() {
                             {contextDecision && <p class="readweave-status">{readWeaveCompactStatusText(t("readweave.context_used", { count: contextDecision.characterCount, budget: contextDecision.characterBudget, expansions: contextDecision.expansionLevel }))}</p>}
                             {workflow && <p class="readweave-status">{readWeaveCompactStatusText(t("readweave.workflow_used", { generations: workflow.generationAttempts, checks: workflow.validationPasses }))}</p>}
                             {displayedJob?.result?.answerPlan && <p class="readweave-status" data-testid="readweave-answer-plan">结构：{displayedJob.result.answerPlan.summary} · {displayedJob.result.answerPlan.autoApplied ? "已采用" : "未自动采用"}</p>}
+                            {displayedJob?.result?.externalSearchDecision && (
+                                <p
+                                    class="readweave-status"
+                                    data-testid="readweave-external-search-status"
+                                >
+                                    外部搜索：{displayedJob.result.externalSearchDecision.executed
+                                        ? `已执行 · ${displayedJob.result.externalSearchDecision.sourceCount}`
+                                            + " 个来源"
+                                        : "未执行"}
+                                    · {displayedJob.result.externalSearchDecision.reason}
+                                </p>
+                            )}
                             {displayedJob?.result?.usage && (
                                 <p class="readweave-status" data-testid="readweave-usage-cost">
                                     {t("readweave.usage_cost", {

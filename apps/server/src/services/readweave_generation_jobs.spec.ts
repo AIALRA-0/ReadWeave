@@ -122,6 +122,31 @@ describe("ReadWeave persisted generation jobs", () => {
         expect(generateMock).not.toHaveBeenCalled();
     });
 
+    it("persists the external-search switches and rejects non-boolean values", () => {
+        const started = startReadWeaveGenerationJob({
+            ...request,
+            activeExternalSearch: true,
+            autoExternalSearch: false
+        });
+        expect(started).toMatchObject({
+            activeExternalSearch: true,
+            autoExternalSearch: false
+        });
+        cancelReadWeaveGenerationJob(started.jobId);
+
+        const jobCountBeforeInvalidRequests = sql.getValue<number>("SELECT COUNT(*) FROM readweave_generation_jobs");
+
+        expect(() => startReadWeaveGenerationJob({
+            ...request,
+            activeExternalSearch: "true" as never
+        })).toThrow("activeExternalSearch must be boolean");
+        expect(() => startReadWeaveGenerationJob({
+            ...request,
+            autoExternalSearch: 1 as never
+        })).toThrow("autoExternalSearch must be boolean");
+        expect(sql.getValue<number>("SELECT COUNT(*) FROM readweave_generation_jobs")).toBe(jobCountBeforeInvalidRequests);
+    });
+
     it("stores the approved answer plan on the final-answer job", () => {
         const started = startReadWeaveGenerationJob({
             ...request,

@@ -46,6 +46,7 @@ vi.mock("./readweave_settings.js", () => ({
 import {
     applyKnownTermCatalog,
     calculateReadWeaveContextAnswer,
+    decideReadWeaveExternalSearch,
     formatReadWeaveBody,
     generateUnifiedReadWeaveAnswer,
     sourceMatchesReadWeaveEvidenceFocus
@@ -948,6 +949,65 @@ describe("ReadWeave one-pass workflow", () => {
             repairRounds: 0
         });
         expect(result.usage?.modelCalls).toBe(1);
+    });
+
+    it("automatically searches for identity and exhaustive background requests", async () => {
+        const result = await generateUnifiedReadWeaveAnswer(request("“肖恩·布鲁克斯”是谁？我需要他的所有背景和资料"));
+
+        expect(searchMock).toHaveBeenCalled();
+        expect(result.externalSearchDecision).toMatchObject({
+            mode: "automatic",
+            required: true,
+            reason: "identity",
+            executed: true
+        });
+        expect(result.externalSearchDecision?.queries[0]).toContain("肖恩·布鲁克斯");
+        expect(result.audit?.questionContract.searchQueries.length).toBeGreaterThan(0);
+        expect(result.audit?.externalSearchDecision?.sourceCount).toBeGreaterThan(0);
+    });
+
+    it("keeps automatic search off when the user disables both switches", async () => {
+        const result = await generateUnifiedReadWeaveAnswer({
+            ...request("“肖恩·布鲁克斯”是谁？我需要他的所有背景和资料"),
+            activeExternalSearch: false,
+            autoExternalSearch: false,
+            answerPlan: {
+                version: 1,
+                reviewStatus: "approved",
+                normalizedQuestion: "“肖恩·布鲁克斯”是谁？",
+                answerType: "explanation",
+                objective: "回答人物身份问题",
+                answerRequirements: [ "说明人物身份" ],
+                exclusions: [],
+                searchQueries: [ "must not run this query" ],
+                steps: [ "说明人物身份" ],
+                summary: "说明人物身份",
+                autoApplied: false
+            }
+        });
+
+        expect(searchMock).not.toHaveBeenCalled();
+        expect(result.externalSearchDecision).toMatchObject({
+            mode: "disabled",
+            required: false,
+            reason: "disabled",
+            executed: false,
+            sourceCount: 0
+        });
+        expect(result.audit?.questionContract.searchQueries).toEqual([]);
+    });
+
+    it("lets active external search force evidence for an otherwise local question", () => {
+        expect(decideReadWeaveExternalSearch({
+            ...request("如何工作？"),
+            activeExternalSearch: true,
+            autoExternalSearch: false
+        }, "如何工作？")).toMatchObject({
+            mode: "forced",
+            required: true,
+            reason: "forced",
+            queries: [ "如何工作? authoritative source" ]
+        });
     });
 
     it("uses an unchecked answer-plan flow instead of blocking generation", async () => {

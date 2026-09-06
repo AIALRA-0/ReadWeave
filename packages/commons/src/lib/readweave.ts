@@ -104,6 +104,27 @@ export interface ReadWeaveQuestionContract {
     exclusions: string[];
     searchQueries: string[];
     requiresCurrentEvidence: boolean;
+    externalSearchDecision?: ReadWeaveExternalSearchDecision;
+}
+
+export type ReadWeaveExternalSearchReason =
+    | "disabled"
+    | "forced"
+    | "manual-query"
+    | "identity"
+    | "background"
+    | "freshness"
+    | "named-source"
+    | "definition"
+    | "not-needed";
+
+export interface ReadWeaveExternalSearchDecision {
+    mode: "disabled" | "automatic" | "forced";
+    required: boolean;
+    reason: ReadWeaveExternalSearchReason;
+    queries: string[];
+    executed: boolean;
+    sourceCount: number;
 }
 
 export interface ReadWeaveQuestionItem {
@@ -174,6 +195,7 @@ export interface ReadWeaveGenerationAudit {
     independentVerification?: "passed" | "failed" | "not-run";
     unresolvedIssues?: string[];
     questionContract: ReadWeaveQuestionContract;
+    externalSearchDecision?: ReadWeaveExternalSearchDecision;
     answerPlan?: ReadWeaveAnswerPlan;
     searchQueries: string[];
     unresolvedClaims: string[];
@@ -224,6 +246,8 @@ export interface ReadWeaveGenerationJob {
     kind: ReadWeaveObjectKind;
     contentType?: ReadWeaveContentType;
     origin?: ReadWeaveContentOrigin;
+    activeExternalSearch?: boolean;
+    autoExternalSearch?: boolean;
     parentLinkId?: string;
     title: string;
     sourceExcerpt: string;
@@ -369,6 +393,10 @@ export interface ReadWeaveGenerateRequest {
     title: string;
     optimizeQuestion?: boolean;
     autoApplyPlan?: boolean;
+    /** User explicitly requests external evidence for this generation. */
+    activeExternalSearch?: boolean;
+    /** Allow the server to trigger external evidence for freshness or scope-sensitive questions. */
+    autoExternalSearch?: boolean;
     answerPlan?: ReadWeaveAnswerPlan;
     termIdentity?: Partial<ReadWeaveTermIdentity>;
     fragments: ReadWeaveContextFragment[];
@@ -386,6 +414,7 @@ export interface ReadWeaveGenerateResponse {
     evidenceSources?: ReadWeaveEvidenceSource[];
     claims?: ReadWeaveClaim[];
     audit?: ReadWeaveGenerationAudit;
+    externalSearchDecision?: ReadWeaveExternalSearchDecision;
     answerPlan?: ReadWeaveAnswerPlan;
     definitionFields?: ReadWeaveDefinitionFields;
     questionStack?: ReadWeaveQuestionItem[];

@@ -100,6 +100,17 @@ function requireReviewedAnswerPlan(request: ReadWeaveGenerateRequest) {
     }
 }
 
+function validateExternalSearchSettings(request: ReadWeaveGenerateRequest): void {
+    if (request.activeExternalSearch !== undefined
+        && typeof request.activeExternalSearch !== "boolean") {
+        throw new ValidationError("activeExternalSearch must be boolean.");
+    }
+    if (request.autoExternalSearch !== undefined
+        && typeof request.autoExternalSearch !== "boolean") {
+        throw new ValidationError("autoExternalSearch must be boolean.");
+    }
+}
+
 function validateSourceLocator(value: ReadWeaveGenerateRequest["sourceLocator"]): void {
     if (value === undefined) return;
     if (!value || typeof value !== "object" || value.version !== 1
@@ -328,6 +339,8 @@ function publicJob(row: JobRow, includeProgress = true): ReadWeaveGenerationJob 
         kind: row.kind,
         contentType,
         origin: storedRequest?.origin ?? readWeaveContentOriginForType(contentType),
+        activeExternalSearch: storedRequest?.activeExternalSearch,
+        autoExternalSearch: storedRequest?.autoExternalSearch,
         parentLinkId: storedRequest?.parentLinkId,
         title: decodeStoredValue(row.title, row.isProtected) ?? "",
         sourceExcerpt: decodeStoredValue(row.sourceExcerpt, row.isProtected) ?? "",
@@ -851,6 +864,7 @@ export function startReadWeaveGenerationJob(request: ReadWeaveGenerateRequest): 
         throw new ValidationError("ReadWeave generation request is incomplete.");
     }
     validateSourceLocator(request.sourceLocator);
+    validateExternalSearchSettings(request);
     requireReviewedAnswerPlan(request);
     const contentType = readWeaveContentTypeForKind(request.kind, request.contentType);
     if (contentType === "note" || contentType === "key-point") {
@@ -1003,6 +1017,8 @@ interface ReadWeaveRegenerateRequest {
     title?: unknown;
     optimizeQuestion?: unknown;
     autoApplyPlan?: unknown;
+    activeExternalSearch?: unknown;
+    autoExternalSearch?: unknown;
     calloutType?: unknown;
     termIdentity?: unknown;
     fragments?: unknown;
@@ -1046,6 +1062,20 @@ export function regenerateReadWeaveGenerationJob(jobId: string, inputValue: unkn
             throw new ValidationError("autoApplyPlan must be boolean.");
         }
         request.autoApplyPlan = input.autoApplyPlan as boolean | undefined;
+    }
+    if (Object.hasOwn(input, "activeExternalSearch")) {
+        if (input.activeExternalSearch !== undefined
+            && typeof input.activeExternalSearch !== "boolean") {
+            throw new ValidationError("activeExternalSearch must be boolean.");
+        }
+        request.activeExternalSearch = input.activeExternalSearch as boolean | undefined;
+    }
+    if (Object.hasOwn(input, "autoExternalSearch")) {
+        if (input.autoExternalSearch !== undefined
+            && typeof input.autoExternalSearch !== "boolean") {
+            throw new ValidationError("autoExternalSearch must be boolean.");
+        }
+        request.autoExternalSearch = input.autoExternalSearch as boolean | undefined;
     }
     if (Object.hasOwn(input, "calloutType")) {
         if (input.calloutType !== "note" && input.calloutType !== "tip" && input.calloutType !== "important"
