@@ -942,6 +942,16 @@ describe("ReadWeave one-pass workflow", () => {
         expect(calls[0]).not.toContain("统一质量审计器");
         expect(searchMock).not.toHaveBeenCalled();
         expect(result.audit?.questionContract.searchQueries).toEqual([]);
+        expect(result.domainProfile).toMatchObject({
+            primaryDomain: "procedure",
+            risk: "medium"
+        });
+        expect(result.evidencePack).toMatchObject({
+            version: 1,
+            localSourceIds: [ "L1", "L2" ],
+            externalSourceIds: [],
+            queryCount: 0
+        });
         expect(result.audit?.independentVerification).toBe("not-run");
         expect(result.workflow).toMatchObject({
             generationAttempts: 1,
@@ -964,6 +974,11 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.externalSearchDecision?.queries[0]).toContain("肖恩·布鲁克斯");
         expect(result.audit?.questionContract.searchQueries.length).toBeGreaterThan(0);
         expect(result.audit?.externalSearchDecision?.sourceCount).toBeGreaterThan(0);
+        expect(result.domainProfile).toMatchObject({
+            primaryDomain: "identity",
+            risk: "high"
+        });
+        expect(result.evidencePack?.externalSourceIds.length).toBeGreaterThan(0);
     });
 
     it("keeps automatic search off when the user disables both switches", async () => {

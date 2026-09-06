@@ -105,6 +105,45 @@ export interface ReadWeaveQuestionContract {
     searchQueries: string[];
     requiresCurrentEvidence: boolean;
     externalSearchDecision?: ReadWeaveExternalSearchDecision;
+    domainProfile?: ReadWeaveDomainProfile;
+}
+
+export type ReadWeaveDomain =
+    | "identity"
+    | "definition"
+    | "technical"
+    | "bibliographic"
+    | "current-status"
+    | "procedure"
+    | "comparison"
+    | "calculation"
+    | "general";
+
+export type ReadWeaveRiskLevel = "low" | "medium" | "high";
+
+/**
+ * The small, inspectable policy selected for one question.  It is not a
+ * second workflow: it tells the shared workflow which evidence and checks
+ * are required for this particular subject.
+ */
+export interface ReadWeaveDomainProfile {
+    version: 1;
+    primaryDomain: ReadWeaveDomain;
+    domains: ReadWeaveDomain[];
+    risk: ReadWeaveRiskLevel;
+    freshness: "stable" | "current" | "historical" | "unknown";
+    requiredEvidenceTypes: string[];
+    preferredSourceTypes: string[];
+    answerChecks: string[];
+}
+
+export interface ReadWeaveEvidencePackSummary {
+    version: 1;
+    localSourceIds: string[];
+    externalSourceIds: string[];
+    sourceCount: number;
+    queryCount: number;
+    warnings: string[];
 }
 
 export type ReadWeaveExternalSearchReason =
@@ -177,6 +216,9 @@ export interface ReadWeaveEvidenceSource {
     excerpt: string;
     publishedAt?: string;
     accessedAt: string;
+    authority?: "official" | "standard" | "publisher" | "index" | "secondary" | "local";
+    claimTypes?: string[];
+    timeScope?: "current" | "historical" | "undated";
 }
 
 export interface ReadWeaveClaim {
@@ -185,6 +227,10 @@ export interface ReadWeaveClaim {
     sourceIds: string[];
     confidence: "high" | "medium" | "low";
     unresolved?: boolean;
+    entityId?: string;
+    claimType?: string;
+    timeScope?: "current" | "historical" | "undated";
+    status?: "supported" | "unsupported" | "conflicted" | "out-of-scope";
 }
 
 export interface ReadWeaveGenerationAudit {
@@ -195,6 +241,8 @@ export interface ReadWeaveGenerationAudit {
     independentVerification?: "passed" | "failed" | "not-run";
     unresolvedIssues?: string[];
     questionContract: ReadWeaveQuestionContract;
+    domainProfile?: ReadWeaveDomainProfile;
+    evidencePack?: ReadWeaveEvidencePackSummary;
     externalSearchDecision?: ReadWeaveExternalSearchDecision;
     answerPlan?: ReadWeaveAnswerPlan;
     searchQueries: string[];
@@ -414,6 +462,8 @@ export interface ReadWeaveGenerateResponse {
     evidenceSources?: ReadWeaveEvidenceSource[];
     claims?: ReadWeaveClaim[];
     audit?: ReadWeaveGenerationAudit;
+    domainProfile?: ReadWeaveDomainProfile;
+    evidencePack?: ReadWeaveEvidencePackSummary;
     externalSearchDecision?: ReadWeaveExternalSearchDecision;
     answerPlan?: ReadWeaveAnswerPlan;
     definitionFields?: ReadWeaveDefinitionFields;

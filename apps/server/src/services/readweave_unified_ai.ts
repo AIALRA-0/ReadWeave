@@ -3,14 +3,16 @@ import type {
     ReadWeaveClaim,
     ReadWeaveContextFragment,
     ReadWeaveDefinitionFields,
+    ReadWeaveDomainProfile,
+    ReadWeaveEvidencePackSummary,
     ReadWeaveEvidenceSource,
+    ReadWeaveExternalSearchDecision,
     ReadWeaveGenerateRequest,
     ReadWeaveGenerateResponse,
     ReadWeaveGenerationProgress,
     ReadWeaveHarnessProfile,
     ReadWeaveLocalRewriteRequest,
     ReadWeaveLocalRewriteResponse,
-    ReadWeaveExternalSearchDecision,
     ReadWeaveQuestionContract,
     ReadWeaveTermIdentity,
     ReadWeaveUsageSummary,
@@ -19,6 +21,12 @@ import type {
 import { ValidationError } from "@triliumnext/core";
 
 import { buildReadWeaveAnswerPlan } from "./readweave_answer_plan.js";
+import {
+    buildReadWeaveDomainProfile,
+    buildReadWeaveEvidencePackSummary,
+    enrichReadWeaveClaim,
+    enrichReadWeaveEvidenceSource
+} from "./readweave_domain_policy.js";
 import { selectReadWeaveContext } from "./readweave_engine.js";
 import { NonRetryableReadWeaveError } from "./readweave_errors.js";
 import { searchReadWeaveEvidence } from "./readweave_search.js";
@@ -248,7 +256,11 @@ function normalizeQuestion(request: ReadWeaveGenerateRequest): string {
 function personSubjectFromQuestion(question: string): string | undefined {
     return question.match(/[“"'‘]([^”"'’\n]{2,120})[”"'’]/u)?.[1]?.trim()
         ?? question.match(/([\p{Script=Han}·]{2,20})(?=\s*(?:是谁|是何人|人物|个人简介))/u)?.[1]?.trim()
-        ?? question.match(/\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,5}\b/u)?.[0]?.trim();
+        // Names copied from papers are often lower-cased or concatenated by
+        // the surrounding editor.  Identity questions provide the semantic
+        // guard, so do not require title-case before entering disambiguation.
+        ?? question.match(/\b[A-Za-z][A-Za-z0-9'’._-]{1,40}\b(?=\s*(?:是谁|是何人|人物|个人简介|履历|背景))/iu)?.[0]?.trim()
+        ?? question.match(/\b[A-Za-z][A-Za-z0-9'’._-]*(?:\s+[A-Za-z][A-Za-z0-9'’._-]*){1,5}\b/u)?.[0]?.trim();
 }
 
 function deduplicateSearchQueries(queries: string[]): string[] {
@@ -715,12 +727,16 @@ function evidenceBlock(sources: ReadWeaveEvidenceSource[], excerptMaximum = 900)
     return sources.map(source => [
         `[${source.sourceId}] ${source.title}`,
         `来源类型：${source.sourceType}；提供方：${source.provider}${source.publishedAt ? `；日期：${source.publishedAt}` : ""}`,
+        `来源属性：权威级别=${source.authority ?? "未分类"}；事实类型=${source.claimTypes?.join("、") || "未分类"}；时间范围=${source.timeScope ?? "未分类"}`,
         source.url ? `URL：${source.url}` : "",
         `证据摘录：${source.excerpt.slice(0, excerptMaximum)}`
     ].filter(Boolean).join("\n")).join("\n\n");
 }
 
-function writerSystemPrompt(harness?: ReadWeaveHarnessProfile): string {
+function writerSystemPrompt(
+    harness?: ReadWeaveHarnessProfile,
+    domainProfile?: ReadWeaveDomainProfile
+): string {
     return [
         "你是 ReadWeave 的统一证据写作者，所有问题都遵守同一套规则，不按人物、术语、产品、论文或技术另设回答模板",
         "第一优先级是直接回答用户所问的命题；先给结论，再按理解所必需的顺序解释原因、机制、边界和应用，不得用相关但未回答问题的资料代替答案",
@@ -749,6 +765,9 @@ function writerSystemPrompt(harness?: ReadWeaveHarnessProfile): string {
         "每一段必须增加新的理解层次；后文若只是换一种说法重复前文的定义或因果链，就删除后文，不得用同义重复增加长度",
         "正文禁止使用中文句号“。”，句内关系用逗号、冒号或分号，段落结束直接换行；英文名称内部的点号和 DOI 等标识符不受此限制；单行定义不拆行，冒号后的多行排布必须保留换行和两个空格缩进",
         "凡是询问对象本身的通用信息，答案必须脱离当前文章仍然成立；先建立对象的独立身份或通用含义，再按用户所问补充必要信息，不得用所在句中的单篇论文、局部用途或测试材料代替对象本身",
+        domainProfile ? `当前领域规则包（必须执行，不能把来源类型混用）：
+${JSON.stringify(domainProfile, null, 2)}
+身份问题必须把 current-role、education、authorship 分开；当前身份只能由 current-role 或明确当前状态来源支持，教育经历和论文作者信息不能推导出当前任职；文献问题必须确认标题、作者、出版方和 DOI 属于同一作品；计算问题必须核对输入、公式、单位和结果` : "",
         harness ? `当前发布 Harness 的证据规则：\n${harness.modules.evidencePolicy}` : "",
         harness ? `当前发布 Harness 的回答规则：\n${harness.modules.answerWriting}` : "",
         harness ? `当前发布 Harness 的格式规则：\n${harness.modules.formatRules}` : "",
@@ -3152,6 +3171,8 @@ export async function generateUnifiedReadWeaveAnswer(
         // and every quality gate so all stages evaluate the same subject.
         contract.normalizedQuestion = `“${selectedQuestionIdentity.abbreviation} ${selectedQuestionIdentity.chineseName}（${selectedQuestionIdentity.englishName}）”是什么？`;
     }
+    const domainProfile = buildReadWeaveDomainProfile(request, contract.normalizedQuestion);
+    contract.domainProfile = domainProfile;
     const externalSearchDecision = decideReadWeaveExternalSearch(
         request,
         contract.normalizedQuestion
@@ -3183,6 +3204,10 @@ export async function generateUnifiedReadWeaveAnswer(
                 + `（${externalSearchDecision.queries.length} 个查询；原因：${externalSearchDecision.reason}）`
             : `外部搜索未启用（原因：${externalSearchDecision.reason}）`
     );
+    report(
+        "gathering-context",
+        `已选择${domainProfile.primaryDomain}领域规则包（风险：${domainProfile.risk}；必需证据：${domainProfile.requiredEvidenceTypes.slice(0, 4).join("、") || "通用证据"}）`
+    );
 
     if (request.kind === "term"
         && /(?:without identifying whether|未(?:说明|确认|指出).{0,24}(?:究竟|具体)?(?:是|指))/iu.test(context)
@@ -3209,23 +3234,29 @@ export async function generateUnifiedReadWeaveAnswer(
             report("gathering-context", "外部佐证暂不可用，继续使用文章证据和明确标记的常识补齐");
         }
     }
-    const sources = [ ...localSources, ...external.sources ];
+    const sources = [ ...localSources, ...external.sources ].map(enrichReadWeaveEvidenceSource);
     const completedExternalSearchDecision: ReadWeaveExternalSearchDecision = {
         ...externalSearchDecision,
         executed: shouldGatherExternal,
         sourceCount: external.sources.length
     };
     contract.externalSearchDecision = completedExternalSearchDecision;
+    const evidencePack: ReadWeaveEvidencePackSummary = buildReadWeaveEvidencePackSummary(
+        sources,
+        completedExternalSearchDecision.queries.length,
+        external.warnings
+    );
     report("gathering-context", external.sources.length > 0
         ? `已合并 ${localSources.length} 个文章片段和 ${external.sources.length} 个外部来源`
         : `已准备 ${localSources.length} 个文章片段，未取得外部来源`);
 
     report("drafting", "正在按问题契约和证据清单生成回答");
-    const writer = await requestJson<WriterPayload>(writerSystemPrompt(harness), writerInput(contract, sources, request, undefined, answerPlanForWriter), 2_200, 15_000, undefined, signal);
+    const writer = await requestJson<WriterPayload>(writerSystemPrompt(harness, domainProfile), writerInput(contract, sources, request, undefined, answerPlanForWriter), 2_200, 15_000, undefined, signal);
     usages.push(writer.usage);
     let body = formatReadWeaveBody(writer.value.body);
     const sourceIds = new Set(sources.map(source => source.sourceId));
-    let claims = normalizeClaims(writer.value.claims, sourceIds);
+    let claims = normalizeClaims(writer.value.claims, sourceIds)
+        .map(claim => enrichReadWeaveClaim(claim, sources, domainProfile));
     let termIdentity = normalizeTermIdentity(writer.value.termIdentity);
     const definitionFields = request.kind === "term" ? normalizeDefinitionFields(writer.value.definitionFields) : undefined;
     const selectedArtifactName = request.kind === "term"
@@ -3317,6 +3348,8 @@ export async function generateUnifiedReadWeaveAnswer(
             independentVerification,
             unresolvedIssues: internalIssues,
             questionContract: contract,
+            domainProfile,
+            evidencePack,
             externalSearchDecision: completedExternalSearchDecision,
             answerPlan,
             searchQueries: completedExternalSearchDecision.queries,
@@ -3325,6 +3358,8 @@ export async function generateUnifiedReadWeaveAnswer(
             citationsVerified,
             generatedAt: new Date().toISOString()
         },
+        domainProfile,
+        evidencePack,
         reviewIssues: undefined,
         answerPlan,
         context: selected.decision,
