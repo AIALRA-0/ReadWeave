@@ -947,12 +947,8 @@ describe("ReadWeave one-pass workflow", () => {
 
         vi.mocked(fetch).mockClear();
         const disabled = { ...request("为什么缓存能提速？"), autoApplyPlan: false };
-        const result = await generateUnifiedReadWeaveAnswer(disabled);
-        const disabledPrompt = JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body)) as { messages: Array<{ content: string }> };
-        const prompt = disabledPrompt.messages.map(message => message.content).join("\n");
-        expect(prompt).toContain("回答构造流已经生成，但本次没有勾选自动采用");
-        expect(prompt).not.toContain("回答构造流（必须按这个顺序组织正文");
-        expect(result.answerPlan?.autoApplied).toBe(false);
+        await expect(generateUnifiedReadWeaveAnswer(disabled)).rejects.toThrow("不生成最终回答");
+        expect(fetch).not.toHaveBeenCalled();
     });
 
     it("turns the Creative Commons BY marker into a required bilingual definition", async () => {

@@ -650,7 +650,8 @@ test("ReadWeave supports read-only questions without changing the article", asyn
     await selectReadOnlyTextRange(page, second, "CDC");
     const panel = app.sidebar.locator("#readweave-panel");
     await expect(panel.locator(".readweave-selection")).toContainText("CDC");
-    await panel.getByRole("button", { name: "问题", exact: true }).click();
+    await expect(page.locator(".readweave-selection-actions")).toBeVisible();
+    await page.locator(".readweave-selection-actions").getByRole("button", { name: "Ask", exact: true }).click();
     await expect(panel.getByRole("button", { name: "Generate answer", exact: true })).toBeEnabled();
     await panel.getByRole("button", { name: "Generate answer", exact: true }).click();
     await expect.poll(() => generationStarts.length).toBe(1);

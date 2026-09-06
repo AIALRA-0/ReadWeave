@@ -82,6 +82,7 @@ import {
 import {
     decodeReadWeaveText,
     DEFAULT_READWEAVE_QUESTION_TEMPLATES,
+    isValidReadWeaveQuestionTemplatePattern,
     normalizeReadWeaveQuestionTemplates,
     rankedReadWeaveQuestionTemplates,
     READWEAVE_QUESTION_TEMPLATE_STORAGE_KEY,
@@ -233,6 +234,7 @@ export default function ReadWeavePanel() {
             return DEFAULT_READWEAVE_QUESTION_TEMPLATES.map(template => ({ ...template }));
         }
     });
+    const persistedQuestionTemplatesRef = useRef<ReadWeaveQuestionTemplate[]>(questionTemplates);
     const [templateManagerOpen, setTemplateManagerOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [activeTemplateId, setActiveTemplateId] = useState<string>();
@@ -783,7 +785,14 @@ export default function ReadWeavePanel() {
     }, [noteId, selection, kind, contentType, parentLinkId, questionTitle, optimizeQuestion, autoApplyPlan, termIdentity, termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision, generationJobId, currentJob?.draftId, localDraftId, reviewIssues, reviewIssueBaseline, newQuestionDraft]);
 
     useEffect(() => {
-        localStorage.setItem(READWEAVE_QUESTION_TEMPLATE_STORAGE_KEY, JSON.stringify(questionTemplates));
+        // Keep auto-save safe even while a user is midway through replacing a
+        // placeholder. The visible draft may be temporarily incomplete, but
+        // localStorage only receives the last valid template set.
+        const normalized = normalizeReadWeaveQuestionTemplates(questionTemplates);
+        localStorage.setItem(READWEAVE_QUESTION_TEMPLATE_STORAGE_KEY, JSON.stringify(normalized));
+        if (normalized.every(template => isValidReadWeaveQuestionTemplatePattern(template.pattern))) {
+            persistedQuestionTemplatesRef.current = normalized;
+        }
     }, [questionTemplates]);
 
     useEffect(() => {
@@ -897,7 +906,13 @@ export default function ReadWeavePanel() {
     }, [currentTitle, kind, termIdentity]);
 
     async function generate() {
-        if (!noteId || !selection || generationDisabled) return;
+        if (!noteId || !selection) return;
+        if (kind === "question" && !autoApplyPlan) {
+            setStatus("未勾选“自动采用问题和回答结构”，因此不会生成最终回答；勾选后再生成");
+            setStatusTone("warning");
+            return;
+        }
+        if (generationDisabled) return;
         if (currentJob && normalizedAnchorText(currentJob.title) === normalizedAnchorText(currentTitle)) {
             await regenerateDraft();
             return;
@@ -1179,6 +1194,11 @@ export default function ReadWeavePanel() {
 
     async function regenerateDraft() {
         if (!generationJobId) return;
+        if (kind === "question" && !autoApplyPlan) {
+            setStatus("未勾选“自动采用问题和回答结构”，因此不会生成最终回答；勾选后再重新生成");
+            setStatusTone("warning");
+            return;
+        }
         if (bodyEdited && !window.confirm(t("readweave.regenerate_overwrite_confirm"))) return;
         const regeneratedJobId = generationJobId;
         const target = captureSelectionAction(true, true);
@@ -1485,7 +1505,7 @@ export default function ReadWeavePanel() {
     function addCustomQuestionTemplate() {
         const label = decodeReadWeaveText(customTemplateLabel).slice(0, 30);
         const pattern = decodeReadWeaveText(customTemplatePattern).slice(0, 500);
-        if (!label || !pattern.includes("{selection}")) {
+        if (!label || !isValidReadWeaveQuestionTemplatePattern(pattern)) {
             setStatus(t("readweave.template_placeholder_required"));
             setStatusTone("warning");
             return;
@@ -1506,8 +1526,24 @@ export default function ReadWeavePanel() {
 
     function updateQuestionTemplate(templateId: string, patch: Partial<ReadWeaveQuestionTemplate>) {
         setQuestionTemplates(current => current.map(template => template.id === templateId
-            ? { ...template, ...patch }
+            ? {
+                ...template,
+                ...patch,
+                ...(typeof patch.label === "string" ? { label: decodeReadWeaveText(patch.label).slice(0, 30) } : {}),
+                ...(typeof patch.pattern === "string" ? { pattern: decodeReadWeaveText(patch.pattern).slice(0, 500) } : {})
+            }
             : template));
+    }
+
+    function validateQuestionTemplateOnSave(templateId: string) {
+        const template = questionTemplates.find(candidate => candidate.id === templateId);
+        if (template && isValidReadWeaveQuestionTemplatePattern(template.pattern)) return;
+        setStatus(t("readweave.template_placeholder_required"));
+        setStatusTone("warning");
+        const previous = persistedQuestionTemplatesRef.current.find(candidate => candidate.id === templateId);
+        setQuestionTemplates(previous
+            ? questionTemplates.map(candidate => candidate.id === templateId ? { ...previous } : candidate)
+            : questionTemplates.filter(candidate => candidate.id !== templateId));
     }
 
     function removeQuestionTemplate(templateId: string) {
@@ -1859,6 +1895,7 @@ export default function ReadWeavePanel() {
                                                         aria-label={t("readweave.template_pattern")}
                                                         value={template.pattern}
                                                         onInput={event => updateQuestionTemplate(template.id, { pattern: event.currentTarget.value.slice(0, 500) })}
+                                                        onBlur={() => validateQuestionTemplateOnSave(template.id)}
                                                     />
                                                     <button type="button" class="btn btn-sm btn-link" aria-label={t("readweave.delete")} onClick={() => removeQuestionTemplate(template.id)}>
                                                         <i class="bx bx-trash" aria-hidden="true" />
@@ -2475,6 +2512,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
         let editorRoot: HTMLElement | null = null;
         let editorAttachTimer: number | undefined;
         let selectionFrame: number | undefined;
+        let selectionRetryTimer: number | undefined;
         let selectionRevision = 0;
         let disposed = false;
 
@@ -2791,9 +2829,8 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
                 pendingSelectionActionsRef.current[preferredKind] = () => {
                     void activate(new Event("readweave-confirm-selection", { cancelable: true }));
                 };
-                if (mode !== "readonly") actionBubble.append(button);
+                actionBubble.append(button);
             }
-            if (mode === "readonly") return;
             document.body.append(actionBubble);
             positionBubble();
         }
@@ -2802,9 +2839,16 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             selectionRevision += 1;
             const revision = selectionRevision;
             if (selectionFrame !== undefined) window.cancelAnimationFrame(selectionFrame);
+            window.clearTimeout(selectionRetryTimer);
+            selectionRetryTimer = undefined;
             selectionFrame = window.requestAnimationFrame(() => {
                 selectionFrame = undefined;
                 void showActionsForCurrentSelection(revision);
+                window.clearTimeout(selectionRetryTimer);
+                selectionRetryTimer = window.setTimeout(() => {
+                    selectionRetryTimer = undefined;
+                    if (!disposed && revision === selectionRevision) void showActionsForCurrentSelection(revision);
+                }, 40);
             });
         }
 
@@ -2971,6 +3015,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             if (optionsRef.current.noteId !== noteId) pendingSelectionActionsRef.current = {};
             window.clearTimeout(editorAttachTimer);
             if (selectionFrame !== undefined) window.cancelAnimationFrame(selectionFrame);
+            window.clearTimeout(selectionRetryTimer);
             removeBubble();
             observer?.disconnect();
             editorRoot?.removeEventListener("mouseover", onAnchorMouseOver);

@@ -2915,6 +2915,9 @@ export async function generateUnifiedReadWeaveAnswer(
     signal?: AbortSignal
 ): Promise<ReadWeaveGenerateResponse> {
     if (!request || typeof request !== "object") throw new ValidationError("ReadWeave 生成请求无效");
+    if (request.kind === "question" && request.autoApplyPlan === false) {
+        throw new ValidationError("未勾选自动采用问题和回答结构，不生成最终回答；请先启用该选项。");
+    }
     const originalQuestion = normalizeQuestion(request);
     if (!originalQuestion) throw new ValidationError("问题或术语不能为空");
     if (!Array.isArray(request.fragments) || request.fragments.length === 0) throw new ValidationError("生成回答需要文章选区或上下文");

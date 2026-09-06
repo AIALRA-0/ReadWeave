@@ -60,6 +60,19 @@ export function renderReadWeaveQuestionTemplate(template: ReadWeaveQuestionTempl
     return template.pattern.replaceAll("{selection}", subject).trim();
 }
 
+/**
+ * Question templates deliberately have one small grammar. Keeping the
+ * grammar here makes the editor, normalizer and persistence path agree on
+ * which placeholders can be rendered safely.
+ */
+export function isValidReadWeaveQuestionTemplatePattern(pattern: string): boolean {
+    const normalized = decodeReadWeaveText(pattern);
+    const placeholders = normalized.match(/\{[^{}]*\}/gu) ?? [];
+    return placeholders.length > 0
+        && placeholders.every(placeholder => placeholder === "{selection}")
+        && !normalized.replaceAll("{selection}", "").match(/[{}]/u);
+}
+
 export function normalizeReadWeaveQuestionTemplates(value: unknown): ReadWeaveQuestionTemplate[] {
     if (!Array.isArray(value)) return DEFAULT_READWEAVE_QUESTION_TEMPLATES.map(template => ({ ...template }));
     const builtinById = new Map(DEFAULT_READWEAVE_QUESTION_TEMPLATES.map(template => [ template.id, template ]));
@@ -71,7 +84,7 @@ export function normalizeReadWeaveQuestionTemplates(value: unknown): ReadWeaveQu
         const id = typeof input.id === "string" ? input.id.trim().slice(0, 80) : "";
         const label = typeof input.label === "string" ? decodeReadWeaveText(input.label).slice(0, 30) : "";
         const pattern = typeof input.pattern === "string" ? decodeReadWeaveText(input.pattern).slice(0, 500) : "";
-        if (!id || seen.has(id) || !label || !pattern.includes("{selection}")) continue;
+        if (!id || seen.has(id) || !label || !isValidReadWeaveQuestionTemplatePattern(pattern)) continue;
         seen.add(id);
         const currentBuiltin = input.builtin === true ? builtinById.get(id) : undefined;
         result.push({

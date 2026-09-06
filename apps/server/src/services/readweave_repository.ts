@@ -172,7 +172,17 @@ function listChildNotes(rootId: string): BNote[] {
 }
 
 export function listReadWeaveObjects(): ReadWeaveObject[] {
-    return listChildNotes(OBJECTS_ROOT_ID).map(parseObject).filter((value): value is ReadWeaveObject => !!value);
+    // One malformed legacy object must not make candidate lookup fail for
+    // every note. Individual object reads still validate strictly; the list
+    // path simply skips entries that cannot be interpreted safely.
+    return listChildNotes(OBJECTS_ROOT_ID).flatMap(note => {
+        try {
+            const object = parseObject(note);
+            return object ? [ object ] : [];
+        } catch {
+            return [];
+        }
+    });
 }
 
 export function listReadWeaveLinks(): ReadWeaveLink[] {

@@ -3227,7 +3227,7 @@
     "template_keyboard_hint": "Use Alt+Up/Down to switch templates. When the question box is empty, Up/Down also switches.",
     "template_name": "Template name",
     "template_pattern": "Template text; use {selection} for the current subject",
-    "template_placeholder_required": "A template needs a name and the {selection} placeholder.",
+    "template_placeholder_required": "A template needs a name and the complete {selection} placeholder; no other placeholders are allowed.",
     "add_template": "Add template",
     "term_label": "Term to define",
     "similar_items": "Similar existing items",

@@ -115,6 +115,13 @@ describe("ReadWeave persisted generation jobs", () => {
         });
     });
 
+    it("does not create a final-answer job when the answer structure is not adopted", () => {
+        expect(() => startReadWeaveGenerationJob({ ...request, autoApplyPlan: false }))
+            .toThrow("不生成最终回答");
+        expect(sql.getValue<number>("SELECT COUNT(*) FROM readweave_generation_jobs")).toBe(0);
+        expect(generateMock).not.toHaveBeenCalled();
+    });
+
     it("persists live events, unread results and incremental cursors", async () => {
         generateMock.mockImplementationOnce(async (_request, onProgress) => {
             onProgress?.({ stage: "drafting", round: 1, message: "正在生成测试首稿。  ", issues: [] });

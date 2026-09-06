@@ -841,6 +841,9 @@ export function startReadWeaveGenerationJob(request: ReadWeaveGenerateRequest): 
     if (contentType === "note" || contentType === "key-point") {
         throw new ValidationError("笔记和要点是手写内容，不创建生成任务。");
     }
+    if (request.kind === "question" && request.autoApplyPlan === false) {
+        throw new ValidationError("未勾选自动采用问题和回答结构，不生成最终回答；请先启用该选项。");
+    }
     const article = requireReadableArticle(request.articleId);
     const isProtected = article.isProtected === true;
     if (request.kind === "term") {
@@ -1054,6 +1057,9 @@ export function regenerateReadWeaveGenerationJob(jobId: string, inputValue: unkn
             throw new ValidationError("Regeneration context fragments are invalid.");
         }
         request.fragments = structuredClone(input.fragments) as ReadWeaveGenerateRequest["fragments"];
+    }
+    if (request.kind === "question" && request.autoApplyPlan === false) {
+        throw new ValidationError("未勾选自动采用问题和回答结构，不生成最终回答；请先启用该选项。");
     }
     const now = new Date().toISOString();
     const harnessVersion = getPublishedReadWeaveHarnessProfile().versionId;

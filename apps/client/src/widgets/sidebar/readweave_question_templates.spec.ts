@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
     decodeReadWeaveText,
     DEFAULT_READWEAVE_QUESTION_TEMPLATES,
+    isValidReadWeaveQuestionTemplatePattern,
     normalizeReadWeaveQuestionTemplates,
     rankedReadWeaveQuestionTemplates,
     recordReadWeaveTemplateUse,
@@ -42,6 +43,10 @@ describe("ReadWeave question templates", () => {
     it("rejects malformed stored templates and restores defaults when necessary", () => {
         expect(normalizeReadWeaveQuestionTemplates([ { id: "bad", label: "坏", pattern: "没有占位符" } ]))
             .toHaveLength(DEFAULT_READWEAVE_QUESTION_TEMPLATES.length);
+        expect(isValidReadWeaveQuestionTemplatePattern("关于“{selection}”，")).toBe(true);
+        expect(isValidReadWeaveQuestionTemplatePattern("关于“{selected}”，")).toBe(false);
+        expect(isValidReadWeaveQuestionTemplatePattern("关于“{selection”，")).toBe(false);
+        expect(isValidReadWeaveQuestionTemplatePattern("关于“{selection}”和{other}？")).toBe(false);
     });
 
     it("upgrades stored built-in templates without changing custom templates", () => {

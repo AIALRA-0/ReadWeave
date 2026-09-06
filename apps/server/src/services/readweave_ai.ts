@@ -5648,6 +5648,12 @@ function validateRequest(request: ReadWeaveGenerateRequest): void {
     if (request.optimizeQuestion !== undefined && typeof request.optimizeQuestion !== "boolean") {
         throw new ValidationError("optimizeQuestion must be a boolean.");
     }
+    if (request.autoApplyPlan !== undefined && typeof request.autoApplyPlan !== "boolean") {
+        throw new ValidationError("autoApplyPlan must be a boolean.");
+    }
+    if (request.kind === "question" && request.autoApplyPlan === false) {
+        throw new ValidationError("未勾选自动采用问题和回答结构，不生成最终回答；请先启用该选项。");
+    }
     if (request.feedback !== undefined && (typeof request.feedback !== "string" || request.feedback.length > 4_000)) {
         throw new ValidationError("feedback must be text of at most 4000 characters.");
     }
