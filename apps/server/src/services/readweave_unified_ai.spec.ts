@@ -98,6 +98,17 @@ function installModel(
                 body,
                 optimizedTitle: "规范化后的原问题？",
                 termIdentity: { abbreviation: "NPU", chineseName: "神经网络处理单元", englishName: "Neural Processing Unit" },
+                ...(prompt.includes("内容类型：definition") ? {
+                    definitionFields: {
+                        name: "测试对象", origin: "测试词源", aliases: "测试别名", abbreviation: "NPU",
+                        fullName: "Neural Processing Unit", essentialDefinition: "测试定义", discipline: "计算机科学",
+                        domain: "人工智能", operatingPrinciple: "测试运作原理", purpose: "测试功能目的", history: "测试历史",
+                        realWorldApplication: "测试应用", impact: "测试影响", broaderConcept: "测试上位概念",
+                        narrowerConcepts: "测试下位概念", parallelConcepts: "测试平行概念", advantages: "测试优势",
+                        disadvantages: "测试劣势", oppositeConcept: "测试对立概念", conditions: "测试适用条件",
+                        commonMisconceptions: "测试常见误区", example: "测试示例"
+                    }
+                } : {}),
                 claims: [ { claimId: "C1", text: "这是受到公开证据支持的直接结论", sourceIds: [ "S1" ], confidence: "high" } ],
                 unresolvedClaims: []
             };
@@ -939,7 +950,7 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.usage?.modelCalls).toBe(1);
     });
 
-    it("makes the answer-plan checkbox observable in the writer input", async () => {
+    it("uses an unchecked answer-plan flow instead of blocking generation", async () => {
         const enabled = { ...request("为什么缓存能提速？"), autoApplyPlan: true };
         await generateUnifiedReadWeaveAnswer(enabled);
         const enabledPrompt = JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body)) as { messages: Array<{ content: string }> };
@@ -947,8 +958,36 @@ describe("ReadWeave one-pass workflow", () => {
 
         vi.mocked(fetch).mockClear();
         const disabled = { ...request("为什么缓存能提速？"), autoApplyPlan: false };
-        await expect(generateUnifiedReadWeaveAnswer(disabled)).rejects.toThrow("不生成最终回答");
-        expect(fetch).not.toHaveBeenCalled();
+        const result = await generateUnifiedReadWeaveAnswer(disabled);
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(result.answerPlan?.autoApplied).toBe(false);
+        expect(result.answerPlan?.reviewStatus).toBe("draft");
+    });
+
+    it("uses the reviewed plan and normalized question supplied by the panel", async () => {
+        const input = {
+            ...request("啥事缓存"),
+            autoApplyPlan: false,
+            answerPlan: {
+                version: 1 as const,
+                reviewStatus: "approved" as const,
+                normalizedQuestion: "“缓存”是什么？",
+                answerType: "definition" as const,
+                objective: "说明缓存是什么以及为什么能减少重复工作",
+                answerRequirements: [ "先定义缓存", "解释命中后如何减少重复工作" ],
+                exclusions: [ "不展开无关的数据库产品比较" ],
+                searchQueries: [],
+                steps: [ "定义对象", "解释运行方式", "说明收益和边界" ],
+                summary: "定义对象 → 解释运行方式 → 说明收益和边界",
+                autoApplied: false
+            }
+        };
+        const result = await generateUnifiedReadWeaveAnswer(input);
+        expect(result.answerPlan?.reviewStatus).toBe("approved");
+        expect(result.answerPlan?.steps).toEqual([ "定义对象", "解释运行方式", "说明收益和边界" ]);
+        expect(result.audit?.questionContract.normalizedQuestion).toBe("“缓存”是什么？");
+        const prompt = JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body)) as { messages: Array<{ content: string }> };
+        expect(prompt.messages.map(message => message.content).join("\n")).toContain("解释运行方式");
     });
 
     it("turns the Creative Commons BY marker into a required bilingual definition", async () => {
@@ -974,6 +1013,18 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.body).toMatch(/^历史学家（Historian）：/u);
         expect(result.body).not.toMatch(/^\s*[-*•]\s/u);
         expect(result.body).toContain("研究、记录和解释历史");
+    });
+
+    it("returns the complete structured definition field contract", async () => {
+        const result = await generateUnifiedReadWeaveAnswer(request("NPU 是什么？", "term"));
+
+        expect(Object.keys(result.definitionFields ?? {})).toHaveLength(22);
+        expect(result.definitionFields).toMatchObject({
+            name: "测试对象",
+            fullName: "Neural Processing Unit",
+            essentialDefinition: "测试定义",
+            commonMisconceptions: "测试常见误区"
+        });
     });
 });
 

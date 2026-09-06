@@ -260,6 +260,17 @@
     gap: 8px;
 }
 
+.readweave-answer-plan-editor {
+    gap: 6px;
+    padding: 8px;
+    border-inline-start: 3px solid var(--admonition-note-accent-color);
+    background: color-mix(in srgb, var(--admonition-note-accent-color) 8%, transparent);
+}
+
+.readweave-answer-plan-editor .readweave-section-title {
+    margin-bottom: 2px;
+}
+
 .readweave-selection,
 .readweave-impact {
     padding: 10px;

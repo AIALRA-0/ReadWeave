@@ -3,6 +3,7 @@ import "./ReadWeavePanel.css";
 import { type CKTextEditor, updateReadWeaveAnchorIdOnRange } from "@triliumnext/ckeditor5";
 import {
     KATEX_MACROS,
+    type ReadWeaveAnswerPlan,
     type ReadWeaveAnchorSummary,
     type ReadWeaveAnchorType,
     type ReadWeaveCalloutType,
@@ -90,6 +91,8 @@ import {
     recordReadWeaveTemplateUse,
     renderReadWeaveQuestionTemplate
 } from "./readweave_question_templates.js";
+import { insertOrReplaceReadWeaveQuestion, readWeaveQuestionStackFromText } from "./readweave_question_stack.js";
+import { normalizeReadWeaveQuestionDraft } from "./readweave_question_normalizer.js";
 import RightPanelWidget from "./RightPanelWidget.js";
 
 const BLOCK_SELECTOR = "p,h1,h2,h3,h4,h5,h6,li,blockquote,pre,table,td,th,caption,figure,figcaption,div.mermaid,div.mermaid-diagram";
@@ -130,6 +133,7 @@ interface Draft {
     questionTitle: string;
     optimizeQuestion: boolean;
     autoApplyPlan: boolean;
+    answerPlan?: ReadWeaveAnswerPlan;
     termIdentity: Partial<ReadWeaveTermIdentity>;
     termIdentityEdited?: boolean;
     body: string;
@@ -193,6 +197,7 @@ export default function ReadWeavePanel() {
     const [questionTitle, setQuestionTitle] = useState("");
     const [optimizeQuestion, setOptimizeQuestion] = useState(true);
     const [autoApplyPlan, setAutoApplyPlan] = useState(true);
+    const [answerPlan, setAnswerPlan] = useState<ReadWeaveAnswerPlan>();
     const [termIdentity, setTermIdentity] = useState<Partial<ReadWeaveTermIdentity>>({});
     const [termIdentityEdited, setTermIdentityEdited] = useState(false);
     const [body, setBody] = useState("");
@@ -370,12 +375,14 @@ export default function ReadWeavePanel() {
         setGenerationJobId(job.jobId);
         setGenerationProgress(job.progress);
         setBusy(job.status === "queued" || job.status === "running");
+        setAutoApplyPlan(savedDraft?.autoApplyPlan ?? (job.answerPlan?.autoApplied !== false));
         setRegenerationFeedback(job.feedback ?? "");
         if (!job.result) return;
         const resultReviewIssues = job.result.reviewIssues ?? [];
         const reviewedTermIdentity = job.result.termIdentity;
         const restored = recoverReadWeaveGenerationFields({ draft: savedDraft, job });
         setBody(restored.body);
+        setAnswerPlan(job.answerPlan ?? job.result?.answerPlan ?? savedDraft?.answerPlan);
         setBodyEditing(false);
         setBodyEdited(!!savedDraft?.bodyEdited);
         if (job.kind === "question") setQuestionTitle(restored.questionTitle);
@@ -513,7 +520,8 @@ export default function ReadWeavePanel() {
                 ? confirmingPendingSelection && questionTitle.trim() ? questionTitle : matchingJob?.title || defaultQuestionForExcerpt(decodeReadWeaveText(nextSelection.excerpt))
                 : ""));
         setOptimizeQuestion(matchingDraft?.optimizeQuestion ?? (confirmingPendingSelection ? optimizeQuestion : true));
-        setAutoApplyPlan(matchingDraft?.autoApplyPlan ?? true);
+        setAutoApplyPlan(matchingDraft?.autoApplyPlan ?? (matchingJob?.answerPlan?.autoApplied !== false));
+        setAnswerPlan(matchingDraft?.answerPlan ?? matchingJob?.answerPlan ?? matchingJob?.result?.answerPlan);
         const restoredFields = recoverReadWeaveGenerationFields({
             draft: matchingDraft,
             fallbackBody: confirmingPendingSelection ? body : "",
@@ -589,6 +597,7 @@ export default function ReadWeavePanel() {
         setQuestionTitle(defaultQuestionForExcerpt(decodeReadWeaveText(nextSelection.excerpt)));
         setOptimizeQuestion(true);
         setAutoApplyPlan(true);
+        setAnswerPlan(undefined);
         setTermIdentity({});
         setTermIdentityEdited(false);
         setBody("");
@@ -778,11 +787,11 @@ export default function ReadWeavePanel() {
 
     useEffect(() => {
         if (!noteId || !selection) return;
-        const draft: Draft = { kind, contentType, questionTitle, optimizeQuestion, autoApplyPlan, termIdentity, termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision, generationJobId, reviewIssues, reviewIssueBaseline, parentLinkId, newQuestionDraft };
+        const draft: Draft = { kind, contentType, questionTitle, optimizeQuestion, autoApplyPlan, answerPlan, termIdentity, termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision, generationJobId, reviewIssues, reviewIssueBaseline, parentLinkId, newQuestionDraft };
         const isolatedDraftId = currentJob?.draftId ?? generationJobId ?? localDraftId;
         sessionStorage.setItem(draftKey(noteId, selection.anchorId, parentLinkId, isolatedDraftId), JSON.stringify(draft));
         sessionStorage.setItem(draftKey(noteId, selection.anchorId, parentLinkId), JSON.stringify(draft));
-    }, [noteId, selection, kind, contentType, parentLinkId, questionTitle, optimizeQuestion, autoApplyPlan, termIdentity, termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision, generationJobId, currentJob?.draftId, localDraftId, reviewIssues, reviewIssueBaseline, newQuestionDraft]);
+    }, [noteId, selection, kind, contentType, parentLinkId, questionTitle, optimizeQuestion, autoApplyPlan, answerPlan, termIdentity, termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision, generationJobId, currentJob?.draftId, localDraftId, reviewIssues, reviewIssueBaseline, newQuestionDraft]);
 
     useEffect(() => {
         // Keep auto-save safe even while a user is midway through replacing a
@@ -907,8 +916,17 @@ export default function ReadWeavePanel() {
 
     async function generate() {
         if (!noteId || !selection) return;
-        if (kind === "question" && !autoApplyPlan) {
-            setStatus("未勾选“自动采用问题和回答结构”，因此不会生成最终回答；勾选后再生成");
+        if (kind === "question" && !autoApplyPlan && !answerPlan) {
+            setAnswerPlan(createEditableReadWeaveAnswerPlan(currentTitle, contentType));
+            setStatus("回答流程已生成，可以编辑流程内容；再次点击“生成答案”才会调用写作模型");
+            setStatusTone("normal");
+            return;
+        }
+        const preparedPlan = kind === "question"
+            ? normalizeEditableReadWeaveAnswerPlan(answerPlan ?? createEditableReadWeaveAnswerPlan(currentTitle, contentType), true)
+            : undefined;
+        if (kind === "question" && !preparedPlan) {
+            setStatus("回答流程不完整，请补齐目标、步骤和必答项");
             setStatusTone("warning");
             return;
         }
@@ -958,8 +976,10 @@ export default function ReadWeavePanel() {
                 rootSourceExcerpt: selection.excerpt,
                 sourceLocator: selection.sourceLocator,
                 title: currentTitle,
+                questionStack: readWeaveQuestionStackFromText(currentTitle),
                 optimizeQuestion: kind === "question" ? optimizeQuestion : undefined,
                 autoApplyPlan,
+                answerPlan: preparedPlan,
                 termIdentity: kind === "term" ? cleanPartialTermIdentity(termIdentity) : undefined,
                 fragments: nestedParent
                     ? nestedQuestionFragments(entries, nestedParent, selection.fragments)
@@ -1194,8 +1214,11 @@ export default function ReadWeavePanel() {
 
     async function regenerateDraft() {
         if (!generationJobId) return;
-        if (kind === "question" && !autoApplyPlan) {
-            setStatus("未勾选“自动采用问题和回答结构”，因此不会生成最终回答；勾选后再重新生成");
+        const preparedPlan = kind === "question"
+            ? normalizeEditableReadWeaveAnswerPlan(answerPlan ?? createEditableReadWeaveAnswerPlan(currentTitle, contentType), true)
+            : undefined;
+        if (kind === "question" && !preparedPlan) {
+            setStatus("回答流程不完整，请补齐目标、步骤和必答项");
             setStatusTone("warning");
             return;
         }
@@ -1232,6 +1255,8 @@ export default function ReadWeavePanel() {
                 contentType,
                 origin: readWeaveContentOriginForType(contentType),
                 autoApplyPlan,
+                answerPlan: preparedPlan,
+                questionStack: readWeaveQuestionStackFromText(currentTitle),
                 calloutType,
                 termIdentity: kind === "term" ? cleanPartialTermIdentity(termIdentity) : undefined,
                 fragments: nestedParent
@@ -1400,6 +1425,7 @@ export default function ReadWeavePanel() {
         selectionActionRevision.current += 1;
         selectionIdentityRevision.current += 1;
         setGenerationJobId(undefined);
+        setAnswerPlan(undefined);
         setLocalRewriteOpen(false);
         setLocalRewriteInstruction("");
         setLocalRewriteResult(undefined);
@@ -1430,6 +1456,7 @@ export default function ReadWeavePanel() {
         setContentType("problem");
         setNewQuestionDraft(true);
         setGenerationJobId(undefined);
+        setAnswerPlan(undefined);
         setLocalDraftId(`readweave-draft-${utils.randomString(20)}`);
         transientGenerationJobRef.current = undefined;
         setTransientGenerationJob(undefined);
@@ -1480,11 +1507,23 @@ export default function ReadWeavePanel() {
 
     function applyQuestionTemplate(template: ReadWeaveQuestionTemplate) {
         if (!selection) return;
-        setQuestionTitle(renderReadWeaveQuestionTemplate(template, selection.excerpt));
+        const replacement = renderReadWeaveQuestionTemplate(template, selection.excerpt);
+        const textarea = questionTextareaRef.current;
+        const next = insertOrReplaceReadWeaveQuestion(questionTitle, replacement, textarea?.selectionStart ?? questionTitle.length);
+        setQuestionTitle(next);
         setQuestionTemplates(current => recordReadWeaveTemplateUse(current, template.id));
         setActiveTemplateId(template.id);
         changeDraft();
         window.requestAnimationFrame(() => questionTextareaRef.current?.focus());
+    }
+
+    function updateAnswerPlan(patch: Partial<ReadWeaveAnswerPlan>) {
+        setAnswerPlan(current => current ? {
+            ...current,
+            ...patch,
+            reviewStatus: "draft",
+            autoApplied: false
+        } : current);
     }
 
     function cycleQuestionTemplate(direction: -1 | 1) {
@@ -1929,6 +1968,30 @@ export default function ReadWeavePanel() {
                                         <input type="checkbox" checked={autoApplyPlan} disabled={editorLocked} onChange={event => setAutoApplyPlan(event.currentTarget.checked)} data-testid="readweave-auto-apply-plan" />
                                         <span><strong>自动采用问题和回答结构</strong></span>
                                     </label>
+                                    {!autoApplyPlan && answerPlan && (
+                                        <section class="readweave-answer-plan-editor" data-testid="readweave-answer-plan-editor">
+                                            <div class="readweave-section-title">回答流程（可编辑）</div>
+                                            <label>回答目标
+                                                <input value={answerPlan.objective ?? ""} disabled={editorLocked} onInput={event => updateAnswerPlan({ objective: event.currentTarget.value })} />
+                                            </label>
+                                            <label>规范化问题
+                                                <input value={answerPlan.normalizedQuestion ?? questionTitle} disabled={editorLocked} onInput={event => updateAnswerPlan({ normalizedQuestion: event.currentTarget.value })} />
+                                            </label>
+                                            <label>必答项（每行一项）
+                                                <textarea rows={3} value={(answerPlan.answerRequirements ?? []).join("\n")} disabled={editorLocked} onInput={event => updateAnswerPlan({ answerRequirements: splitPlanLines(event.currentTarget.value) })} />
+                                            </label>
+                                            <label>排除项（每行一项）
+                                                <textarea rows={2} value={(answerPlan.exclusions ?? []).join("\n")} disabled={editorLocked} onInput={event => updateAnswerPlan({ exclusions: splitPlanLines(event.currentTarget.value) })} />
+                                            </label>
+                                            <label>回答步骤（每行一项）
+                                                <textarea rows={4} value={answerPlan.steps.join("\n")} disabled={editorLocked} onInput={event => updateAnswerPlan({ steps: splitPlanLines(event.currentTarget.value) })} />
+                                            </label>
+                                            <label>搜索词（每行一项，可留空）
+                                                <textarea rows={2} value={(answerPlan.searchQueries ?? []).join("\n")} disabled={editorLocked} onInput={event => updateAnswerPlan({ searchQueries: splitPlanLines(event.currentTarget.value) })} />
+                                            </label>
+                                            <p class="readweave-hint">第一次点击只生成这份流程，修改后再次点击“生成答案”</p>
+                                        </section>
+                                    )}
                                 </>
                             ) : contentType === "definition" ? (
                                 <>
@@ -2005,7 +2068,11 @@ export default function ReadWeavePanel() {
                                 data-testid="readweave-generate"
                             >
                                 {generationBusy && <i class="bx bx-loader-alt bx-spin" aria-hidden="true" />}
-                                {generationBusy ? t("readweave.generating") : t(kind === "question" ? "readweave.generate_answer" : "readweave.generate_definition")}
+                                {generationBusy
+                                    ? t("readweave.generating")
+                                    : kind === "question" && !autoApplyPlan && !answerPlan
+                                        ? "生成流程计划"
+                                        : t(kind === "question" ? "readweave.generate_answer" : "readweave.generate_definition")}
                             </button>}
                             {generationBusy && currentJob && (
                                 <button
@@ -3786,6 +3853,56 @@ function readDraft(noteId: string, anchorId: string, parentLinkId?: string, draf
     } catch {
         return undefined;
     }
+}
+
+function splitPlanLines(value: string): string[] {
+    return value.split(/\r?\n/gu).map(line => line.trim()).filter(Boolean).slice(0, 12);
+}
+
+function createEditableReadWeaveAnswerPlan(question: string, _contentType: ReadWeaveContentType): ReadWeaveAnswerPlan {
+    const normalized = normalizeReadWeaveQuestionDraft(question);
+    const isDefinition = /(?:是什么|什么是|定义|什么意思|含义)/u.test(normalized);
+    const steps = isDefinition
+        ? [ "先给出对象身份和一句话定义", "说明它主要处理什么", "说明它通过什么方式运作", "说明它最终解决什么问题", "补充最容易误解的边界" ]
+        : [ "先直接回答问题", "补足理解答案所必需的背景", "解释原因、机制或步骤", "说明适用范围和限制" ];
+    return {
+        version: 1,
+        reviewStatus: "draft",
+        answerType: isDefinition ? "definition" : "general",
+        normalizedQuestion: normalized,
+        objective: `直接、完整地回答“${normalized}”`,
+        answerRequirements: [ "回答问题中的核心对象或动作", "不得遗漏用户明确要求的限定条件" ],
+        exclusions: [ "不添加问题没有要求的旁支背景", "不把文章选区或常识猜测伪装成外部事实" ],
+        searchQueries: [],
+        steps,
+        summary: steps.join(" → "),
+        autoApplied: false,
+        provenance: [
+            { kind: "local", note: "根据问题措辞生成的可编辑流程" },
+            { kind: "common-sense", note: "允许模型在证据不足的非关键处补齐常识，但必须保持来源层级可追溯" }
+        ]
+    };
+}
+
+function normalizeEditableReadWeaveAnswerPlan(plan: ReadWeaveAnswerPlan, approve: boolean): ReadWeaveAnswerPlan | undefined {
+    const objective = plan.objective?.trim() ?? "";
+    const steps = plan.steps.map(step => step.trim()).filter(Boolean).slice(0, 12);
+    const answerRequirements = (plan.answerRequirements ?? []).map(item => item.trim()).filter(Boolean).slice(0, 12);
+    const exclusions = (plan.exclusions ?? []).map(item => item.trim()).filter(Boolean).slice(0, 12);
+    if (!objective || steps.length === 0 || answerRequirements.length === 0) return undefined;
+    return {
+        ...plan,
+        version: 1,
+        reviewStatus: approve ? "approved" : "draft",
+        normalizedQuestion: plan.normalizedQuestion?.trim() || undefined,
+        objective,
+        steps,
+        answerRequirements,
+        exclusions,
+        searchQueries: (plan.searchQueries ?? []).map(item => item.trim()).filter(Boolean).slice(0, 3),
+        summary: steps.join(" → "),
+        autoApplied: approve
+    };
 }
 
 async function loadReadWeaveEntries(noteId: string, anchorId: string): Promise<ReadWeaveResolvedEntry[]> {

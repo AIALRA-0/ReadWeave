@@ -88,6 +88,18 @@ function requireReadableArticle(articleId: string) {
     return article;
 }
 
+function requireReviewedAnswerPlan(request: ReadWeaveGenerateRequest) {
+    if (request.autoApplyPlan !== false) return;
+    const plan = request.answerPlan;
+    if (!plan || plan.reviewStatus !== "approved") {
+        throw new ValidationError("请先审核并确认回答流程，再生成最终答案。");
+    }
+    if (!Array.isArray(plan.steps) || plan.steps.length === 0
+        || !Array.isArray(plan.answerRequirements) || plan.answerRequirements.length === 0) {
+        throw new ValidationError("回答流程至少需要一个回答步骤和一个必答项。");
+    }
+}
+
 function validateSourceLocator(value: ReadWeaveGenerateRequest["sourceLocator"]): void {
     if (value === undefined) return;
     if (!value || typeof value !== "object" || value.version !== 1
@@ -320,6 +332,8 @@ function publicJob(row: JobRow, includeProgress = true): ReadWeaveGenerationJob 
         title: decodeStoredValue(row.title, row.isProtected) ?? "",
         sourceExcerpt: decodeStoredValue(row.sourceExcerpt, row.isProtected) ?? "",
         sourceLocator: storedRequest?.sourceLocator,
+        questionStack: storedRequest?.questionStack,
+        answerPlan: storedRequest?.answerPlan,
         status: row.status,
         qualityState: row.qualityState === "verified" || row.qualityState === "provisional" ? row.qualityState : "legacy-unverified",
         harnessVersion: row.harnessVersion || "legacy",
@@ -837,12 +851,10 @@ export function startReadWeaveGenerationJob(request: ReadWeaveGenerateRequest): 
         throw new ValidationError("ReadWeave generation request is incomplete.");
     }
     validateSourceLocator(request.sourceLocator);
+    requireReviewedAnswerPlan(request);
     const contentType = readWeaveContentTypeForKind(request.kind, request.contentType);
     if (contentType === "note" || contentType === "key-point") {
         throw new ValidationError("笔记和要点是手写内容，不创建生成任务。");
-    }
-    if (request.kind === "question" && request.autoApplyPlan === false) {
-        throw new ValidationError("未勾选自动采用问题和回答结构，不生成最终回答；请先启用该选项。");
     }
     const article = requireReadableArticle(request.articleId);
     const isProtected = article.isProtected === true;
@@ -994,6 +1006,8 @@ interface ReadWeaveRegenerateRequest {
     calloutType?: unknown;
     termIdentity?: unknown;
     fragments?: unknown;
+    questionStack?: unknown;
+    answerPlan?: unknown;
 }
 
 export function regenerateReadWeaveGenerationJob(jobId: string, inputValue: unknown): ReadWeaveGenerationJob {
@@ -1058,9 +1072,23 @@ export function regenerateReadWeaveGenerationJob(jobId: string, inputValue: unkn
         }
         request.fragments = structuredClone(input.fragments) as ReadWeaveGenerateRequest["fragments"];
     }
-    if (request.kind === "question" && request.autoApplyPlan === false) {
-        throw new ValidationError("未勾选自动采用问题和回答结构，不生成最终回答；请先启用该选项。");
+    if (Object.hasOwn(input, "questionStack")) {
+        if (!Array.isArray(input.questionStack) || input.questionStack.length > 12 || input.questionStack.some(item => !item
+            || typeof item !== "object"
+            || typeof (item as { id?: unknown }).id !== "string"
+            || typeof (item as { text?: unknown }).text !== "string")) {
+            throw new ValidationError("Regeneration question stack is invalid.");
+        }
+        request.questionStack = structuredClone(input.questionStack) as ReadWeaveGenerateRequest["questionStack"];
     }
+    if (Object.hasOwn(input, "answerPlan")) {
+        if (input.answerPlan !== undefined
+            && (typeof input.answerPlan !== "object" || input.answerPlan === null || Array.isArray(input.answerPlan))) {
+            throw new ValidationError("Regeneration answer plan must be an object.");
+        }
+        request.answerPlan = input.answerPlan as ReadWeaveGenerateRequest["answerPlan"];
+    }
+    requireReviewedAnswerPlan(request);
     const now = new Date().toISOString();
     const harnessVersion = getPublishedReadWeaveHarnessProfile().versionId;
     const attemptId = randomUUID();

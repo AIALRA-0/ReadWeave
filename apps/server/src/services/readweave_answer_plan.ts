@@ -32,9 +32,25 @@ export function buildReadWeaveAnswerPlan(
     const answerType = answerTypeFor(contract);
     const steps = STEPS[answerType];
     return {
+        version: 1,
+        reviewStatus: autoApplied ? "auto-applied" : "draft",
         answerType,
+        objective: contract.objective,
+        answerRequirements: contract.answerRequirements,
+        exclusions: contract.exclusions,
+        searchQueries: contract.searchQueries,
         steps,
         summary: steps.join(" → "),
-        autoApplied
+        autoApplied,
+        provenance: [
+            {
+                kind: "local",
+                note: "根据问题文字和文章上下文确定回答顺序"
+            },
+            {
+                kind: "common-sense",
+                note: "流程只补齐理解顺序，不把推断当作文章事实"
+            }
+        ]
     };
 }

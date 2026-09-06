@@ -115,11 +115,36 @@ describe("ReadWeave persisted generation jobs", () => {
         });
     });
 
-    it("does not create a final-answer job when the answer structure is not adopted", () => {
+    it("requires an approved answer plan when automatic adoption is disabled", () => {
         expect(() => startReadWeaveGenerationJob({ ...request, autoApplyPlan: false }))
-            .toThrow("不生成最终回答");
+            .toThrow("请先审核并确认回答流程");
         expect(sql.getValue<number>("SELECT COUNT(*) FROM readweave_generation_jobs")).toBe(0);
         expect(generateMock).not.toHaveBeenCalled();
+    });
+
+    it("stores the approved answer plan on the final-answer job", () => {
+        const started = startReadWeaveGenerationJob({
+            ...request,
+            autoApplyPlan: false,
+            answerPlan: {
+                version: 1,
+                reviewStatus: "approved",
+                normalizedQuestion: "“测试片段”是什么？",
+                answerType: "definition",
+                objective: "定义测试片段",
+                answerRequirements: [ "给出核心定义" ],
+                exclusions: [],
+                searchQueries: [],
+                steps: [ "定义对象", "说明边界" ],
+                summary: "定义对象 → 说明边界",
+                autoApplied: false
+            }
+        });
+        expect(started.answerPlan).toMatchObject({
+            reviewStatus: "approved",
+            normalizedQuestion: "“测试片段”是什么？"
+        });
+        cancelReadWeaveGenerationJob(started.jobId);
     });
 
     it("persists live events, unread results and incremental cursors", async () => {

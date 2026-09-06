@@ -106,16 +106,45 @@ export interface ReadWeaveQuestionContract {
     requiresCurrentEvidence: boolean;
 }
 
+export interface ReadWeaveQuestionItem {
+    id: string;
+    text: string;
+    normalizedText?: string;
+}
+
+export type ReadWeaveDefinitionFieldKey =
+    | "name" | "origin" | "aliases" | "abbreviation" | "fullName"
+    | "essentialDefinition" | "discipline" | "domain" | "operatingPrinciple"
+    | "purpose" | "history" | "realWorldApplication" | "impact" | "broaderConcept"
+    | "narrowerConcepts" | "parallelConcepts" | "advantages" | "disadvantages"
+    | "oppositeConcept" | "conditions" | "commonMisconceptions" | "example";
+
+export type ReadWeaveDefinitionFields = Partial<Record<ReadWeaveDefinitionFieldKey, string>>;
+
 /**
  * A small, inspectable answer outline. It is derived from the normalized
  * contract and is deliberately separate from the generated body, so the UI
  * can show the intended answer shape without exposing the full prompt trace.
  */
 export interface ReadWeaveAnswerPlan {
+    /** Optional for old persisted answers; new plans always write version 1. */
+    version?: 1;
+    /** `draft` is editable in the panel; `approved` is sent to the writer. */
+    reviewStatus?: "draft" | "approved" | "auto-applied";
+    normalizedQuestion?: string;
     answerType: "definition" | "identity" | "reason" | "mechanism" | "comparison" | "procedure" | "calculation" | "boundary" | "general";
+    objective?: string;
+    answerRequirements?: string[];
+    exclusions?: string[];
+    searchQueries?: string[];
     steps: string[];
     summary: string;
     autoApplied: boolean;
+    provenance?: Array<{
+        kind: "local" | "external" | "common-sense";
+        note: string;
+        sourceIds?: string[];
+    }>;
 }
 
 export interface ReadWeaveEvidenceSource {
@@ -199,6 +228,8 @@ export interface ReadWeaveGenerationJob {
     title: string;
     sourceExcerpt: string;
     sourceLocator?: ReadWeaveSourceLocator;
+    questionStack?: ReadWeaveQuestionItem[];
+    answerPlan?: ReadWeaveAnswerPlan;
     status: "queued" | "running" | "ready-for-review" | "saving" | "saved" | "paused" | "cancelled" | "failed";
     qualityState: ReadWeaveQualityState;
     harnessVersion: string;
@@ -334,9 +365,11 @@ export interface ReadWeaveGenerateRequest {
     parentLinkId?: string;
     rootSourceExcerpt?: string;
     sourceLocator?: ReadWeaveSourceLocator;
+    questionStack?: ReadWeaveQuestionItem[];
     title: string;
     optimizeQuestion?: boolean;
     autoApplyPlan?: boolean;
+    answerPlan?: ReadWeaveAnswerPlan;
     termIdentity?: Partial<ReadWeaveTermIdentity>;
     fragments: ReadWeaveContextFragment[];
     characterBudget?: number;
@@ -354,6 +387,8 @@ export interface ReadWeaveGenerateResponse {
     claims?: ReadWeaveClaim[];
     audit?: ReadWeaveGenerationAudit;
     answerPlan?: ReadWeaveAnswerPlan;
+    definitionFields?: ReadWeaveDefinitionFields;
+    questionStack?: ReadWeaveQuestionItem[];
     qualityState?: ReadWeaveQualityState;
     evidenceState?: ReadWeaveEvidenceState;
     harnessVersion?: string;
