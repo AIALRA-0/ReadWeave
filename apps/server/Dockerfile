@@ -2,7 +2,8 @@ FROM node:24.18.0-bullseye-slim AS builder
 RUN corepack enable
 
 # Install build tools required to compile native addons (e.g. better-sqlite3) on ARM
-RUN apt-get update && \
+RUN rm -rf /var/lib/apt/lists/* && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
     python3 \
     make \
@@ -17,7 +18,8 @@ RUN pnpm install --no-frozen-lockfile --prod && pnpm rebuild
 
 FROM node:24.18.0-bullseye-slim
 # Install only runtime dependencies
-RUN apt-get update && \
+RUN rm -rf /var/lib/apt/lists/* && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
     gosu && \
     rm -rf \
