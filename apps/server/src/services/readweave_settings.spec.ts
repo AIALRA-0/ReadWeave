@@ -53,14 +53,17 @@ describe("ReadWeave settings", () => {
                 searchMode: "automatic",
                 searchBudgetCny: 0.009,
                 serperApiKey: serperSecret,
+                exaApiKey: "exa-not-a-real-secret-5678",
                 unpaywallEmail: unpaywallAddress
             });
 
             expect(settings.searchMode).toBe("automatic");
             expect(settings.searchBudgetCny).toBe(0.009);
             expect(settings.search.hasSerperApiKey).toBe(true);
+            expect(settings.search.hasExaApiKey).toBe(true);
             expect(settings.search.hasUnpaywallEmail).toBe(true);
             expect(JSON.stringify(settings)).not.toContain(serperSecret);
+            expect(JSON.stringify(settings)).not.toContain("exa-not-a-real-secret-5678");
             expect(JSON.stringify(settings)).not.toContain(unpaywallAddress);
             expect(settings.search.freeProviders).toContain("Crossref");
 
@@ -68,6 +71,7 @@ describe("ReadWeave settings", () => {
                 baseUrl: "https://api.deepseek.com",
                 model: "deepseek-v4-flash",
                 clearSerperApiKey: true,
+                clearExaApiKey: true,
                 clearUnpaywallEmail: true
             });
         });

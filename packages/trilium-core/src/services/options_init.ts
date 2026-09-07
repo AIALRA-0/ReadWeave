@@ -295,6 +295,7 @@ const defaultOptions: DefaultOption[] = [
     { name: "readWeaveTavilyApiKey", value: "", isSynced: false },
     { name: "readWeaveBraveApiKey", value: "", isSynced: false },
     { name: "readWeaveJinaApiKey", value: "", isSynced: false },
+    { name: "readWeaveExaApiKey", value: "", isSynced: false },
     { name: "readWeaveSemanticScholarApiKey", value: "", isSynced: false },
     { name: "readWeaveOpenAlexApiKey", value: "", isSynced: false },
     { name: "readWeaveUnpaywallEmail", value: "", isSynced: false },

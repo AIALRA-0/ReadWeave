@@ -6763,6 +6763,9 @@ function isIndependentPersonProfileSource(
     } catch {
         return false;
     }
+    if (source.sourceCategory === "first-party-personal"
+        || source.sourceCategory === "official-profile"
+        || source.sourceCategory === "institution") return true;
     if (source.provider === "Official profile") return true;
     if (/^(?:orcid\.org|www\.orcid\.org)$/u.test(hostname)) return true;
     if (/wikipedia\.org$/u.test(hostname)) return true;
@@ -6771,6 +6774,11 @@ function isIndependentPersonProfileSource(
         return /(?:faculty|people|person|profile|directory|professor|homepage|bio|staff)/u.test(pathname)
             || /(?:教授|学者|研究员|科学家|工程师|教师|院长|讲席|professor|researcher|scientist|engineer|faculty)/iu.test(evidenceText);
     }
+    // A first-party personal homepage or CV is useful evidence even when it is
+    // hosted outside .edu/.org. It is self-reported, not independent
+    // corroboration; the evidence family carried on the source keeps that
+    // distinction visible to the writer.
+    if (source.evidenceFamily === "SELF") return true;
     return false;
 }
 

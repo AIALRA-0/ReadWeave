@@ -16,6 +16,11 @@ export interface ReadWeaveSearchSource {
     snippet: string;
     publishedAt?: string;
     score: number;
+    originalRank?: number;
+    sourceCategory?: "first-party-personal" | "official-profile" | "institution" | "conference" | "registry" | "academic-index" | "secondary" | "search-result";
+    evidenceFamily?: "SELF" | "EMPLOYER" | "INSTITUTION" | "CONFERENCE" | "REGISTRY" | "ACADEMIC" | "MEDIA" | "SEARCH";
+    retrievalMode?: "structured" | "raw-serp" | "semantic" | "page-reader";
+    content?: string;
 }
 
 export interface ReadWeaveSearchEvidence {
@@ -103,7 +108,8 @@ function source(
     url: unknown,
     snippet: unknown,
     publishedAt?: unknown,
-    score = 0
+    score = 0,
+    metadata: Pick<ReadWeaveSearchSource, "originalRank" | "sourceCategory" | "evidenceFamily" | "retrievalMode"> = {}
 ): ReadWeaveSearchSource | undefined {
     const normalizedTitle = plainText(title, 300);
     const normalizedUrl = safeUrl(url);
@@ -146,8 +152,56 @@ function source(
         url: normalizedUrl,
         snippet: normalizedSnippet,
         publishedAt: typeof publishedAt === "string" ? plainText(publishedAt, 80) : undefined,
-        score
+        score,
+        ...metadata
     };
+}
+
+function classifySearchSource(
+    item: ReadWeaveSearchSource,
+    query = ""
+): Pick<ReadWeaveSearchSource, "sourceCategory" | "evidenceFamily"> {
+    const provider = item.provider.toLocaleLowerCase();
+    const text = `${item.title}\n${item.snippet}`.normalize("NFKC");
+    let hostname = "";
+    let pathname = "";
+    try {
+        const url = new URL(item.url);
+        hostname = url.hostname.toLocaleLowerCase();
+        pathname = url.pathname.toLocaleLowerCase();
+    } catch {
+        return { sourceCategory: "search-result", evidenceFamily: "SEARCH" };
+    }
+    if (/(?:orcid)/u.test(provider) || /^(?:www\.)?orcid\.org$/u.test(hostname)) {
+        return { sourceCategory: "registry", evidenceFamily: "REGISTRY" };
+    }
+    if (/(?:openalex|crossref|dblp|semantic scholar|europe pmc|arxiv|unpaywall)/u.test(provider)
+        || /(?:openalex\.org|crossref\.org|dblp\.org|semanticscholar\.org|arxiv\.org|europepmc\.org)$/u.test(hostname)) {
+        return { sourceCategory: "academic-index", evidenceFamily: "ACADEMIC" };
+    }
+    if (/(?:conference|committee|symposium|technical program|会议|委员会|大会)/iu.test(text)) {
+        return { sourceCategory: "conference", evidenceFamily: "CONFERENCE" };
+    }
+    if (/(?:university|college|institute|school|大学|学院|研究所)/iu.test(hostname + text)
+        && /(?:faculty|people|profile|directory|staff|教授|研究员|教师|个人主页)/iu.test(pathname + text)) {
+        return { sourceCategory: "institution", evidenceFamily: "INSTITUTION" };
+    }
+    if (/(?:official profile|官方主页|employer|雇主|company|公司|careers|团队)/iu.test(provider + text)
+        && /(?:\.com|\.co\.|\.org|\.net)$/u.test(hostname)) {
+        return { sourceCategory: "official-profile", evidenceFamily: "EMPLOYER" };
+    }
+    const normalizedQuery = query.toLocaleLowerCase();
+    const queryNameTokens = Array.from(normalizedQuery.matchAll(/[a-z][a-z'’-]{1,}/giu), match => match[0])
+        .filter(token => !/^(?:official|primary|source|profile|researcher|current|affiliation|present|who|is)$/u.test(token));
+    const nameMentioned = queryNameTokens.length > 0
+        && queryNameTokens.every(token => text.toLocaleLowerCase().includes(token));
+    if (nameMentioned && (pathname === "/" || /(?:about|bio|profile|people|person|cv|resume|research)/u.test(pathname))) {
+        return { sourceCategory: "first-party-personal", evidenceFamily: "SELF" };
+    }
+    if (/(?:wikipedia|news|medium|press|媒体|新闻)/u.test(provider + hostname)) {
+        return { sourceCategory: "secondary", evidenceFamily: "MEDIA" };
+    }
+    return { sourceCategory: "search-result", evidenceFamily: "SEARCH" };
 }
 
 async function fetchJson<T>(
@@ -730,7 +784,40 @@ const serperSearch: SearchAdapter = async (query, config, fetcher) => {
         });
     }
     return rows.slice(0, 5).flatMap((item, index) => {
-        const value = source("Serper", item.title, item.link, item.snippet, item.date, 75 - index);
+        const value = source("Serper", item.title, item.link, item.snippet, item.date, 75 - index, {
+            originalRank: index + 1,
+            retrievalMode: "raw-serp"
+        });
+        return value ? [ value ] : [];
+    });
+};
+
+const exaPeopleSearch: SearchAdapter = async (query, config, fetcher) => {
+    if (!config.exaApiKey) return [];
+    interface Payload {
+        results?: Array<{ title?: string; url?: string; text?: string; highlights?: string[]; publishedDate?: string }>;
+    }
+    const payload = await fetchJson<Payload>(fetcher, "https://api.exa.ai/search", {
+        method: "POST",
+        headers: { "x-api-key": config.exaApiKey, "Content-Type": "application/json" },
+        body: JSON.stringify({
+            query,
+            type: "auto",
+            category: "people",
+            numResults: 5,
+            contents: { highlights: true, text: { maxCharacters: 1_200 } }
+        })
+    });
+    return (payload.results ?? []).flatMap((item, index) => {
+        const value = source(
+            "Exa People",
+            item.title,
+            item.url,
+            item.highlights?.join(" ") || item.text,
+            item.publishedDate,
+            79 - index,
+            { originalRank: index + 1, retrievalMode: "semantic" }
+        );
         return value ? [ value ] : [];
     });
 };
@@ -747,7 +834,10 @@ const braveSearch: SearchAdapter = async (query, config, fetcher) => {
         headers: { "X-Subscription-Token": config.braveApiKey }
     });
     return (payload.web?.results ?? []).flatMap((item, index) => {
-        const value = source("Brave Search", item.title, item.url, item.description, item.age, 74 - index);
+        const value = source("Brave Search", item.title, item.url, item.description, item.age, 74 - index, {
+            originalRank: index + 1,
+            retrievalMode: "raw-serp"
+        });
         return value ? [ value ] : [];
     });
 };
@@ -770,7 +860,10 @@ const tavilySearch: SearchAdapter = async (query, config, fetcher) => {
         })
     }, TAVILY_PROVIDER_TIMEOUT_MS);
     return (payload.results ?? []).flatMap((item, index) => {
-        const value = source("Tavily", item.title, item.url, item.content, item.published_date, 74 + (item.score ?? 0) - index);
+        const value = source("Tavily", item.title, item.url, item.content, item.published_date, 74 + (item.score ?? 0) - index, {
+            originalRank: index + 1,
+            retrievalMode: "semantic"
+        });
         return value ? [ value ] : [];
     });
 };
@@ -789,10 +882,39 @@ const jinaSearch: SearchAdapter = async (query, config, fetcher) => {
         }
     });
     return (payload.data ?? []).flatMap((item, index) => {
-        const value = source("Jina Search", item.title, item.url, item.description || item.content, item.publishedTime, 73 - index);
+        const value = source("Jina Search", item.title, item.url, item.description || item.content, item.publishedTime, 73 - index, {
+            originalRank: index + 1,
+            retrievalMode: "semantic"
+        });
         return value ? [ value ] : [];
     });
 };
+
+/**
+ * Read only a small number of already-selected pages. Jina is deliberately a
+ * page reader here, not a second answer generator: the writer still receives
+ * claims and source metadata rather than Jina's raw page as an instruction.
+ */
+export async function readReadWeavePageWithJina(
+    url: string,
+    options: { fetcher?: FetchLike } = {}
+): Promise<string> {
+    const config = getReadWeaveSearchRuntimeConfig();
+    if (!config.jinaApiKey) return "";
+    const normalizedUrl = safeUrl(url);
+    if (!normalizedUrl) return "";
+    const fetcher = options.fetcher ?? fetch;
+    const response = await fetcher(`https://r.jina.ai/${normalizedUrl}`, {
+        headers: {
+            "Accept": "text/plain",
+            "Authorization": `Bearer ${config.jinaApiKey}`,
+            "X-Return-Format": "markdown"
+        },
+        signal: AbortSignal.timeout(12_000)
+    });
+    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
+    return plainText(await response.text(), 8_000);
+}
 
 function isCurrentQuery(query: string): boolean {
     return /(?:当前|目前|现任|最新|截至|今天|现在|版本|价格|发布|维护|状态|current|latest|today|now|20[2-9]\d)/iu.test(query);
@@ -884,7 +1006,7 @@ function deduplicateAndRank(sources: ReadWeaveSearchSource[], query: string): Re
     const personTokens = latinPerson?.split(/\s+/u).filter(Boolean) ?? [];
     return sources
         .filter(item => item.title && item.url)
-        .map(item => {
+        .map((item, index) => {
             let authority = item.score;
             const evidenceText = `${item.title}\n${item.snippet}\n${item.publishedAt ?? ""}`;
             if (latinPerson) {
@@ -925,7 +1047,15 @@ function deduplicateAndRank(sources: ReadWeaveSearchSource[], query: string): Re
                 else if (latestYear >= currentYear - 3) authority += 5;
                 else if (latestYear > 0 && latestYear <= currentYear - 6) authority -= 10;
             }
-            return { ...item, score: authority };
+            const classification = classifySearchSource(item, query);
+            if (personProfile && classification.sourceCategory === "first-party-personal") authority += 24;
+            if (personProfile && classification.evidenceFamily === "SELF") authority += 6;
+            return {
+                ...item,
+                ...classification,
+                originalRank: item.originalRank ?? index + 1,
+                score: authority
+            };
         })
         .toSorted((left, right) => right.score - left.score)
         .filter(item => {
@@ -1044,6 +1174,7 @@ async function searchUncached(input: SearchInput, fetcher: FetchLike): Promise<R
         && (input.forcePaidFallback === true || isFreshnessSensitiveQuery(query) || sources.length < 2 || config.mode === "always");
     if (needsGeneralSearch) {
         const focusedQuery = buildFocusedGeneralSearchQuery(query);
+        const personProfile = isPersonProfileQuery(query);
         const paidFallbacks: Array<[string, SearchAdapter, number, boolean]> = [
             // Tavily's Researcher plan has a monthly free quota and pay-as-you-go
             // is off by default. Exhaustion therefore fails closed rather than billing.
@@ -1052,21 +1183,46 @@ async function searchUncached(input: SearchInput, fetcher: FetchLike): Promise<R
             [ "Brave Search", braveSearch, 0.005 * CNY_PER_USD, !!config.braveApiKey ],
             [ "Jina Search", jinaSearch, 0.001 * CNY_PER_USD, !!config.jinaApiKey ]
         ];
-        for (const [ name, adapter, estimatedCost, configured ] of paidFallbacks) {
-            if (!configured || searchCostCny + estimatedCost > config.budgetCny) continue;
-            const fallback = await runAdapter(name, adapter, focusedQuery, config, fetcher);
-            // A metered search request can be billable even when it returns no
-            // rows. Account for the request when it is sent rather than only
-            // when it succeeds, otherwise a chain of empty fallbacks can hide
-            // real cost from the per-generation budget gate.
-            searchCostCny += estimatedCost;
-            if (fallback.warning) warnings.push(fallback.warning);
-            if (fallback.sources.length > 0) {
-                // Re-rank from raw adapter scores. Re-ranking the already ranked
-                // free rows would apply authority and entity boosts twice and
-                // could keep a stale generic result above a direct current one.
-                sources = deduplicateAndRank([ ...freeSources, ...fallback.sources ], query);
-                break;
+        if (personProfile && config.exaApiKey) {
+            const serper = paidFallbacks.find(([ name ]) => name === "Serper");
+            const personAdapters: Array<[string, SearchAdapter, number]> = [
+                ...(serper && serper[3] ? [ [ serper[0], serper[1], serper[2] ] as [string, SearchAdapter, number] ] : []),
+                [ "Exa People", exaPeopleSearch, 0.007 * CNY_PER_USD ]
+            ];
+            const affordable = personAdapters.filter(([, , estimatedCost]) => searchCostCny + estimatedCost <= config.budgetCny);
+            if (affordable.length === 0) {
+                warnings.push("Exa 人物搜索因本次搜索预算不足而跳过");
+            } else {
+                if (affordable.length < personAdapters.length) warnings.push("部分人物搜索源因本次搜索预算不足而跳过");
+                const results = await Promise.all(affordable.map(async ([ name, adapter, estimatedCost ]) => ({
+                    name,
+                    estimatedCost,
+                    result: await runAdapter(name, adapter, focusedQuery, config, fetcher)
+                })));
+                searchCostCny += results.reduce((sum, item) => sum + item.estimatedCost, 0);
+                results.forEach(item => {
+                    if (item.result.warning) warnings.push(item.result.warning);
+                });
+                const paidSources = results.flatMap(item => item.result.sources);
+                if (paidSources.length > 0) sources = deduplicateAndRank([ ...freeSources, ...paidSources ], query);
+            }
+        } else {
+            for (const [ name, adapter, estimatedCost, configured ] of paidFallbacks) {
+                if (!configured || searchCostCny + estimatedCost > config.budgetCny) continue;
+                const fallback = await runAdapter(name, adapter, focusedQuery, config, fetcher);
+                // A metered search request can be billable even when it returns no
+                // rows. Account for the request when it is sent rather than only
+                // when it succeeds, otherwise a chain of empty fallbacks can hide
+                // real cost from the per-generation budget gate.
+                searchCostCny += estimatedCost;
+                if (fallback.warning) warnings.push(fallback.warning);
+                if (fallback.sources.length > 0) {
+                    // Re-rank from raw adapter scores. Re-ranking the already ranked
+                    // free rows would apply authority and entity boosts twice and
+                    // could keep a stale generic result above a direct current one.
+                    sources = deduplicateAndRank([ ...freeSources, ...fallback.sources ], query);
+                    break;
+                }
             }
         }
     }
@@ -1102,6 +1258,7 @@ export async function searchReadWeaveEvidence(
         mode: config.mode,
         providers: [
             !!config.serperApiKey,
+            !!config.exaApiKey,
             !!config.tavilyApiKey,
             !!config.braveApiKey,
             !!config.jinaApiKey,
@@ -1207,7 +1364,16 @@ export async function testReadWeaveSearch(query: string): Promise<ReadWeaveSearc
         elapsedMs: evidence.elapsedMs,
         cacheHit: evidence.cacheHit,
         searchCostCny: evidence.searchCostCny,
-        sources: evidence.sources.map(({ provider, title, url, snippet }) => ({ provider, title, url, snippet })),
+        sources: evidence.sources.map(({ provider, title, url, snippet, originalRank, sourceCategory, evidenceFamily, retrievalMode }) => ({
+            provider,
+            title,
+            url,
+            snippet,
+            originalRank,
+            sourceCategory,
+            evidenceFamily,
+            retrievalMode
+        })),
         warnings: evidence.warnings
     };
 }

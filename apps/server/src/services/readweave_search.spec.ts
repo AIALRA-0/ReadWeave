@@ -5,6 +5,7 @@ import {
     buildFocusedGeneralSearchQuery,
     buildReadWeaveSearchVariants,
     clearReadWeaveSearchCacheForTests,
+    readReadWeavePageWithJina,
     searchReadWeaveEvidence
 } from "./readweave_search.js";
 import { updateReadWeaveAiSettings } from "./readweave_settings.js";
@@ -27,7 +28,9 @@ describe("ReadWeave free-source search", () => {
                 searchBudgetCny: 0.009,
                 clearSerperApiKey: true,
                 clearTavilyApiKey: true,
-                clearBraveApiKey: true
+                clearBraveApiKey: true,
+                clearJinaApiKey: true,
+                clearExaApiKey: true
             });
         });
     });
@@ -56,6 +59,102 @@ describe("ReadWeave free-source search", () => {
 
         expect(query).toMatch(/^"Moongon Jung"/u);
         expect(query).toContain("researcher profile current affiliation");
+    });
+
+    it("admits a first-party personal homepage instead of dropping non-edu domains", async () => {
+        cls.init(() => {
+            updateReadWeaveAiSettings({
+                baseUrl: "https://api.deepseek.com",
+                model: "deepseek-v4-flash",
+                searchMode: "automatic",
+                searchBudgetCny: 0.009,
+                serperApiKey: "serper-test-key"
+            });
+        });
+        const fetcher = vi.fn(async (input: string | URL | globalThis.Request) => {
+            const url = input.toString();
+            if (url.includes("google.serper.dev")) {
+                return Response.json({ organic: [ {
+                    title: "Wuxi Li - Homepage",
+                    link: "https://wuxili.net/",
+                    snippet: "Wuxi Li Principal Software Engineer at AMD/Xilinx"
+                } ] });
+            }
+            if (url.includes("wikipedia.org")) return Response.json({ query: { pages: {} } });
+            if (url.includes("api.openalex.org/authors")) return Response.json({ results: [] });
+            if (url.includes("pub.orcid.org")) return Response.json({});
+            throw new Error(`Unexpected URL ${url}`);
+        }) as unknown as typeof fetch;
+
+        const result = await cls.init(() => searchReadWeaveEvidence({
+            query: "Wuxi Li researcher profile current affiliation",
+            kind: "question",
+            force: true
+        }, { fetcher, bypassCache: true }));
+
+        expect(result.sources[0]).toMatchObject({
+            url: "https://wuxili.net/",
+            sourceCategory: "first-party-personal",
+            evidenceFamily: "SELF",
+            originalRank: 1,
+            retrievalMode: "raw-serp"
+        });
+    });
+
+    it("runs Exa beside Serper for people only when the configured budget allows it", async () => {
+        cls.init(() => {
+            updateReadWeaveAiSettings({
+                baseUrl: "https://api.deepseek.com",
+                model: "deepseek-v4-flash",
+                searchMode: "automatic",
+                searchBudgetCny: 0.06,
+                serperApiKey: "serper-test-key",
+                exaApiKey: "exa-test-key"
+            });
+        });
+        const requested: string[] = [];
+        const fetcher = vi.fn(async (input: string | URL | globalThis.Request) => {
+            const url = input.toString();
+            requested.push(url);
+            if (url.includes("google.serper.dev")) return Response.json({ organic: [ {
+                title: "Wuxi Li - Homepage", link: "https://wuxili.net/", snippet: "Wuxi Li AMD/Xilinx"
+            } ] });
+            if (url.includes("api.exa.ai/search")) return Response.json({ results: [ {
+                title: "Wuxi Li personal site", url: "https://wuxili.net/", text: "Wuxi Li AMD/Xilinx"
+            } ] });
+            if (url.includes("wikipedia.org")) return Response.json({ query: { pages: {} } });
+            if (url.includes("api.openalex.org/authors")) return Response.json({ results: [] });
+            if (url.includes("pub.orcid.org")) return Response.json({});
+            throw new Error(`Unexpected URL ${url}`);
+        }) as unknown as typeof fetch;
+
+        const result = await cls.init(() => searchReadWeaveEvidence({
+            query: "Wuxi Li researcher profile current affiliation",
+            kind: "question",
+            force: true
+        }, { fetcher, bypassCache: true }));
+
+        expect(requested.some(url => url.includes("google.serper.dev"))).toBe(true);
+        expect(requested.some(url => url.includes("api.exa.ai/search"))).toBe(true);
+        expect(result.providers).toContain("Exa People");
+        expect(result.searchCostCny).toBeCloseTo(0.0576, 4);
+    });
+
+    it("uses Jina as a page reader and preserves page text separately from search ranking", async () => {
+        cls.init(() => {
+            updateReadWeaveAiSettings({
+                baseUrl: "https://api.deepseek.com",
+                model: "deepseek-v4-flash",
+                jinaApiKey: "jina-test-key"
+            });
+        });
+        const fetcher = vi.fn(async (input: string | URL | globalThis.Request) => {
+            expect(input.toString()).toBe("https://r.jina.ai/https://wuxili.net/");
+            return new Response("# Wuxi Li\nPrincipal Software Engineer at AMD/Xilinx", { status: 200 });
+        }) as unknown as typeof fetch;
+
+        await expect(readReadWeavePageWithJina("https://wuxili.net/", { fetcher }))
+            .resolves.toContain("Principal Software Engineer at AMD/Xilinx");
     });
 
     it("focuses a definition lookup on the official meaning instead of nearby publications", () => {

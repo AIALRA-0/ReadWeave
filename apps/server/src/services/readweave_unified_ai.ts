@@ -29,7 +29,7 @@ import {
 } from "./readweave_domain_policy.js";
 import { selectReadWeaveContext } from "./readweave_engine.js";
 import { NonRetryableReadWeaveError } from "./readweave_errors.js";
-import { searchReadWeaveEvidence } from "./readweave_search.js";
+import { readReadWeavePageWithJina, searchReadWeaveEvidence } from "./readweave_search.js";
 import {
     getReadWeaveRuntimeConfig,
     type ReadWeaveModelRuntimeConfig
@@ -699,17 +699,39 @@ async function _gatherExternalEvidence(
     focusedResults.flatMap(result => result.sources)
         .toSorted((left, right) => right.score - left.score)
         .forEach(addSource);
+    const pageReadingNeeded = /(?:是谁|人物|任职|背景|履历|现任|目前|最新|profile|biograph|current affiliation)/iu.test(contract.normalizedQuestion)
+        || selected.some(source => source.sourceCategory === "first-party-personal");
+    const pageCandidates = pageReadingNeeded
+        ? selected.filter(source => source.url && source.snippet.length < 900).slice(0, 3)
+        : [];
+    const pageReads = await Promise.all(pageCandidates.map(async source => {
+        try {
+            const content = await readReadWeavePageWithJina(source.url);
+            return { url: source.url, content };
+        } catch (error) {
+            return { url: source.url, content: "", warning: `Jina Reader：${error instanceof Error ? error.message : "页面读取失败"}` };
+        }
+    }));
+    const pageByUrl = new Map(pageReads.map(item => [ item.url, item ]));
     const accessedAt = new Date().toISOString();
-    const sources = selected.map((source, index) => ({
+    const sources = selected.map((source, index) => {
+        const page = pageByUrl.get(source.url);
+        return {
         sourceId: `S${index + 1}`,
         sourceType: "external" as const,
         provider: source.provider,
         title: source.title,
         url: source.url,
-        excerpt: cleanText(source.snippet, 1_200),
+        excerpt: cleanText(page?.content || source.snippet, 1_200),
         publishedAt: source.publishedAt,
-        accessedAt
-    }));
+        accessedAt,
+        sourceCategory: source.sourceCategory,
+        evidenceFamily: source.evidenceFamily,
+        originalRank: source.originalRank,
+        rerankScore: source.score,
+        retrievalMode: page?.content ? "page-reader" as const : source.retrievalMode
+        };
+    });
     return {
         sources,
         queries,
@@ -718,6 +740,7 @@ async function _gatherExternalEvidence(
         searchCostCny: focusedResults.reduce((sum, result) => sum + result.searchCostCny, 0),
         warnings: Array.from(new Set([
             ...focusedResults.flatMap(result => result.warnings),
+            ...pageReads.flatMap(item => item.warning ? [ item.warning ] : []),
             ...(relevanceRejected > 0 ? [ `已丢弃 ${relevanceRejected} 个与问题主体不匹配的搜索结果` ] : [])
         ]))
     };
@@ -727,7 +750,8 @@ function evidenceBlock(sources: ReadWeaveEvidenceSource[], excerptMaximum = 900)
     return sources.map(source => [
         `[${source.sourceId}] ${source.title}`,
         `来源类型：${source.sourceType}；提供方：${source.provider}${source.publishedAt ? `；日期：${source.publishedAt}` : ""}`,
-        `来源属性：权威级别=${source.authority ?? "未分类"}；事实类型=${source.claimTypes?.join("、") || "未分类"}；时间范围=${source.timeScope ?? "未分类"}`,
+        `来源属性：类别=${source.sourceCategory ?? "未分类"}；证据家族=${source.evidenceFamily ?? "未分类"}；权威级别=${source.authority ?? "未分类"}；事实类型=${source.claimTypes?.join("、") || "未分类"}；时间范围=${source.timeScope ?? "未分类"}`,
+        source.originalRank ? `原始搜索排名：${source.originalRank}；系统重排分数：${source.rerankScore ?? "未记录"}` : "",
         source.url ? `URL：${source.url}` : "",
         `证据摘录：${source.excerpt.slice(0, excerptMaximum)}`
     ].filter(Boolean).join("\n")).join("\n\n");

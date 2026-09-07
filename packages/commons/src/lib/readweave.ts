@@ -216,7 +216,12 @@ export interface ReadWeaveEvidenceSource {
     excerpt: string;
     publishedAt?: string;
     accessedAt: string;
-    authority?: "official" | "standard" | "publisher" | "index" | "secondary" | "local";
+    authority?: "official" | "standard" | "publisher" | "index" | "first-party" | "secondary" | "local";
+    sourceCategory?: "first-party-personal" | "official-profile" | "institution" | "conference" | "registry" | "academic-index" | "secondary" | "search-result";
+    evidenceFamily?: "SELF" | "EMPLOYER" | "INSTITUTION" | "CONFERENCE" | "REGISTRY" | "ACADEMIC" | "MEDIA" | "SEARCH";
+    originalRank?: number;
+    rerankScore?: number;
+    retrievalMode?: "structured" | "raw-serp" | "semantic" | "page-reader";
     claimTypes?: string[];
     timeScope?: "current" | "historical" | "undated";
 }
@@ -581,6 +586,8 @@ export interface ReadWeaveAiSettings {
         maskedBraveApiKey?: string;
         hasJinaApiKey: boolean;
         maskedJinaApiKey?: string;
+        hasExaApiKey: boolean;
+        maskedExaApiKey?: string;
         hasSemanticScholarApiKey: boolean;
         maskedSemanticScholarApiKey?: string;
         hasOpenAlexApiKey: boolean;
@@ -610,6 +617,8 @@ export interface ReadWeaveAiSettingsUpdate {
     clearBraveApiKey?: boolean;
     jinaApiKey?: string;
     clearJinaApiKey?: boolean;
+    exaApiKey?: string;
+    clearExaApiKey?: boolean;
     semanticScholarApiKey?: string;
     clearSemanticScholarApiKey?: boolean;
     openAlexApiKey?: string;
@@ -630,6 +639,10 @@ export interface ReadWeaveSearchTestResult {
         title: string;
         url: string;
         snippet: string;
+        originalRank?: number;
+        sourceCategory?: string;
+        evidenceFamily?: string;
+        retrievalMode?: string;
     }>;
     warnings: string[];
 }

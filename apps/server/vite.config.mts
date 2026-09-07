@@ -39,6 +39,7 @@ export default defineConfig(() => ({
       TAVILY_API_KEY: process.env.TAVILY_API_KEY ?? "",
       BRAVE_SEARCH_API_KEY: process.env.BRAVE_SEARCH_API_KEY ?? "",
       JINA_API_KEY: process.env.JINA_API_KEY ?? "",
+      EXA_API_KEY: process.env.EXA_API_KEY ?? "",
       SEMANTIC_SCHOLAR_API_KEY: process.env.SEMANTIC_SCHOLAR_API_KEY ?? "",
       OPENALEX_API_KEY: process.env.OPENALEX_API_KEY ?? "",
       UNPAYWALL_EMAIL: process.env.UNPAYWALL_EMAIL ?? ""

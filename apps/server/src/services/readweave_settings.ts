@@ -28,6 +28,7 @@ type ReadWeaveSecretOptionName =
     | "readWeaveTavilyApiKey"
     | "readWeaveBraveApiKey"
     | "readWeaveJinaApiKey"
+    | "readWeaveExaApiKey"
     | "readWeaveSemanticScholarApiKey"
     | "readWeaveOpenAlexApiKey"
     | "readWeaveUnpaywallEmail";
@@ -39,6 +40,7 @@ export interface ReadWeaveSearchRuntimeConfig {
     tavilyApiKey?: string;
     braveApiKey?: string;
     jinaApiKey?: string;
+    exaApiKey?: string;
     semanticScholarApiKey?: string;
     openAlexApiKey?: string;
     unpaywallEmail?: string;
@@ -154,6 +156,7 @@ export function getReadWeaveSearchRuntimeConfig(): ReadWeaveSearchRuntimeConfig 
         tavilyApiKey: storedOrEnvironment("readWeaveTavilyApiKey", "TAVILY_API_KEY"),
         braveApiKey: storedOrEnvironment("readWeaveBraveApiKey", "BRAVE_SEARCH_API_KEY"),
         jinaApiKey: storedOrEnvironment("readWeaveJinaApiKey", "JINA_API_KEY"),
+        exaApiKey: storedOrEnvironment("readWeaveExaApiKey", "EXA_API_KEY"),
         semanticScholarApiKey: storedOrEnvironment("readWeaveSemanticScholarApiKey", "SEMANTIC_SCHOLAR_API_KEY"),
         openAlexApiKey: storedOrEnvironment("readWeaveOpenAlexApiKey", "OPENALEX_API_KEY"),
         unpaywallEmail: storedOrEnvironment("readWeaveUnpaywallEmail", "UNPAYWALL_EMAIL")
@@ -241,6 +244,8 @@ export function getReadWeaveAiSettings(): ReadWeaveAiSettings {
             maskedBraveApiKey: search.braveApiKey ? maskApiKey(search.braveApiKey) : undefined,
             hasJinaApiKey: !!search.jinaApiKey,
             maskedJinaApiKey: search.jinaApiKey ? maskApiKey(search.jinaApiKey) : undefined,
+            hasExaApiKey: !!search.exaApiKey,
+            maskedExaApiKey: search.exaApiKey ? maskApiKey(search.exaApiKey) : undefined,
             hasSemanticScholarApiKey: !!search.semanticScholarApiKey,
             maskedSemanticScholarApiKey: search.semanticScholarApiKey ? maskApiKey(search.semanticScholarApiKey) : undefined,
             hasOpenAlexApiKey: !!search.openAlexApiKey,
@@ -297,6 +302,7 @@ export function updateReadWeaveAiSettings(request: ReadWeaveAiSettingsUpdate): R
     updateOptionalSecret(request, "tavilyApiKey", "clearTavilyApiKey", "readWeaveTavilyApiKey", "Tavily API key");
     updateOptionalSecret(request, "braveApiKey", "clearBraveApiKey", "readWeaveBraveApiKey", "Brave Search API key");
     updateOptionalSecret(request, "jinaApiKey", "clearJinaApiKey", "readWeaveJinaApiKey", "Jina API key");
+    updateOptionalSecret(request, "exaApiKey", "clearExaApiKey", "readWeaveExaApiKey", "Exa API key");
     updateOptionalSecret(request, "semanticScholarApiKey", "clearSemanticScholarApiKey", "readWeaveSemanticScholarApiKey", "Semantic Scholar API key");
     updateOptionalSecret(request, "openAlexApiKey", "clearOpenAlexApiKey", "readWeaveOpenAlexApiKey", "OpenAlex API key");
     if (request.clearUnpaywallEmail) {

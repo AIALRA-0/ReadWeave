@@ -53,6 +53,19 @@ describe("ReadWeave domain policy framework", () => {
         expect(education.timeScope).toBe("historical");
     });
 
+    it("preserves first-party personal evidence as self-reported instead of treating it as an independent employer source", () => {
+        const enriched = enrichReadWeaveEvidenceSource(source({
+            sourceCategory: "first-party-personal",
+            evidenceFamily: "SELF",
+            title: "Wuxi Li - Homepage",
+            excerpt: "Principal Software Engineer at AMD/Xilinx"
+        }));
+
+        expect(enriched.authority).toBe("first-party");
+        expect(enriched.evidenceFamily).toBe("SELF");
+        expect(enriched.sourceCategory).toBe("first-party-personal");
+    });
+
     it("labels claims from the cited evidence instead of inferring current role from education", () => {
         const profile = buildReadWeaveDomainProfile(request("wuxili 是谁？"), "wuxili 是谁？");
         const education = enrichReadWeaveEvidenceSource(source({

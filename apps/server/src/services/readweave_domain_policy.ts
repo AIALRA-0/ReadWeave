@@ -6,16 +6,19 @@ import type {
     ReadWeaveGenerateRequest
 } from "@triliumnext/commons";
 
-const PERSON_PATTERN = /(?:是谁|是何人|人物|个人简介|现任|任职|履历|背景|who\s+is|biograph)/iu;
-const DEFINITION_PATTERN = /(?:是什么|是啥|啥是|含义|定义|指什么|什么意思|meaning|definition)/iu;
+const PERSON_PATTERN = /(?:是谁|谁是|是何人|人物|个人简介|现任|任职|履历|背景|who\s+is|who\s+was|biograph)/iu;
+const DEFINITION_PATTERN = /(?:是什么|什么是|是啥|啥是|含义|定义|指什么|什么意思|meaning|definition)/iu;
 const CURRENT_PATTERN = /(?:现在|目前|现任|最新|当前|截至|today|current|latest|present|version)/iu;
-const BIBLIOGRAPHIC_PATTERN = /(?:doi|论文|文章|报告|规范|标准|出处|引用|期刊|会议|doi)/iu;
+const BIBLIOGRAPHIC_PATTERN = /(?:论文|文章|报告|规范|标准|出处|引用|期刊|会议|\b10\.\d{4,9}\/[\w.()/:;-]+\b)/iu;
 const PROCEDURE_PATTERN = /(?:如何|怎么|怎样|步骤|流程|配置|安装|操作|使用|procedure|how\s+to)/iu;
-const COMPARISON_PATTERN = /(?:区别|比较|差异|不同|优缺点|compare|difference)/iu;
-const CALCULATION_PATTERN = /(?:计算|多少|相差|增幅|降幅|公式|概率|calculate|formula)/iu;
+const COMPARISON_PATTERN = /(?:区别|比较|差异|不同|优缺点|取舍|相比|compare|difference|tradeoff)/iu;
+const CALCULATION_PATTERN = /(?:计算|多少|相差|增幅|降幅|百分比|算对|输入数据|求结果|公式|概率|calculate|formula)/iu;
 
 function sourceAuthority(source: ReadWeaveEvidenceSource): NonNullable<ReadWeaveEvidenceSource["authority"]> {
     if (source.sourceType === "local") return "local";
+    if (source.sourceCategory === "first-party-personal") return "first-party";
+    if (source.sourceCategory === "official-profile" || source.sourceCategory === "institution") return "official";
+    if (source.sourceCategory === "registry") return "index";
     const provider = `${source.provider} ${source.title}`.toLocaleLowerCase();
     if (/(?:official|官方|university|大学|kernel documentation|api docs|standard)/u.test(provider)) return "official";
     if (/(?:crossref|doi|publisher|dblp|semantic scholar|europe pmc|arxiv)/u.test(provider)) return "publisher";
@@ -66,7 +69,11 @@ export function buildReadWeaveDomainProfile(
     if (CALCULATION_PATTERN.test(text)) domains.push("calculation");
     if (domains.length === 0) domains.push("general");
     if (domains.includes("identity") && !domains.includes("current-status")) domains.push("current-status");
-    const primaryDomain = domains[0] ?? "general";
+    // Explicit object identity and bibliographic requests outrank the generic
+    // “是什么” wording. Otherwise “这篇论文的 DOI 是什么” is routed as a
+    // definition merely because it contains the phrase “是什么”.
+    const primaryDomain = ([ "identity", "bibliographic", "comparison", "calculation", "procedure", "definition", "current-status", "general" ] as ReadWeaveDomain[])
+        .find(domain => domains.includes(domain)) ?? "general";
     const freshness = domains.includes("current-status")
         ? "current"
         : /(?:曾经|历史|当时|过去|historical|former)/iu.test(text) ? "historical" : "unknown";

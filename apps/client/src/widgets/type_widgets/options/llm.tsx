@@ -88,6 +88,7 @@ function ReadWeaveSettings() {
         tavilyApiKey: "",
         braveApiKey: "",
         jinaApiKey: "",
+        exaApiKey: "",
         semanticScholarApiKey: "",
         openAlexApiKey: "",
         unpaywallEmail: ""
@@ -141,6 +142,7 @@ function ReadWeaveSettings() {
                     clearTavilyApiKey: true,
                     clearBraveApiKey: true,
                     clearJinaApiKey: true,
+                    clearExaApiKey: true,
                     clearSemanticScholarApiKey: true,
                     clearOpenAlexApiKey: true,
                     clearUnpaywallEmail: true
@@ -161,6 +163,7 @@ function ReadWeaveSettings() {
                 tavilyApiKey: "",
                 braveApiKey: "",
                 jinaApiKey: "",
+                exaApiKey: "",
                 semanticScholarApiKey: "",
                 openAlexApiKey: "",
                 unpaywallEmail: ""
@@ -345,14 +348,30 @@ function ReadWeaveSettings() {
                     data-testid="readweave-math-shortcut"
                 />
             </OptionsRow>
+            <div className="d-flex align-items-center justify-content-between gap-2 mb-2">
+                <div>
+                    <h6 className="mb-0">搜索服务</h6>
+                    <small className="text-muted">Serper 用于通用搜索，Exa 用于人物主页，Jina 用于提取已选页面正文</small>
+                </div>
+                <button
+                    type="button"
+                    className="btn btn-primary"
+                    disabled={busy}
+                    onClick={() => saveSettings(false)}
+                    data-testid="readweave-search-settings-save"
+                >
+                    保存搜索配置
+                </button>
+            </div>
             <details>
-                <summary className="mb-3">{t("readweave_settings.search_keys_title")}</summary>
+                <summary className="mb-3">{t("readweave_settings.search_keys_title")}（点击展开）</summary>
                 <p className="form-text">{t("readweave_settings.search_keys_description")}</p>
                 {([
                     [ "serperApiKey", "Serper", settings?.search.hasSerperApiKey, settings?.search.maskedSerperApiKey, "readweave-serper-api-key" ],
                     [ "tavilyApiKey", "Tavily", settings?.search.hasTavilyApiKey, settings?.search.maskedTavilyApiKey, "readweave-tavily-api-key" ],
                     [ "braveApiKey", "Brave Search", settings?.search.hasBraveApiKey, settings?.search.maskedBraveApiKey, "readweave-brave-api-key" ],
                     [ "jinaApiKey", "Jina", settings?.search.hasJinaApiKey, settings?.search.maskedJinaApiKey, "readweave-jina-api-key" ],
+                    [ "exaApiKey", "Exa", settings?.search.hasExaApiKey, settings?.search.maskedExaApiKey, "readweave-exa-api-key" ],
                     [ "semanticScholarApiKey", "Semantic Scholar", settings?.search.hasSemanticScholarApiKey, settings?.search.maskedSemanticScholarApiKey, "readweave-semantic-scholar-api-key" ],
                     [ "openAlexApiKey", "OpenAlex", settings?.search.hasOpenAlexApiKey, settings?.search.maskedOpenAlexApiKey, "readweave-openalex-api-key" ],
                     [ "unpaywallEmail", "Unpaywall Email", settings?.search.hasUnpaywallEmail, settings?.search.maskedUnpaywallEmail, "readweave-unpaywall-email" ]
