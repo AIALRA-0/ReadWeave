@@ -608,7 +608,14 @@ test("ReadWeave supports read-only questions without changing the article", asyn
     const firstParagraph = "第一段包含 CDC 作为背景，但不是本次选区。";
     const secondParagraph = "第二段再次出现 CDC，需要恢复第二处。";
     const title = uniqueTitle("ReadWeave E2E · Read-only interaction");
+    const noteDataSave = page.waitForResponse(response => {
+        const url = new URL(response.url());
+        return response.request().method() === "PUT"
+            && /^\/api\/notes\/[^/]+\/data$/u.test(url.pathname)
+            && response.ok();
+    }, { timeout: 30_000 });
     await createTextNote(app, title, `${firstParagraph}\n\n${secondParagraph}`);
+    await noteDataSave;
     const noteId = await page.evaluate(() => (window as unknown as {
         glob: { appContext: { tabManager: { getActiveContext: () => { noteId: string } } } }
     }).glob.appContext.tabManager.getActiveContext().noteId);
