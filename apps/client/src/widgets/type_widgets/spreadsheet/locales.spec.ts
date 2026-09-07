@@ -34,9 +34,9 @@ describe("UNIVER_LOCALES", () => {
             const modules = await source.load();
 
             // Every preset bundle must resolve to a non-empty translation object.
-            expect(modules, id).toHaveLength(SPREADSHEET_PRESET_PACKAGES.length);
+            expect(modules, String(id)).toHaveLength(SPREADSHEET_PRESET_PACKAGES.length);
             for (const module of modules) {
-                expect(Object.keys(module.default).length, id).toBeGreaterThan(0);
+                expect(Object.keys(module.default).length, String(id)).toBeGreaterThan(0);
             }
         }
     });

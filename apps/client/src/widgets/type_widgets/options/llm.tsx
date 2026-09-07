@@ -80,7 +80,7 @@ function ReadWeaveSettings() {
     const [verifierBaseUrl, setVerifierBaseUrl] = useState("");
     const [verifierModel, setVerifierModel] = useState("");
     const [verifierApiKey, setVerifierApiKey] = useState("");
-    const [searchMode, setSearchMode] = useState<ReadWeaveAiSettings["searchMode"]>("automatic");
+    const [searchMode, setSearchMode] = useState<ReadWeaveAiSettings["searchMode"]>("always");
     const [searchBudgetCny, setSearchBudgetCny] = useState("0.009");
     const [mathShortcut, setMathShortcut] = useState("Alt+=");
     const [searchKeys, setSearchKeys] = useState({
@@ -112,7 +112,7 @@ function ReadWeaveSettings() {
             setSettings(value);
             setBaseUrl(value.baseUrl);
             setModel(value.model);
-            setSearchMode(value.searchMode);
+            setSearchMode(value.searchMode === "off" ? "off" : "always");
             setSearchBudgetCny(value.searchBudgetCny.toString());
             setMathShortcut(value.mathShortcut);
             setVerifierBaseUrl(value.verifier.baseUrl);
@@ -151,7 +151,7 @@ function ReadWeaveSettings() {
             setSettings(value);
             setBaseUrl(value.baseUrl);
             setModel(value.model);
-            setSearchMode(value.searchMode);
+            setSearchMode(value.searchMode === "off" ? "off" : "always");
             setSearchBudgetCny(value.searchBudgetCny.toString());
             setMathShortcut(value.mathShortcut);
             setVerifierBaseUrl(value.verifier.baseUrl);
@@ -183,7 +183,7 @@ function ReadWeaveSettings() {
         setSearchResult(undefined);
         try {
             if (Object.values(searchKeys).some(value => value.trim())
-                || searchMode !== settings?.searchMode
+                || searchMode !== (settings?.searchMode === "off" ? "off" : "always")
                 || Number.parseFloat(searchBudgetCny) !== settings?.searchBudgetCny) {
                 await saveSettings(false);
             }
@@ -312,20 +312,14 @@ function ReadWeaveSettings() {
             </p>
             <hr />
             <h5>{t("readweave_settings.search_title")}</h5>
-            <p className="form-text">{t("readweave_settings.search_description", {
-                providers: settings?.search.freeProviders.join("、") ?? "Crossref、DBLP、OpenAlex、Semantic Scholar"
-            })}</p>
-            <OptionsRow name="readweave-search-mode" label={t("readweave_settings.search_mode")} description={t("readweave_settings.search_mode_description")} stacked>
-                <select
-                    className="form-select"
-                    value={searchMode}
-                    onChange={event => setSearchMode(event.currentTarget.value as ReadWeaveAiSettings["searchMode"])}
-                    data-testid="readweave-search-mode"
-                >
-                    <option value="automatic">{t("readweave_settings.search_mode_automatic")}</option>
-                    <option value="always">{t("readweave_settings.search_mode_always")}</option>
-                    <option value="off">{t("readweave_settings.search_mode_off")}</option>
-                </select>
+            <p className="form-text">{t("readweave_settings.search_description")}</p>
+            <OptionsRow name="readweave-search-disabled" label={t("readweave_settings.search_disabled")} description={t("readweave_settings.search_disabled_description")} stacked>
+                <input
+                    type="checkbox"
+                    checked={searchMode === "off"}
+                    onChange={event => setSearchMode(event.currentTarget.checked ? "off" : "always")}
+                    data-testid="readweave-search-disabled"
+                />
             </OptionsRow>
             <OptionsRow name="readweave-search-budget" label={t("readweave_settings.search_budget")} description={t("readweave_settings.search_budget_description")} stacked>
                 <input
@@ -350,8 +344,8 @@ function ReadWeaveSettings() {
             </OptionsRow>
             <div className="d-flex align-items-center justify-content-between gap-2 mb-2">
                 <div>
-                    <h6 className="mb-0">搜索服务</h6>
-                    <small className="text-muted">Serper 用于通用搜索，Exa 用于人物主页，Jina 用于提取已选页面正文</small>
+                    <h6 className="mb-0">外部搜索服务</h6>
+                    <small className="text-muted">配置后，ReadWeave 会在后台使用这些服务补充资料</small>
                 </div>
                 <button
                     type="button"
@@ -360,7 +354,7 @@ function ReadWeaveSettings() {
                     onClick={() => saveSettings(false)}
                     data-testid="readweave-search-settings-save"
                 >
-                    保存搜索配置
+                    保存外部搜索配置
                 </button>
             </div>
             <details>

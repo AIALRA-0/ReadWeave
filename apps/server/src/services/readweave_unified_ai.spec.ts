@@ -40,6 +40,10 @@ vi.mock("./readweave_settings.js", () => ({
         model: "deepseek-v4-flash",
         apiKey: "placeholder"
     }),
+    getReadWeaveSearchRuntimeConfig: () => ({
+        mode: "always",
+        budgetCny: 0.009
+    }),
     getReadWeaveVerifierRuntimeConfig: () => verifierConfig.current
 }));
 
@@ -930,7 +934,7 @@ describe("ReadWeave one-pass workflow", () => {
 
     afterEach(() => vi.unstubAllGlobals());
 
-    it("uses one local contract, one writer call and one local check", async () => {
+    it("uses one writer call and one local check with default external evidence", async () => {
         const result = await generateUnifiedReadWeaveAnswer(request("如何工作？"));
         const calls = vi.mocked(fetch).mock.calls.map(([, init]) => {
             const payload = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
@@ -940,8 +944,8 @@ describe("ReadWeave one-pass workflow", () => {
         expect(calls).toHaveLength(1);
         expect(calls[0]).not.toContain("统一问题分析器");
         expect(calls[0]).not.toContain("统一质量审计器");
-        expect(searchMock).not.toHaveBeenCalled();
-        expect(result.audit?.questionContract.searchQueries).toEqual([]);
+        expect(searchMock).toHaveBeenCalled();
+        expect(result.audit?.questionContract.searchQueries.length).toBeGreaterThan(0);
         expect(result.domainProfile).toMatchObject({
             primaryDomain: "procedure",
             risk: "medium"
@@ -949,8 +953,8 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.evidencePack).toMatchObject({
             version: 1,
             localSourceIds: [ "L1", "L2" ],
-            externalSourceIds: [],
-            queryCount: 0
+            externalSourceIds: [ "S1" ],
+            queryCount: 1
         });
         expect(result.audit?.independentVerification).toBe("not-run");
         expect(result.workflow).toMatchObject({

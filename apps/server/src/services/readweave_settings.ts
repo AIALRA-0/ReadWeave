@@ -9,7 +9,7 @@ import { NonRetryableReadWeaveError } from "./readweave_errors.js";
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_MODEL = "deepseek-v4-flash";
-const DEFAULT_SEARCH_MODE = "automatic";
+const DEFAULT_SEARCH_MODE = "always";
 const DEFAULT_SEARCH_BUDGET_CNY = 0.009;
 const MAX_API_KEY_LENGTH = 4_096;
 const FREE_SEARCH_PROVIDERS = [
@@ -113,7 +113,10 @@ function storedOrEnvironment(optionName: ReadWeaveSecretOptionName, environmentN
 
 function searchMode(): ReadWeaveSearchRuntimeConfig["mode"] {
     const value = optionService.getOptionOrNull("readWeaveSearchMode")?.trim();
-    return value === "off" || value === "always" || value === "automatic" ? value : DEFAULT_SEARCH_MODE;
+    // Automatic routing is no longer a user-facing mode.  Treat the old
+    // persisted value as the new default so existing installations also
+    // search by default without a database migration.
+    return value === "off" ? "off" : DEFAULT_SEARCH_MODE;
 }
 
 function searchBudgetCny(): number {
@@ -282,7 +285,7 @@ export function updateReadWeaveAiSettings(request: ReadWeaveAiSettingsUpdate): R
         if (request.searchMode !== "off" && request.searchMode !== "automatic" && request.searchMode !== "always") {
             throw new ValidationError("The ReadWeave search mode is invalid.");
         }
-        optionService.setOption("readWeaveSearchMode", request.searchMode);
+        optionService.setOption("readWeaveSearchMode", request.searchMode === "off" ? "off" : "always");
     }
     if (request.searchBudgetCny !== undefined) {
         if (typeof request.searchBudgetCny !== "number" || !Number.isFinite(request.searchBudgetCny)

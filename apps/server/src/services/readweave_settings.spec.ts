@@ -57,7 +57,7 @@ describe("ReadWeave settings", () => {
                 unpaywallEmail: unpaywallAddress
             });
 
-            expect(settings.searchMode).toBe("automatic");
+            expect(settings.searchMode).toBe("always");
             expect(settings.searchBudgetCny).toBe(0.009);
             expect(settings.search.hasSerperApiKey).toBe(true);
             expect(settings.search.hasExaApiKey).toBe(true);

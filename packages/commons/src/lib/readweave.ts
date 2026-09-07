@@ -148,6 +148,7 @@ export interface ReadWeaveEvidencePackSummary {
 
 export type ReadWeaveExternalSearchReason =
     | "disabled"
+    | "default"
     | "forced"
     | "manual-query"
     | "identity"

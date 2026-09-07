@@ -395,6 +395,14 @@ describe("ReadWeave free-source search", () => {
     });
 
     it("does not search a stable term when its selected local evidence and canonical identity are sufficient", async () => {
+        cls.init(() => {
+            updateReadWeaveAiSettings({
+                baseUrl: "https://api.deepseek.com",
+                model: "deepseek-v4-flash",
+                searchMode: "off",
+                searchBudgetCny: 0.009
+            });
+        });
         const fetcher = vi.fn(async () => {
             throw new Error("Network search should not run");
         }) as unknown as typeof fetch;

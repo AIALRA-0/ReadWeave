@@ -133,8 +133,10 @@ interface Draft {
     questionTitle: string;
     optimizeQuestion: boolean;
     autoApplyPlan: boolean;
-    activeExternalSearch: boolean;
-    autoExternalSearch: boolean;
+    externalSearchDisabled?: boolean;
+    /** Legacy fields kept so drafts created before the single switch remain readable. */
+    activeExternalSearch?: boolean;
+    autoExternalSearch?: boolean;
     answerPlan?: ReadWeaveAnswerPlan;
     termIdentity: Partial<ReadWeaveTermIdentity>;
     termIdentityEdited?: boolean;
@@ -148,6 +150,18 @@ interface Draft {
     reviewIssueBaseline?: ReadWeaveReviewIssueBaseline;
     parentLinkId?: string;
     newQuestionDraft?: boolean;
+}
+
+function readExternalSearchDisabled(
+    draft: Pick<Draft, "externalSearchDisabled" | "activeExternalSearch" | "autoExternalSearch"> | undefined,
+    job: Pick<ReadWeaveGenerationJob, "activeExternalSearch" | "autoExternalSearch"> | undefined
+): boolean {
+    if (draft?.externalSearchDisabled !== undefined) return draft.externalSearchDisabled;
+
+    const active = draft?.activeExternalSearch ?? job?.activeExternalSearch;
+    const automatic = draft?.autoExternalSearch ?? job?.autoExternalSearch;
+    if (active === undefined && automatic === undefined) return false;
+    return active !== true && automatic === false;
 }
 
 interface EditState {
@@ -199,8 +213,7 @@ export default function ReadWeavePanel() {
     const [questionTitle, setQuestionTitle] = useState("");
     const [optimizeQuestion, setOptimizeQuestion] = useState(true);
     const [autoApplyPlan, setAutoApplyPlan] = useState(true);
-    const [activeExternalSearch, setActiveExternalSearch] = useState(false);
-    const [autoExternalSearch, setAutoExternalSearch] = useState(true);
+    const [externalSearchDisabled, setExternalSearchDisabled] = useState(false);
     const [answerPlan, setAnswerPlan] = useState<ReadWeaveAnswerPlan>();
     const [termIdentity, setTermIdentity] = useState<Partial<ReadWeaveTermIdentity>>({});
     const [termIdentityEdited, setTermIdentityEdited] = useState(false);
@@ -380,10 +393,7 @@ export default function ReadWeavePanel() {
         setGenerationProgress(job.progress);
         setBusy(job.status === "queued" || job.status === "running");
         setAutoApplyPlan(savedDraft?.autoApplyPlan ?? (job.answerPlan?.autoApplied !== false));
-        setActiveExternalSearch(
-            savedDraft?.activeExternalSearch ?? job.activeExternalSearch ?? false
-        );
-        setAutoExternalSearch(savedDraft?.autoExternalSearch ?? job.autoExternalSearch ?? true);
+        setExternalSearchDisabled(readExternalSearchDisabled(savedDraft, job));
         setRegenerationFeedback(job.feedback ?? "");
         if (!job.result) return;
         const resultReviewIssues = job.result.reviewIssues ?? [];
@@ -532,12 +542,7 @@ export default function ReadWeavePanel() {
                 : ""));
         setOptimizeQuestion(matchingDraft?.optimizeQuestion ?? (confirmingPendingSelection ? optimizeQuestion : true));
         setAutoApplyPlan(matchingDraft?.autoApplyPlan ?? (matchingJob?.answerPlan?.autoApplied !== false));
-        setActiveExternalSearch(
-            matchingDraft?.activeExternalSearch ?? matchingJob?.activeExternalSearch ?? false
-        );
-        setAutoExternalSearch(
-            matchingDraft?.autoExternalSearch ?? matchingJob?.autoExternalSearch ?? true
-        );
+        setExternalSearchDisabled(readExternalSearchDisabled(matchingDraft, matchingJob));
         setAnswerPlan(matchingDraft?.answerPlan ?? matchingJob?.answerPlan ?? matchingJob?.result?.answerPlan);
         const restoredFields = recoverReadWeaveGenerationFields({
             draft: matchingDraft,
@@ -616,8 +621,7 @@ export default function ReadWeavePanel() {
         setQuestionTitle(defaultQuestionForExcerpt(decodeReadWeaveText(nextSelection.excerpt)));
         setOptimizeQuestion(true);
         setAutoApplyPlan(true);
-        setActiveExternalSearch(false);
-        setAutoExternalSearch(true);
+        setExternalSearchDisabled(false);
         setAnswerPlan(undefined);
         setTermIdentity({});
         setTermIdentityEdited(false);
@@ -810,7 +814,7 @@ export default function ReadWeavePanel() {
         if (!noteId || !selection) return;
         const draft: Draft = {
             kind, contentType, questionTitle, optimizeQuestion, autoApplyPlan,
-            activeExternalSearch, autoExternalSearch, answerPlan, termIdentity,
+            externalSearchDisabled, answerPlan, termIdentity,
             termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId,
             contextDecision, generationJobId, reviewIssues, reviewIssueBaseline,
             parentLinkId, newQuestionDraft
@@ -819,7 +823,7 @@ export default function ReadWeavePanel() {
         sessionStorage.setItem(draftKey(noteId, selection.anchorId, parentLinkId, isolatedDraftId), JSON.stringify(draft));
         sessionStorage.setItem(draftKey(noteId, selection.anchorId, parentLinkId), JSON.stringify(draft));
     }, [noteId, selection, kind, contentType, parentLinkId, questionTitle, optimizeQuestion,
-        autoApplyPlan, activeExternalSearch, autoExternalSearch, answerPlan, termIdentity,
+        autoApplyPlan, externalSearchDisabled, answerPlan, termIdentity,
         termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision,
         generationJobId, currentJob?.draftId, localDraftId, reviewIssues, reviewIssueBaseline,
         newQuestionDraft]);
@@ -1010,8 +1014,8 @@ export default function ReadWeavePanel() {
                 questionStack: readWeaveQuestionStackFromText(currentTitle),
                 optimizeQuestion: kind === "question" ? optimizeQuestion : undefined,
                 autoApplyPlan,
-                activeExternalSearch,
-                autoExternalSearch,
+                activeExternalSearch: false,
+                autoExternalSearch: !externalSearchDisabled,
                 answerPlan: preparedPlan,
                 termIdentity: kind === "term" ? cleanPartialTermIdentity(termIdentity) : undefined,
                 fragments: nestedParent
@@ -1288,8 +1292,8 @@ export default function ReadWeavePanel() {
                 contentType,
                 origin: readWeaveContentOriginForType(contentType),
                 autoApplyPlan,
-                activeExternalSearch,
-                autoExternalSearch,
+                activeExternalSearch: false,
+                autoExternalSearch: !externalSearchDisabled,
                 answerPlan: preparedPlan,
                 questionStack: readWeaveQuestionStackFromText(currentTitle),
                 calloutType,
@@ -1663,12 +1667,7 @@ export default function ReadWeavePanel() {
         setQuestionTitle(restoredFields.questionTitle);
         setOptimizeQuestion(restoredDraft?.optimizeQuestion ?? true);
         setAutoApplyPlan(restoredDraft?.autoApplyPlan ?? true);
-        setActiveExternalSearch(
-            restoredDraft?.activeExternalSearch ?? restoredJob?.activeExternalSearch ?? false
-        );
-        setAutoExternalSearch(
-            restoredDraft?.autoExternalSearch ?? restoredJob?.autoExternalSearch ?? true
-        );
+        setExternalSearchDisabled(readExternalSearchDisabled(restoredDraft, restoredJob));
         setTermIdentity({});
         setTermIdentityEdited(false);
         setBody(restoredFields.body);
@@ -2054,27 +2053,16 @@ export default function ReadWeavePanel() {
                                     role="group"
                                     aria-label="外部搜索设置"
                                 >
-                                    <label title="打开后本次生成一定会执行外部搜索；它会覆盖自动判断">
+                                    <label title="默认使用外部搜索补充资料；勾选后本次回答只使用文章内容">
                                         <input
                                             type="checkbox"
-                                            checked={activeExternalSearch}
+                                            checked={externalSearchDisabled}
                                             disabled={editorLocked}
                                             onChange={event =>
-                                                setActiveExternalSearch(event.currentTarget.checked)}
-                                            data-testid="readweave-active-external-search"
+                                                setExternalSearchDisabled(event.currentTarget.checked)}
+                                            data-testid="readweave-disable-external-search"
                                         />
-                                        <span><strong>主动外部搜索</strong></span>
-                                    </label>
-                                    <label title="打开后，人物身份、背景资料、最新状态、DOI 等需要外部证据的问题会自动搜索">
-                                        <input
-                                            type="checkbox"
-                                            checked={autoExternalSearch}
-                                            disabled={editorLocked}
-                                            onChange={event =>
-                                                setAutoExternalSearch(event.currentTarget.checked)}
-                                            data-testid="readweave-auto-external-search"
-                                        />
-                                        <span><strong>自动外部搜索</strong></span>
+                                        <span><strong>关闭外部搜索</strong></span>
                                     </label>
                                 </div>
                             )}

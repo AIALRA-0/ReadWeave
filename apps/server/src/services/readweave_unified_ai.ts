@@ -32,6 +32,7 @@ import { NonRetryableReadWeaveError } from "./readweave_errors.js";
 import { readReadWeavePageWithJina, searchReadWeaveEvidence } from "./readweave_search.js";
 import {
     getReadWeaveRuntimeConfig,
+    getReadWeaveSearchRuntimeConfig,
     type ReadWeaveModelRuntimeConfig
 } from "./readweave_settings.js";
 import { HUMAN_READABLE_CHINESE_STYLE_CONTRACT } from "./readweave_style_contract.js";
@@ -298,6 +299,8 @@ export function decideReadWeaveExternalSearch(
     const explicitQueries = request.answerPlan?.searchQueries ?? [];
     const active = request.activeExternalSearch === true;
     const automatic = request.autoExternalSearch !== false;
+    const searchEnabled = getReadWeaveSearchRuntimeConfig().mode !== "off";
+    const explicitlyDisabled = request.activeExternalSearch !== true && request.autoExternalSearch === false;
     const normalized = normalizedQuestion.normalize("NFKC").trim();
     const personIdentity = !!personSubjectFromQuestion(normalized)
         && /(?:谁|人物|背景|履历|资料|简介)|\bwho\s+is\b|\bbiograph(?:y|ical)\b/iu.test(normalized);
@@ -305,11 +308,12 @@ export function decideReadWeaveExternalSearch(
     const freshnessRequest = /(?:现在|目前|现任|最新|当前|截至|today|current|latest|present)/iu
         .test(normalized);
     const namedSourceRequest = /(?:\bDOI\b|数字对象标识|论文|文章|报告|规范|标准|出处|引用|期刊|会议)/iu.test(normalized);
-    let reason: ReadWeaveExternalSearchDecision["reason"] = "not-needed";
+    let reason: ReadWeaveExternalSearchDecision["reason"] = "default";
     let required = false;
-    let mode: ReadWeaveExternalSearchDecision["mode"] = automatic ? "automatic" : "disabled";
+    let mode: ReadWeaveExternalSearchDecision["mode"] = searchEnabled ? "automatic" : "disabled";
 
-    if (!active && !automatic) {
+    if (!searchEnabled || explicitlyDisabled) {
+        mode = "disabled";
         reason = "disabled";
     } else if (active) {
         required = true;
@@ -320,20 +324,17 @@ export function decideReadWeaveExternalSearch(
         mode = "forced";
         reason = "manual-query";
     } else if (automatic) {
+        required = true;
+        reason = "default";
         if (personIdentity) {
-            required = true;
             reason = "identity";
         } else if (backgroundRequest) {
-            required = true;
             reason = "background";
         } else if (freshnessRequest) {
-            required = true;
             reason = "freshness";
         } else if (namedSourceRequest) {
-            required = true;
             reason = "named-source";
         } else if (request.kind === "term") {
-            required = true;
             reason = "definition";
         }
     }
