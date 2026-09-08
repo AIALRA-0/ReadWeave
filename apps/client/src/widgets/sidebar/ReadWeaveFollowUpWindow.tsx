@@ -244,7 +244,7 @@ export function ReadWeaveFollowUpWindow({
                                 if (job)
                                     accept(
                                         (
-                                            await server.post<{ job: ReadWeaveGenerationJob }>(
+                                            await server.patch<{ job: ReadWeaveGenerationJob }>(
                                                 `readweave/generation-jobs/${encodeURIComponent(job.jobId)}/cancel`,
                                                 {},
                                             )
