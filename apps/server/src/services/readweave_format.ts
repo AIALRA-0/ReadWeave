@@ -64,8 +64,7 @@ export function formatReadWeaveMarkdown(value: unknown): string {
             .replace(
                 /^([^\n：（）()]{1,24}：)([^\n：；。]+、[^\n：；。]+、[^\n：；。]+)$/gmu,
                 (_all, prefix: string, items: string) =>
-                    `${prefix 
-                    }\n${ 
+                    `${prefix}\n${
                         items
                             .split("、")
                             .map((item) => `  - ${item.trim()}`)
@@ -76,8 +75,7 @@ export function formatReadWeaveMarkdown(value: unknown): string {
                 (_all, prefix: string, rows: string) =>
                     rows.split("\n").some((row) => /^\s*(?:[-*+]|\d+[.)])\s/u.test(row))
                         ? _all
-                        : `${prefix 
-                        }\n${ 
+                        : `${prefix}\n${
                             rows
                                 .split("\n")
                                 .map((row) => `  - ${row.trim()}`)
