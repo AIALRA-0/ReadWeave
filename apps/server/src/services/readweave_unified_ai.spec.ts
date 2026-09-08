@@ -102,7 +102,9 @@ function installModel(
             result = {
                 body,
                 optimizedTitle: "规范化后的原问题？",
-                termIdentity: { abbreviation: "NPU", chineseName: "神经网络处理单元", englishName: "Neural Processing Unit" },
+                termIdentity: generatedBody?.startsWith("BY ") ? { abbreviation: "BY", chineseName: "署名", englishName: "Attribution" }
+                    : generatedBody?.startsWith("Historian ") ? { chineseName: "历史学家", englishName: "Historian" }
+                        : { abbreviation: "NPU", chineseName: "神经网络处理单元", englishName: "Neural Processing Unit" },
                 ...(prompt.includes("内容类型：definition") ? {
                     definitionFields: {
                         name: "测试对象", origin: "测试词源", aliases: "测试别名", abbreviation: "NPU",
@@ -178,7 +180,7 @@ describe.skip("ReadWeave retired multi-stage workflow", () => {
         expect(result.audit?.workflowVersion).toBe("quality-closure-v2");
         expect(result.audit?.questionContract.objective).toBe("直接回答用户明确询问的命题");
         expect(result.answerPlan?.steps.length).toBeGreaterThanOrEqual(3);
-        const prompts = vi.mocked(fetch).mock.calls.map(([, init]) => {
+        const prompts = vi.mocked(fetch).mock.calls.map(([ , init ]) => {
             const payload = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
             return payload.messages.map(message => message.content).join("\n");
         });
@@ -292,7 +294,7 @@ describe.skip("ReadWeave retired multi-stage workflow", () => {
     it("requires one calculation direction for gains, formulas and sign explanations", async () => {
         await generateUnifiedReadWeaveAnswer(request("顶点交换增益如何计算？"));
 
-        const prompts = vi.mocked(fetch).mock.calls.map(([, init]) => {
+        const prompts = vi.mocked(fetch).mock.calls.map(([ , init ]) => {
             const payload = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
             return payload.messages.map(message => message.content).join("\n");
         });
@@ -936,7 +938,7 @@ describe("ReadWeave one-pass workflow", () => {
 
     it("uses one writer call and one local check with default external evidence", async () => {
         const result = await generateUnifiedReadWeaveAnswer(request("如何工作？"));
-        const calls = vi.mocked(fetch).mock.calls.map(([, init]) => {
+        const calls = vi.mocked(fetch).mock.calls.map(([ , init ]) => {
             const payload = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
             return payload.messages.map(message => message.content).join("\n");
         });
@@ -1173,7 +1175,7 @@ describe("ReadWeave natural paragraph formatting", () => {
         )).toBe("CXL.io 输入输出协议（Input/Output Protocol）是 CXL 计算快速链路（Compute Express Link）规范中的逻辑协议");
     });
 
-    it("splits long connected clauses into readable semantic paragraphs", () => {
+    it("preserves a connected paragraph without guessing semantic boundaries", () => {
         const normalized = formatReadWeaveBody([
             "不能仅凭事务属性断言任何硬件故障都不会丢数据，因为持久性只在系统声明的故障模型内成立，并不覆盖所有物理损坏或多个故障同时发生的情况",
             "持久性通常依赖预写日志、刷盘和复制等机制，确保事务提交后遇到进程崩溃或断电时仍可恢复，并且恢复流程本身也需要经过验证",
@@ -1181,8 +1183,9 @@ describe("ReadWeave natural paragraph formatting", () => {
             "因此还需要结合介质可靠性、复制策略、独立备份和恢复演练控制剩余风险，并明确每一层保护能够覆盖的故障边界"
         ].join("；"));
 
-        expect(normalized.split(/\n{2,}/u).length).toBeGreaterThan(1);
-        expect(normalized.split(/\n{2,}/u).every(paragraph => paragraph.length <= 320)).toBe(true);
+        expect(normalized.split(/\n{2,}/u)).toHaveLength(1);
+        expect(normalized).toContain("不能提供绝对保证");
+        expect(normalized).toContain("明确每一层保护能够覆盖的故障边界");
     });
 
     const readabilityCases = [
@@ -1223,7 +1226,7 @@ describe("ReadWeave natural paragraph formatting", () => {
         expect(paragraphs.every(paragraph => paragraph.length > 0 && !/[；，]$/u.test(paragraph))).toBe(true);
     });
 
-    it("preserves deliberate natural paragraphs and splits only long dense prose", () => {
+    it("preserves deliberate natural paragraphs without a fixed paragraph cap", () => {
         const deliberate = formatReadWeaveBody("第一段直接回答问题\n\n第二段解释必要原因\n\n第三段说明适用边界");
         expect(deliberate.split(/\n{2,}/u)).toEqual([
             "第一段直接回答问题",
@@ -1233,19 +1236,19 @@ describe("ReadWeave natural paragraph formatting", () => {
 
         const dense = formatReadWeaveBody(Array.from({ length: 8 }, (_, index) => `第${index + 1}项事实说明一个可以独立核对的对象、原因和实际影响`).join("；"));
         const paragraphs = dense.split(/\n{2,}/u);
-        expect(paragraphs.length).toBeGreaterThanOrEqual(2);
-        expect(paragraphs.length).toBeLessThanOrEqual(5);
+        expect(paragraphs).toHaveLength(1);
+        expect(dense).toContain("第 8 项事实");
     });
 
-    it("removes decorative paragraph labels without deleting their content", () => {
+    it("retains meaningful paragraph labels rather than deleting text", () => {
         expect(formatReadWeaveBody([
             "核心结论：CXL.io 是一组用于设备发现、初始化和配置的协议事务",
             "主要贡献：它让主机能够通过同一连接管理兼容设备",
             "证据与边界：它不是独立的物理接口，也不替代 CXL.cache 或 CXL.mem"
         ].join("\n\n"))).toBe([
-            "CXL.io 是一组用于设备发现、初始化和配置的协议事务",
-            "它让主机能够通过同一连接管理兼容设备",
-            "它不是独立的物理接口，也不替代 CXL.cache 或 CXL.mem"
+            "核心结论：CXL.io 是一组用于设备发现、初始化和配置的协议事务",
+            "主要贡献：它让主机能够通过同一连接管理兼容设备",
+            "证据与边界：它不是独立的物理接口，也不替代 CXL.cache 或 CXL.mem"
         ].join("\n\n"));
     });
 
@@ -1271,9 +1274,9 @@ describe("ReadWeave natural paragraph formatting", () => {
             .toBe("回答包括：\n  - 第一项\n  - 第二项\n  - 第三项");
     });
 
-    it("moves mixed-language examples out of naming parentheses", () => {
+    it("retains example relationships instead of paraphrasing them", () => {
         expect(formatReadWeaveBody("持久性依赖刷盘策略（如 fsync 强制落盘）和可靠存储。"))
-            .toBe("持久性依赖刷盘策略，例如 fsync 强制落盘和可靠存储");
+            .toBe("持久性依赖刷盘策略（如 fsync 强制落盘）和可靠存储");
     });
 
     it("covers clearly different answer lengths instead of one repeated fixture shape", () => {

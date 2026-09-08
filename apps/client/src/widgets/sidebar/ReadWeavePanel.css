@@ -289,7 +289,51 @@
     white-space: pre-wrap;
 }
 
+.readweave-follow-up-window {
+    position: fixed;
+    z-index: 10000;
+    width: min(480px, calc(100vw - 16px));
+    max-height: calc(100vh - 100px);
+    border: 1px solid var(--main-border-color);
+    border-radius: 8px;
+    background: var(--main-background-color);
+    color: var(--main-text-color);
+    box-shadow: 0 8px 24px #0006;
+    overflow: auto;
+}
+
+.readweave-follow-up-window > header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    cursor: move;
+    touch-action: none;
+}
+
+.readweave-follow-up-content {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+}
+
+.readweave-follow-up-content textarea {
+    display: block;
+    width: 100%;
+}
+
+.readweave-follow-up-content blockquote {
+    max-height: 80px;
+    overflow: auto;
+    user-select: text;
+}
+
+.readweave-readable-body :is(p, li, code, span, td, th) {
+    user-select: text;
+}
+
 .readweave-readable-body {
+    user-select: text;
     min-width: 0;
     background: transparent;
     color: var(--main-text-color);

@@ -36,6 +36,8 @@ export interface ReadWeaveSearchEvidence {
 }
 
 interface SearchInput {
+    /** Server-owned remaining allowance shared by the current research task. */
+    budgetCny?: number;
     query: string;
     context?: string;
     kind?: ReadWeaveObjectKind;
@@ -211,7 +213,8 @@ async function fetchJson<T>(
     timeoutMs = PROVIDER_TIMEOUT_MS
 ): Promise<T> {
     let lastError = "request failed";
-    for (let attempt = 0; attempt < 2; attempt++) {
+    const metered = /(?:serper\.dev|exa\.ai|tavily\.com|search\.brave\.com|jina\.ai)/u.test(url);
+    for (let attempt = 0; attempt < (metered ? 1 : 2); attempt++) {
         const response = await fetcher(url, {
             ...init,
             headers: {
@@ -226,7 +229,7 @@ async function fetchJson<T>(
         });
         if (response.ok) return await response.json() as T;
         lastError = `${response.status} ${response.statusText}`.trim();
-        if (attempt === 0 && (response.status === 429 || response.status >= 500)) {
+        if (!metered && attempt === 0 && (response.status === 429 || response.status >= 500)) {
             await new Promise(resolve => setTimeout(resolve, 350));
             continue;
         }
@@ -614,9 +617,9 @@ const orcidEmploymentSearch: SearchAdapter = async (query, _config, fetcher) => 
         "role-title"?: string;
         "start-date"?: OrcidDate;
         "end-date"?: OrcidDate | null;
-        organization?: { name?: string };
-        url?: { value?: string };
-        source?: { "source-name"?: { value?: string } };
+        "organization"?: { name?: string };
+        "url"?: { value?: string };
+        "source"?: { "source-name"?: { value?: string } };
     }
     interface Payload {
         "affiliation-group"?: Array<{
@@ -632,7 +635,7 @@ const orcidEmploymentSearch: SearchAdapter = async (query, _config, fetcher) => 
         url.searchParams.set("q", `given-and-family-names:"${expectedName.replace(/"/gu, "")}"`);
         url.searchParams.set("rows", "3");
         const result = await fetchJson<SearchPayload>(fetcher, url.toString(), {
-            headers: { "Accept": "application/vnd.orcid+json" }
+            headers: { Accept: "application/vnd.orcid+json" }
         });
         orcidIds = (result.result ?? [])
             .map(item => item["orcid-identifier"]?.path?.toLocaleUpperCase())
@@ -645,7 +648,7 @@ const orcidEmploymentSearch: SearchAdapter = async (query, _config, fetcher) => 
         payload: await fetchJson<Payload>(
             fetcher,
             `https://pub.orcid.org/v3.0/${encodeURIComponent(orcidId)}/employments`,
-            { headers: { "Accept": "application/vnd.orcid+json" } }
+            { headers: { Accept: "application/vnd.orcid+json" } }
         )
     })));
     const dateText = (date: OrcidDate | null | undefined) => [
@@ -897,23 +900,24 @@ const jinaSearch: SearchAdapter = async (query, config, fetcher) => {
  */
 export async function readReadWeavePageWithJina(
     url: string,
-    options: { fetcher?: FetchLike } = {}
+    options: { fetcher?: FetchLike; signal?: AbortSignal; anonymous?: boolean } = {}
 ): Promise<string> {
     const config = getReadWeaveSearchRuntimeConfig();
-    if (!config.jinaApiKey) return "";
+    if (!config.jinaApiKey && !options.anonymous) return "";
     const normalizedUrl = safeUrl(url);
     if (!normalizedUrl) return "";
     const fetcher = options.fetcher ?? fetch;
     const response = await fetcher(`https://r.jina.ai/${normalizedUrl}`, {
         headers: {
             "Accept": "text/plain",
-            "Authorization": `Bearer ${config.jinaApiKey}`,
-            "X-Return-Format": "markdown"
+            ...(!options.anonymous ? { Authorization: `Bearer ${config.jinaApiKey}` } : {}),
+            "X-Return-Format": "markdown",
+            "X-Token-Budget": "4000"
         },
-        signal: AbortSignal.timeout(12_000)
+        signal: options.signal ? AbortSignal.any([ options.signal, AbortSignal.timeout(12_000) ]) : AbortSignal.timeout(12_000)
     });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
-    return plainText(await response.text(), 8_000);
+    return plainText(await response.text(), 24_000);
 }
 
 function isCurrentQuery(query: string): boolean {
@@ -1109,7 +1113,8 @@ async function runAdapter(
 
 async function searchUncached(input: SearchInput, fetcher: FetchLike): Promise<ReadWeaveSearchEvidence> {
     const startedAt = Date.now();
-    const config = getReadWeaveSearchRuntimeConfig();
+    const storedConfig = getReadWeaveSearchRuntimeConfig();
+    const config = { ...storedConfig, budgetCny: input.budgetCny === undefined ? storedConfig.budgetCny : Math.max(0, Math.min(input.budgetCny, 0.10)) };
     const query = normalizeQuery(input.query);
     if (!query || config.mode === "off" || (!input.force && config.mode === "automatic" && !automaticSearchWanted(input))) {
         return {
@@ -1178,8 +1183,8 @@ async function searchUncached(input: SearchInput, fetcher: FetchLike): Promise<R
         const paidFallbacks: Array<[string, SearchAdapter, number, boolean]> = [
             // Tavily's Researcher plan has a monthly free quota and pay-as-you-go
             // is off by default. Exhaustion therefore fails closed rather than billing.
-            [ "Tavily", tavilySearch, 0, !!config.tavilyApiKey ],
             [ "Serper", serperSearch, 0.001 * CNY_PER_USD, !!config.serperApiKey ],
+            [ "Tavily", tavilySearch, 0, !!config.tavilyApiKey ],
             [ "Brave Search", braveSearch, 0.005 * CNY_PER_USD, !!config.braveApiKey ],
             [ "Jina Search", jinaSearch, 0.001 * CNY_PER_USD, !!config.jinaApiKey ]
         ];
@@ -1189,7 +1194,12 @@ async function searchUncached(input: SearchInput, fetcher: FetchLike): Promise<R
                 ...(serper && serper[3] ? [ [ serper[0], serper[1], serper[2] ] as [string, SearchAdapter, number] ] : []),
                 [ "Exa People", exaPeopleSearch, 0.007 * CNY_PER_USD ]
             ];
-            const affordable = personAdapters.filter(([, , estimatedCost]) => searchCostCny + estimatedCost <= config.budgetCny);
+            let remaining = config.budgetCny - searchCostCny;
+            const affordable = personAdapters.filter(([ , , estimatedCost ]) => {
+                if (estimatedCost > remaining) return false;
+                remaining -= estimatedCost;
+                return true;
+            });
             if (affordable.length === 0) {
                 warnings.push("Exa 人物搜索因本次搜索预算不足而跳过");
             } else {
@@ -1255,6 +1265,7 @@ export async function searchReadWeaveEvidence(
         localEvidenceSufficient: !!input.localEvidenceSufficient,
         allowPaid: input.allowPaid !== false,
         forcePaidFallback: input.forcePaidFallback === true,
+        budgetCny: input.budgetCny ?? config.budgetCny,
         mode: config.mode,
         providers: [
             !!config.serperApiKey,

@@ -43,7 +43,7 @@ describe("ReadWeave exact-range generation visuals", () => {
         expect(after.classList).not.toContain("readweave-anchor-draft");
     });
 
-    it("keeps failed and unread jobs visible but returns a viewed result to hover-only styling", () => {
+    it("keeps viewed unsaved drafts green and clears the light only after saving", () => {
         const root = document.createElement("div");
         root.innerHTML = '<p><span data-readweave-range-anchor-id="inner">3D堆叠ML</span></p>';
         const exact = root.querySelector<HTMLElement>("span")!;
@@ -57,6 +57,8 @@ describe("ReadWeave exact-range generation visuals", () => {
         expect(exact.classList).toContain("readweave-anchor-status-unread");
 
         applyReadWeaveGenerationVisual(root, job({ status: "ready-for-review", unread: false, updatedAt: "2026-07-22T00:00:02.000Z" }));
+        expect(exact.classList).toContain("readweave-anchor-status-unread");
+        applyReadWeaveGenerationVisual(root, job({ status: "saved", unread: false, updatedAt: "2026-07-22T00:00:03.000Z" }));
         expect(exact.classList).not.toContain("readweave-anchor-draft");
         expect(exact.classList).not.toContain("readweave-anchor-status");
     });
@@ -74,7 +76,7 @@ describe("ReadWeave exact-range generation visuals", () => {
         applyReadWeaveGenerationVisual(root, job({
             anchorId: "outer",
             sourceExcerpt: "灵活3D堆叠ML加速器",
-            status: "ready-for-review",
+            status: "saved",
             unread: false,
             updatedAt: "2026-07-22T00:00:02.000Z"
         }));

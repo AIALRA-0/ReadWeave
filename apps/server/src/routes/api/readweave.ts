@@ -47,7 +47,8 @@ import {
     getReadWeaveImpact,
     getReadWeaveObject,
     listReadWeaveObjects,
-    saveReadWeaveEntry
+    saveReadWeaveEntry,
+    validateReadWeaveFollowUp
 } from "../../services/readweave_repository.js";
 import { testReadWeaveSearch } from "../../services/readweave_search.js";
 import {
@@ -98,6 +99,7 @@ function deleteLink(req: Request<{ linkId: string }>) {
 }
 
 async function generate(req: Request) {
+    validateReadWeaveFollowUp(req.body as ReadWeaveGenerateRequest);
     return await generateReadWeaveAnswer(req.body as ReadWeaveGenerateRequest);
 }
 

@@ -1,5 +1,7 @@
 import {
     type ReadWeaveCalloutType,
+    readWeaveContentOriginForType,
+    readWeaveContentTypeForKind,
     type ReadWeaveEvidenceState,
     type ReadWeaveFailureClass,
     type ReadWeaveGenerateRequest,
@@ -7,10 +9,7 @@ import {
     type ReadWeaveGenerationIssue,
     type ReadWeaveGenerationIssueCategory,
     type ReadWeaveGenerationJob,
-    type ReadWeaveGenerationProgress,
-    readWeaveContentOriginForType,
-    readWeaveContentTypeForKind
-} from "@triliumnext/commons";
+    type ReadWeaveGenerationProgress} from "@triliumnext/commons";
 import { becca, cls, NotFoundError, protected_session as protectedSessionModule, ValidationError } from "@triliumnext/core";
 import { randomUUID } from "crypto";
 
@@ -21,7 +20,7 @@ import {
 } from "./readweave_ai.js";
 import { NonRetryableReadWeaveError } from "./readweave_errors.js";
 import { getPublishedReadWeaveHarnessProfile, initializeReadWeaveHarnessTrials } from "./readweave_harness.js";
-import { editReadWeaveLink, saveReadWeaveEntry } from "./readweave_repository.js";
+import { editReadWeaveLink, saveReadWeaveEntry, validateReadWeaveFollowUp } from "./readweave_repository.js";
 import sql from "./sql.js";
 
 interface JobRow {
@@ -682,6 +681,7 @@ function runJob(jobId: string) {
         let latestError: unknown;
         for (let attempt = 1; attempt <= MAX_BACKGROUND_GENERATION_ATTEMPTS; attempt++) {
             try {
+                validateReadWeaveFollowUp(request);
                 const result = await generateReadWeaveAnswer(request, progress => appendProgress(jobId, progress), controller.signal);
                 // A non-empty, structurally valid answer with review warnings is
                 // still a deliverable draft.  The unified workflow has already
@@ -865,11 +865,12 @@ export function startReadWeaveGenerationJob(request: ReadWeaveGenerateRequest): 
         throw new ValidationError("ReadWeave generation request is incomplete.");
     }
     validateSourceLocator(request.sourceLocator);
+    validateReadWeaveFollowUp(request);
     validateExternalSearchSettings(request);
     requireReviewedAnswerPlan(request);
     const contentType = readWeaveContentTypeForKind(request.kind, request.contentType);
-    if (contentType === "note" || contentType === "key-point") {
-        throw new ValidationError("笔记和要点是手写内容，不创建生成任务。");
+    if (contentType === "note") {
+        throw new ValidationError("笔记是手写内容，不创建生成任务。");
     }
     const article = requireReadableArticle(request.articleId);
     const isProtected = article.isProtected === true;
@@ -1122,6 +1123,7 @@ export function regenerateReadWeaveGenerationJob(jobId: string, inputValue: unkn
     requireReviewedAnswerPlan(request);
     const now = new Date().toISOString();
     const harnessVersion = getPublishedReadWeaveHarnessProfile().versionId;
+    validateReadWeaveFollowUp(request);
     const attemptId = randomUUID();
     sql.transactional(() => {
         sql.execute(/* sql */`

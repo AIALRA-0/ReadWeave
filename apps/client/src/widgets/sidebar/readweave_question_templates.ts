@@ -43,7 +43,7 @@ export function decodeReadWeaveText(value: string): string {
         .filter(character => {
             const codePoint = character.codePointAt(0) ?? 0;
             const isUnsafeControl = codePoint < 32 && codePoint !== 9 && codePoint !== 10 && codePoint !== 13;
-            return !isUnsafeControl && codePoint !== 127 && ![0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF].includes(codePoint);
+            return !isUnsafeControl && codePoint !== 127 && ![ 0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF ].includes(codePoint);
         })
         .join("")
         .replace(/\s+/gu, " ")
@@ -133,4 +133,16 @@ export function recordReadWeaveTemplateUse(
     return templates.map(template => template.id === templateId
         ? { ...template, uses: template.uses + 1 }
         : template);
+}
+
+/** Highlight the template matching the current question, not the last click. */
+export function activeReadWeaveQuestionTemplate(
+    templates: ReadWeaveQuestionTemplate[], question: string, selection: string, caret: number
+): string | undefined {
+    const position = Math.min(question.length, Math.max(0, caret));
+    const start = question.lastIndexOf("\n", Math.max(0, position - 1)) + 1;
+    const next = question.indexOf("\n", position);
+    const current = question.slice(start, next < 0 ? question.length : next).trim();
+    const matches = templates.filter(template => renderReadWeaveQuestionTemplate(template, selection) === current);
+    return matches.length === 1 ? matches[0].id : undefined;
 }

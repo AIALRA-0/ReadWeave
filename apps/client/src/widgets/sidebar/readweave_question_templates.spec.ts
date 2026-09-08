@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+    activeReadWeaveQuestionTemplate,
     decodeReadWeaveText,
     DEFAULT_READWEAVE_QUESTION_TEMPLATES,
     isValidReadWeaveQuestionTemplatePattern,
@@ -11,6 +12,16 @@ import {
 } from "./readweave_question_templates.js";
 
 describe("ReadWeave question templates", () => {
+    it("highlights only the template matching the line at the caret", () => {
+        const templates = DEFAULT_READWEAVE_QUESTION_TEMPLATES;
+        const first = renderReadWeaveQuestionTemplate(templates[0], "光子");
+        const second = renderReadWeaveQuestionTemplate(templates[1], "光子");
+        expect(activeReadWeaveQuestionTemplate(templates, first, "光子", 0)).toBe(templates[0].id);
+        expect(activeReadWeaveQuestionTemplate(templates, `${first}\n${second}`, "光子", first.length+1)).toBe(templates[1].id);
+        expect(activeReadWeaveQuestionTemplate(templates, `${first  }另外说明边界`, "光子", 0)).toBeUndefined();
+        expect(activeReadWeaveQuestionTemplate(templates, first, "声子", 0)).toBeUndefined();
+        expect(activeReadWeaveQuestionTemplate([ ...templates, { ...templates[0], id:"duplicate" } ], first, "光子", 0)).toBeUndefined();
+    });
     it("decodes editor entities and removes invisible control characters", () => {
         expect(decodeReadWeaveText("conf&#x2F;dac&#x2F;CongLW00\u200B")).toBe("conf/dac/CongLW00");
         expect(decodeReadWeaveText("A&amp;B &#47; C")).toBe("A&B / C");

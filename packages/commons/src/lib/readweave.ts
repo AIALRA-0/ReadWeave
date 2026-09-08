@@ -24,7 +24,16 @@ export function readWeaveContentTypeForKind(
 }
 
 export function readWeaveContentOriginForType(contentType: ReadWeaveContentType): ReadWeaveContentOrigin {
-    return contentType === "note" || contentType === "key-point" ? "manual" : "generated";
+    return contentType === "note" ? "manual" : "generated";
+}
+
+export const READWEAVE_MAX_FOLLOW_UP_DEPTH = 3;
+
+export interface ReadWeaveAnswerSelection {
+    parentRevision: number;
+    startOffset: number;
+    endOffset: number;
+    text: string;
 }
 
 export function readWeaveKindForContentType(contentType: ReadWeaveContentType): ReadWeaveObjectKind {
@@ -84,6 +93,7 @@ export interface ReadWeaveWorkflowSummary {
 }
 
 export interface ReadWeaveUsageSummary {
+    costBasis?: "configured-rate-estimate";
     modelCalls: number;
     inputTokens: number;
     cacheHitInputTokens: number;
@@ -240,6 +250,8 @@ export interface ReadWeaveClaim {
 }
 
 export interface ReadWeaveGenerationAudit {
+    formatVersion?: string;
+    research?: ReadWeaveResearchAudit;
     workflowVersion: "unified-evidence-v1" | "quality-closure-v2";
     harnessVersion?: string;
     qualityState?: ReadWeaveQualityState;
@@ -257,6 +269,17 @@ export interface ReadWeaveGenerationAudit {
     citationsVerified: boolean;
     generatedAt: string;
     manuallyEdited?: boolean;
+}
+
+export interface ReadWeaveResearchAudit {
+    budgetCny: number;
+    searchCostCny: number;
+    queryCount: number;
+    pageReadCount: number;
+    cacheHits: number;
+    stopReason: "sufficient" | "budget" | "limit" | "exhausted" | "disabled" | "unavailable";
+    queries: string[];
+    missingFacts: string[];
 }
 
 export type ReadWeaveGenerationStage = "queued" | "optimizing" | "gathering-context" | "drafting" | "checking" | "repairing" | "expanding-context" | "complete" | "paused" | "cancelled" | "failed";
@@ -433,6 +456,7 @@ export interface ReadWeaveImpact {
 }
 
 export interface ReadWeaveGenerateRequest {
+    answerSelection?: ReadWeaveAnswerSelection;
     articleId: string;
     anchorId: string;
     anchorType: ReadWeaveAnchorType;

@@ -1,12 +1,15 @@
 import {
     READWEAVE_LEGACY_SCHEMA_VERSION,
+    READWEAVE_MAX_FOLLOW_UP_DEPTH,
     READWEAVE_PREVIOUS_SCHEMA_VERSION,
     READWEAVE_SCHEMA_VERSION,
     type ReadWeaveAnchorSummary,
     type ReadWeaveAnchorType,
     type ReadWeaveCalloutType,
     type ReadWeaveContentOrigin,
+    readWeaveContentOriginForType,
     type ReadWeaveContentType,
+    readWeaveContentTypeForKind,
     type ReadWeaveDeleteResult,
     type ReadWeaveEditRequest,
     type ReadWeaveExport,
@@ -18,10 +21,7 @@ import {
     type ReadWeaveSaveRequest,
     type ReadWeaveSourceLocator,
     type ReadWeaveTermIdentity,
-    type ReadWeaveVerifiedNonExpandableArtifact,
-    readWeaveContentOriginForType,
-    readWeaveContentTypeForKind
-} from "@triliumnext/commons";
+    type ReadWeaveVerifiedNonExpandableArtifact} from "@triliumnext/commons";
 import { becca, type BNote, note_service as noteService, NotFoundError, ValidationError } from "@triliumnext/core";
 import crypto from "crypto";
 
@@ -77,7 +77,7 @@ function normalizeContentMetadata(
     const normalizedType = contentType as ReadWeaveContentType;
     if (normalizedType === "definition" && kind !== "term") throw new ValidationError("A definition must use kind term.");
     if (normalizedType !== "definition" && kind !== "question") throw new ValidationError("This content type must use kind question.");
-    const expectedOrigin = readWeaveContentOriginForType(normalizedType);
+    const expectedOrigin = normalizedType === "key-point" && originValue === "manual" ? "manual" : readWeaveContentOriginForType(normalizedType);
     if (originValue !== undefined && originValue !== expectedOrigin) throw new ValidationError("ReadWeave content origin does not match content type.");
     return { contentType: normalizedType, origin: expectedOrigin };
 }
@@ -131,7 +131,7 @@ function parseObject(note: BNote): ReadWeaveObject | null {
         : undefined;
     const structuredTitle = termIdentity ? formatReadWeaveTermIdentity(termIdentity) : "";
     const title = structuredTitle || value.title;
-    const content = normalizeContentMetadata(value.kind, value.contentType, value.origin);
+    const content = normalizeContentMetadata(value.kind, value.contentType, value.origin ?? (value.contentType === "key-point" ? "manual" : undefined));
     return {
         ...value,
         schemaVersion: READWEAVE_SCHEMA_VERSION,
@@ -443,15 +443,41 @@ function parentTreeFor(request: Pick<ReadWeaveSaveRequest, "articleId" | "anchor
         throw new ValidationError("A follow-up question must remain under the same article anchor.");
     }
     const parentObject = getReadWeaveObject(parentLink.objectId);
-    if (parentObject.kind !== "question") throw new ValidationError("A follow-up question must be attached to another question.");
     const depth = (parentLink.depth ?? 0) + 1;
-    if (depth > 5) throw new ValidationError("ReadWeave follow-up questions are limited to five nested levels.");
+    if (depth > READWEAVE_MAX_FOLLOW_UP_DEPTH) throw new ValidationError("追问最多三层，不能继续创建第四层追问");
     return {
         parentLinkId: parentLink.linkId,
         rootLinkId: parentLink.rootLinkId ?? parentLink.linkId,
         depth,
         parentRevision: parentObject.revision
     };
+}
+
+/** Reject unsaved/stale/cross-article parents before spending model tokens. */
+export function validateReadWeaveFollowUp(request: import("@triliumnext/commons").ReadWeaveGenerateRequest): void {
+    if (!request.parentLinkId) {
+        if (request.answerSelection) throw new ValidationError("回答选区缺少已保存的父回答");
+        return;
+    }
+    parentTreeFor(request);
+    const parent = getReadWeaveLink(request.parentLinkId).link;
+    const object = getReadWeaveObject(parent.objectId);
+    const selection = request.answerSelection;
+    if (!selection) throw new ValidationError("追问需要选择父回答中的文字");
+    const body = parent.displayBody ?? object.body;
+    request.sourceLocator = parent.sourceLocator;
+    request.rootSourceExcerpt = parent.sourceExcerpt;
+    if (selection.parentRevision !== object.revision || !Number.isInteger(selection.startOffset)
+        || !Number.isInteger(selection.endOffset) || selection.startOffset < 0 || selection.endOffset <= selection.startOffset || selection.endOffset > body.length
+        || typeof selection.text !== "string" || !selection.text.trim()
+        || body.slice(selection.startOffset, selection.endOffset) !== selection.text) {
+        throw new ValidationError("父回答或选中文字已变化，请重新选择后追问");
+    }
+    // Context supplied by the browser cannot impersonate the saved parent.
+    request.fragments = [
+        { id: "answer-selection", role: "selected", text: selection.text },
+        { id: "parent-answer", role: "previous", text: body.slice(Math.max(0, selection.startOffset - 1500), selection.endOffset + 1500) }
+    ];
 }
 
 function createLink(request: ReadWeaveSaveRequest, object: ReadWeaveObject): ReadWeaveLink {

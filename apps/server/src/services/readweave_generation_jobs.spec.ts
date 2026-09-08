@@ -30,7 +30,8 @@ import {
 import {
     deleteReadWeaveLink,
     getAnchorSummaries,
-    getEntriesForAnchor
+    getEntriesForAnchor,
+    saveReadWeaveEntry
 } from "./readweave_repository.js";
 import sql from "./sql.js";
 import sqlInit from "./sql_init.js";
@@ -104,7 +105,7 @@ describe("ReadWeave persisted generation jobs", () => {
         setReadWeaveCommitFaultForTests(undefined);
         cls.init(() => {
             for (const summary of getAnchorSummaries(request.articleId)) {
-                for (const entry of summary.entries) deleteReadWeaveLink(entry.linkId);
+                for (const entry of summary.entries.filter(entry => !entry.parentLinkId)) deleteReadWeaveLink(entry.linkId);
             }
         });
         generateMock.mockReset();
@@ -120,6 +121,53 @@ describe("ReadWeave persisted generation jobs", () => {
             .toThrow("请先审核并确认回答流程");
         expect(sql.getValue<number>("SELECT COUNT(*) FROM readweave_generation_jobs")).toBe(0);
         expect(generateMock).not.toHaveBeenCalled();
+    });
+
+    it("rejects unsaved, stale, forged or fourth-level follow-ups before model work", () => {
+        cls.init(() => {
+            const base = { articleId:request.articleId,anchorId:request.anchorId,anchorType:"range" as const,kind:"question" as const,sourceExcerpt:"测试片段",title:"父问题",body:result().body,calloutType:"note" as const };
+            const parent = saveReadWeaveEntry(base);
+            const selected = { parentRevision:parent.revision,startOffset:0,endOffset:4,text:parent.body.slice(0,4) };
+            const input = { ...request,parentLinkId:parent.linkId,answerSelection:selected };
+            expect(() => startReadWeaveGenerationJob({ ...input,parentLinkId:"missing_parent" })).toThrow();
+            expect(() => startReadWeaveGenerationJob({ ...input,answerSelection:{ ...selected,parentRevision:999 } })).toThrow(/重新选择/);
+            expect(() => startReadWeaveGenerationJob({ ...input,answerSelection:{ ...selected,text:"伪造文本" } })).toThrow(/重新选择/);
+            expect(() => startReadWeaveGenerationJob({ ...input,answerSelection:undefined })).toThrow(/选择父回答/);
+            let last = parent;
+            for (let depth=1;depth<=3;depth++) last=saveReadWeaveEntry({ ...base,parentLinkId:last.linkId,title:`追问${depth}` });
+            expect(() => startReadWeaveGenerationJob({ ...input,parentLinkId:last.linkId })).toThrow(/最多三层/);
+            expect(listReadWeaveGenerationJobs(request.articleId)).toHaveLength(0);
+            expect(generateMock).not.toHaveBeenCalled();
+        });
+    });
+
+    it("generates summaries but never calls the model for manual notes", async () => {
+        expect(() => startReadWeaveGenerationJob({ ...request,contentType:"note",origin:"manual" })).toThrow();
+        expect(generateMock).not.toHaveBeenCalled();
+        const job = startReadWeaveGenerationJob({ ...request,contentType:"key-point",origin:"generated" });
+        const ready = await waitForStatus(job.jobId,"ready-for-review");
+        expect(ready.contentType).toBe("key-point");
+        expect(ready.origin).toBe("generated");
+        expect(generateMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("commits a follow-up to the original article range, not its answer excerpt", async () => {
+        const parent = cls.init(() => saveReadWeaveEntry({
+            articleId: request.articleId, anchorId: request.anchorId,
+            anchorType: "range", kind: "question", sourceExcerpt: "测试片段",
+            title: "父问题", body: result().body, calloutType: "note"
+        }));
+        const job = startReadWeaveGenerationJob({
+            ...request, parentLinkId: parent.linkId,
+            answerSelection: { parentRevision: parent.revision, startOffset: 0,
+                endOffset: 4, text: parent.body.slice(0, 4) }
+        });
+        const ready = await waitForStatus(job.jobId, "ready-for-review");
+        const saved = commitReadWeaveGenerationJob(job.jobId, { expectedStateVersion: ready.stateVersion });
+        const child = getEntriesForAnchor(request.articleId, request.anchorId).find(entry => entry.linkId === saved.savedLinkId);
+        expect(child).toMatchObject({ parentLinkId: parent.linkId, depth: 1 });
+        expect(getAnchorSummaries(request.articleId).find(summary => summary.anchorId === request.anchorId)?.excerpt).toBe("测试片段");
+        expect(generateMock).toHaveBeenCalledTimes(1);
     });
 
     it("persists the external-search switches and rejects non-boolean values", () => {

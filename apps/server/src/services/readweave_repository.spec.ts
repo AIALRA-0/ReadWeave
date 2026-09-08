@@ -162,7 +162,7 @@ describe("ReadWeave repository", () => {
             expect(manualNote.origin).toBe("manual");
             expect(definition.contentType).toBe("definition");
             expect(definition.origin).toBe("generated");
-            expect(getAnchorSummaries(article.noteId).flatMap(summary => summary.contentTypes ?? [])).toEqual(["definition", "note"]);
+            expect(getAnchorSummaries(article.noteId).flatMap(summary => summary.contentTypes ?? [])).toEqual([ "definition", "note" ]);
         });
     });
 
@@ -538,7 +538,7 @@ describe("ReadWeave repository", () => {
         });
     });
 
-    it("persists a five-level follow-up tree, detects stale parents and cascades descendants", () => {
+    it("persists a three-level follow-up tree, detects stale parents and cascades descendants", () => {
         cls.init(() => {
             const article = noteService.createNewNote({
                 parentNoteId: "root",
@@ -561,7 +561,7 @@ describe("ReadWeave repository", () => {
                 body: professionalAnswer("晶体管是一种用电信号控制电流通断或大小的半导体器件")
             });
             const levels = [ root ];
-            for (let depth = 1; depth <= 5; depth += 1) {
+            for (let depth = 1; depth <= 3; depth += 1) {
                 levels.push(saveReadWeaveEntry({
                     ...base,
                     parentLinkId: levels.at(-1)!.linkId,
@@ -570,14 +570,14 @@ describe("ReadWeave repository", () => {
                 }));
             }
 
-            expect(levels.map(entry => entry.depth)).toEqual([ 0, 1, 2, 3, 4, 5 ]);
+            expect(levels.map(entry => entry.depth)).toEqual([ 0, 1, 2, 3 ]);
             expect(levels.slice(1).every(entry => entry.rootLinkId === root.linkId)).toBe(true);
             expect(() => saveReadWeaveEntry({
                 ...base,
                 parentLinkId: levels.at(-1)!.linkId,
-                title: "第六层追问为什么不允许？",
-                body: professionalAnswer("第六层超过允许的追问深度")
-            })).toThrow(/limited to five nested levels/);
+                title: "第四层追问为什么不允许？",
+                body: professionalAnswer("第四层超过允许的追问深度")
+            })).toThrow(/最多三层/);
 
             editReadWeaveLink(root.linkId, {
                 mode: "global",

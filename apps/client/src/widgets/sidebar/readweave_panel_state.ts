@@ -7,6 +7,7 @@ import type {
     ReadWeaveObjectKind,
     ReadWeaveTermIdentity
 } from "@triliumnext/commons";
+
 import { decodeReadWeaveText } from "./readweave_question_templates.js";
 
 export const READWEAVE_CANDIDATE_MIN_CONFIDENCE = 0.55;
@@ -14,15 +15,15 @@ export const READWEAVE_CANDIDATE_LIMIT = 3;
 
 export type ReadWeaveGenerationVisualState = "running" | "unread" | "draft" | "paused" | "error";
 
-export const READWEAVE_CONTENT_TYPES: ReadWeaveContentType[] = [ "problem", "definition", "annotation", "note", "key-point" ];
+export const READWEAVE_CONTENT_TYPES: ReadWeaveContentType[] = [ "problem", "definition", "annotation", "key-point", "note" ];
 
 export function readWeaveContentTypeLabel(contentType: ReadWeaveContentType): string {
     return {
-        problem: "问题",
-        definition: "定义",
-        annotation: "注解",
-        note: "笔记",
-        "key-point": "要点"
+        "problem": "问题",
+        "definition": "定义",
+        "annotation": "注解",
+        "note": "笔记",
+        "key-point": "总结"
     }[contentType];
 }
 
@@ -33,10 +34,10 @@ export function readWeaveContentTypeLabel(contentType: ReadWeaveContentType): st
  */
 export function readWeaveCalloutForContentType(contentType: ReadWeaveContentType): ReadWeaveCalloutType {
     const mapping: Record<ReadWeaveContentType, ReadWeaveCalloutType> = {
-        problem: "note",
-        definition: "tip",
-        annotation: "important",
-        note: "warning",
+        "problem": "note",
+        "definition": "tip",
+        "annotation": "important",
+        "note": "warning",
         "key-point": "caution"
     };
     return mapping[contentType];
@@ -148,14 +149,14 @@ export function isReadWeaveJobAutoRestoreAllowed(input: {
 
 /**
  * Only a job with a visible status indicator keeps its source range emphasized.
- * A completed, already-viewed draft remains recoverable in the side panel, but
- * its underline goes back to the normal hover/lock interaction.
+ * A completed draft remains green until saved, whether it has been read or not.
  */
 export function readWeaveGenerationVisualState(job: Pick<ReadWeaveGenerationJob, "status" | "unread"> & { qualityState?: ReadWeaveGenerationJob["qualityState"] }): ReadWeaveGenerationVisualState | undefined {
     if (job.status === "failed") return "error";
     if (job.status === "paused") return "paused";
     if (job.status === "queued" || job.status === "running" || job.status === "saving") return "running";
-    if (isReadWeaveGenerationReviewable(job.status) && job.unread) return "unread";
+    // Reading acknowledges delivery, not persistence. Keep unsaved drafts green.
+    if (job.status === "ready-for-review") return "unread";
     return undefined;
 }
 

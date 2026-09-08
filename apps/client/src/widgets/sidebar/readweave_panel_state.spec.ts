@@ -13,8 +13,8 @@ import {
     normalizeReadWeaveTermIdentityForReview,
     READWEAVE_CANDIDATE_LIMIT,
     READWEAVE_CANDIDATE_MIN_CONFIDENCE,
-    readWeaveCompactStatusText,
     readWeaveCalloutForContentType,
+    readWeaveCompactStatusText,
     readWeaveGenerationProgressForDisplay,
     readWeaveGenerationVisualState,
     recoverReadWeaveGenerationFields,
@@ -137,8 +137,8 @@ describe("ReadWeave panel state", () => {
         expect(readWeaveGenerationVisualState({ status: "running", unread: false })).toBe("running");
         expect(readWeaveGenerationVisualState({ status: "failed", unread: false })).toBe("error");
         expect(readWeaveGenerationVisualState({ status: "ready-for-review", unread: true, qualityState: "verified" })).toBe("unread");
-        expect(readWeaveGenerationVisualState({ status: "ready-for-review", unread: false, qualityState: "verified" })).toBeUndefined();
-        expect(readWeaveGenerationVisualState({ status: "ready-for-review", unread: false, qualityState: "provisional" })).toBeUndefined();
+        expect(readWeaveGenerationVisualState({ status: "ready-for-review", unread: false, qualityState: "verified" })).toBe("unread");
+        expect(readWeaveGenerationVisualState({ status: "ready-for-review", unread: false, qualityState: "provisional" })).toBe("unread");
     });
 
     it("removes an anchor when its final saved link and completed job are deleted together", () => {

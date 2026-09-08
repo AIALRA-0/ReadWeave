@@ -190,6 +190,62 @@ async function ensureGeneratedItemSaved(panel: Locator) {
     if (await manualSave.count() > 0) await expect(manualSave).toBeDisabled();
 }
 
+test("ReadWeave saves selected answer parents and opens three independent follow-up windows", async ({ page, context }) => {
+    test.setTimeout(120_000);
+    const errors: string[] = [];
+    const starts: Record<string, unknown>[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    page.on("request", request => {
+        if (request.method() === "POST" && new URL(request.url()).pathname === "/api/readweave/generation-jobs") starts.push(request.postDataJSON());
+    });
+    const app = new App(page, context);
+    await gotoReadWeave(app, page);
+    const source = "光子是电磁辐射的量子，所选内容用于独立追问窗口的固定交互验证";
+    const editor = await createTextNote(app, uniqueTitle("ReadWeave E2E · Follow-up windows"), source);
+    const panel = await openSelectionEditor(page, app, editor.locator("p", {hasText:source}), "光子", "Ask");
+    const types = panel.getByRole("group", {name:"内容类型"});
+    expect(await types.getByRole("button").allTextContents()).toEqual(["问题", "定义", "注解", "总结", "笔记"]);
+    await panel.getByTestId("readweave-generate").click();
+    const mainAnswer = panel.locator('.readweave-readable-body[data-testid="readweave-answer"]');
+    await expect(mainAnswer).toBeVisible();
+    const mainText = await mainAnswer.innerText();
+    const mainQuestion = await panel.getByRole("textbox", {name:"Question", exact:true}).inputValue();
+    async function selectAnswer(answer: Locator) {
+        await answer.evaluate(element => {
+            const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+            let text = walker.nextNode();
+            while (text && (text.textContent?.trim().length ?? 0) < 4) text = walker.nextNode();
+            if (!text) throw new Error("Missing answer text");
+            const range = document.createRange(); range.setStart(text,0); range.setEnd(text,4);
+            const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range);
+            element.dispatchEvent(new KeyboardEvent("keyup", {key:"Shift", bubbles:true}));
+        });
+    }
+    await selectAnswer(mainAnswer);
+    await panel.getByRole("button", {name:"保存并追问", exact:true}).click();
+    for (let level=1; level<=3; level++) {
+        const floating = page.getByRole("dialog", {name:`第 ${level} 层追问`, exact:true});
+        await expect(floating).toBeVisible();
+        expect(await floating.evaluate(element => !!element.closest("#readweave-panel"))).toBe(false);
+        await floating.getByRole("button", {name:"生成回答",exact:true}).click();
+        const answer = floating.locator(".readweave-readable-body");
+        await expect(answer).toBeVisible();
+        await expect(mainAnswer).toHaveText(mainText);
+        await expect(panel.getByRole("textbox", {name:"Question",exact:true})).toHaveValue(mainQuestion);
+        await selectAnswer(answer);
+        if (level<3) await floating.getByRole("button", {name:"保存并追问",exact:true}).click();
+        else {
+            await expect(floating.getByRole("button", {name:"保存并追问",exact:true})).toHaveCount(0);
+            await floating.getByRole("button", {name:"保存回答",exact:true}).click();
+            await expect(floating).toContainText("已保存");
+        }
+    }
+    expect(starts).toHaveLength(4);
+    expect(starts.slice(1).every(request => request.parentLinkId && request.answerSelection)).toBe(true);
+    expect(await editor.innerText()).toBe(source);
+    expect(errors).toEqual([]);
+});
+
 test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse, editing, hover and export", async ({ page, context }) => {
     test.setTimeout(120_000);
     page.setDefaultTimeout(7_000);
@@ -245,7 +301,7 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     const definitionType = contentTypeGroup.getByRole("button", { name: "定义", exact: true });
     const annotationType = contentTypeGroup.getByRole("button", { name: "注解", exact: true });
     const noteType = contentTypeGroup.getByRole("button", { name: "笔记", exact: true });
-    const keyPointType = contentTypeGroup.getByRole("button", { name: "要点", exact: true });
+    const keyPointType = contentTypeGroup.getByRole("button", { name: "总结", exact: true });
     for (const contentType of [ problemType, definitionType, annotationType, noteType, keyPointType ]) {
         await expect(contentType).toBeEnabled();
     }
@@ -1339,8 +1395,8 @@ test("ReadWeave restores a background result after switching away and clears the
     await expect(panel.locator(".readweave-selection")).toContainText("后台任务");
     await expect(panel.getByTestId("readweave-answer")).toContainText(/定义与命名：/);
     await expect(panel.getByTestId("readweave-generation-monitor")).toContainText("全部检查通过");
-    await expect(restoredAnchor).not.toHaveClass(/readweave-anchor-status-unread/);
-    await expect(restoredAnchor).not.toHaveClass(/readweave-anchor-draft/);
+    await expect(restoredAnchor).toHaveClass(/readweave-anchor-status-unread/);
+    await expect(restoredAnchor).toHaveClass(/readweave-anchor-draft/);
     await ensureGeneratedItemSaved(panel);
     await expect(restoredAnchor).not.toHaveClass(/readweave-anchor-draft/);
     await expect(app.currentNoteSplit.locator("p", { hasText: source })).toHaveAttribute("data-readweave-paragraph-question-count", "1");
@@ -1478,8 +1534,8 @@ test("ReadWeave keeps a new question unread on a saved term fragment until the u
     // Playwright's generic hit-point land on the containing paragraph even
     // though a real glyph click targets this span.
     await termAnchor.dispatchEvent("click");
-    await expect(termAnchor).not.toHaveClass(/readweave-anchor-status-unread/);
-    await expect(termAnchor).not.toHaveClass(/readweave-anchor-draft/);
+    await expect(termAnchor).toHaveClass(/readweave-anchor-status-unread/);
+    await expect(termAnchor).toHaveClass(/readweave-anchor-draft/);
     await termAnchor.dispatchEvent("click");
     await expect(termAnchor).not.toHaveClass(/readweave-anchor-locked/);
     await expect(questionPanel.getByRole("button", { name: "I reviewed it — save", exact: true })).toBeVisible();

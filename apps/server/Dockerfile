@@ -1,9 +1,9 @@
-FROM node:24.18.0-bullseye-slim AS builder
+FROM node:24.18.0-bookworm-slim AS builder
 RUN corepack enable
 
 # Install build tools required to compile native addons (e.g. better-sqlite3) on ARM
 RUN rm -rf /var/lib/apt/lists/* && \
-    (apt-get update || apt-get -o Acquire::Check-Valid-Until=false update) && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
     python3 \
     make \
@@ -16,10 +16,10 @@ COPY ./docker/package.json ./docker/pnpm-workspace.yaml /usr/src/app/
 # We have to use --no-frozen-lockfile due to CKEditor patches
 RUN pnpm install --no-frozen-lockfile --prod && pnpm rebuild
 
-FROM node:24.18.0-bullseye-slim
+FROM node:24.18.0-bookworm-slim
 # Install only runtime dependencies
 RUN rm -rf /var/lib/apt/lists/* && \
-    (apt-get update || apt-get -o Acquire::Check-Valid-Until=false update) && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
     gosu && \
     rm -rf \
