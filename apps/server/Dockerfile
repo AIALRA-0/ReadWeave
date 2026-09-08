@@ -3,7 +3,7 @@ RUN corepack enable
 
 # Install build tools required to compile native addons (e.g. better-sqlite3) on ARM
 RUN rm -rf /var/lib/apt/lists/* && \
-    apt-get update && \
+    (apt-get update || apt-get -o Acquire::Check-Valid-Until=false update) && \
     apt-get install -y --no-install-recommends \
     python3 \
     make \
