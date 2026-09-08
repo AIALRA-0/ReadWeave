@@ -2860,6 +2860,7 @@
     "issue_entity": "实体范围",
     "issue_evidence": "证据与联网校准",
     "issue_integrity": "片段完整性",
+    "issue_configuration": "模型配置与计费",
     "issue_other": "其他检查",
     "error_detail": "错误详情",
     "anchor_lost_before_generation": "文字锚点尚未稳定写入，请保持当前选区并重试",

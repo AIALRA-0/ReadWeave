@@ -3268,6 +3268,7 @@
     "issue_entity": "Entity scope",
     "issue_evidence": "Evidence and web calibration",
     "issue_integrity": "Segment integrity",
+    "issue_configuration": "Model configuration and billing",
     "issue_other": "Other checks",
     "error_detail": "Error details",
     "anchor_lost_before_generation": "The text anchor is not stable yet. Keep this selection and try again",

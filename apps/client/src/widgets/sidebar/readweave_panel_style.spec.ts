@@ -33,4 +33,13 @@ describe("ReadWeave generation monitor disclosure", () => {
         expect(css).toContain(".readweave-readable-body .katex-display");
         expect(css).toMatch(/(?:overflow-x:\s*auto|overflow:\s*auto\s+hidden)/u);
     });
+
+    it("keeps the external-search checkbox on one left-aligned row", () => {
+        expect(css).toMatch(/\.readweave-editor\s+label\.readweave-external-search-options\s*\{[^}]*flex-wrap:\s*nowrap[^}]*justify-content:\s*flex-start/su);
+        expect(css).toMatch(/\.readweave-question-optimization\s*\{[^}]*align-items:\s*center\s*!important/su);
+    });
+
+    it("keeps the settings button on the left", () => {
+        expect(css).toMatch(/\.readweave-panel-toolbar\s*\{[^}]*justify-content:\s*flex-start/su);
+    });
 });

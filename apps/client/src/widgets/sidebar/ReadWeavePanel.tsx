@@ -2047,24 +2047,21 @@ export default function ReadWeavePanel() {
                             )}
 
                             {contentType !== "note" && contentType !== "key-point" && (
-                                <div
-                                    class="readweave-question-optimization
-                                        readweave-external-search-options"
-                                    role="group"
+                                <label
+                                    class="readweave-question-optimization readweave-external-search-options"
                                     aria-label="外部搜索设置"
+                                    title="默认使用外部搜索补充资料；勾选后本次回答只使用文章内容"
                                 >
-                                    <label title="默认使用外部搜索补充资料；勾选后本次回答只使用文章内容">
-                                        <input
-                                            type="checkbox"
-                                            checked={externalSearchDisabled}
-                                            disabled={editorLocked}
-                                            onChange={event =>
-                                                setExternalSearchDisabled(event.currentTarget.checked)}
-                                            data-testid="readweave-disable-external-search"
-                                        />
-                                        <span><strong>关闭外部搜索</strong></span>
-                                    </label>
-                                </div>
+                                    <input
+                                        type="checkbox"
+                                        checked={externalSearchDisabled}
+                                        disabled={editorLocked}
+                                        onChange={event =>
+                                            setExternalSearchDisabled(event.currentTarget.checked)}
+                                        data-testid="readweave-disable-external-search"
+                                    />
+                                    <span><strong>关闭外部搜索</strong></span>
+                                </label>
                             )}
 
                             {candidates.length > 0 && (
@@ -2351,6 +2348,7 @@ function GenerationMonitor({ job, pinned, onTogglePinned }: { job: ReadWeaveGene
         entity: t("readweave.issue_entity"),
         evidence: t("readweave.issue_evidence"),
         integrity: t("readweave.issue_integrity"),
+        configuration: t("readweave.issue_configuration"),
         other: t("readweave.issue_other")
     };
     return (

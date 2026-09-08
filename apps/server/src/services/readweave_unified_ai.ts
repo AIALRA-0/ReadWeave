@@ -100,15 +100,42 @@ interface ModelCallResult<T> {
     usage: CompletionUsage;
 }
 
-function safeModelFailure(error: unknown): Error {
+function safeProviderMessage(value: string): string {
+    return cleanText(value, 300)
+        .replace(/\b(?:sk|key|token)[-_A-Za-z0-9]{12,}\b/giu, "[已隐藏]")
+        .replace(/\s+/gu, " ");
+}
+
+function safeModelFailure(
+    error: unknown,
+    config: ReadWeaveModelRuntimeConfig,
+    stage: string
+): Error {
     const diagnostic = error instanceof Error ? `${error.name} ${error.message}` : String(error);
     let category = "模型服务请求失败";
-    if (/(?:\b402\b|Insufficient Balance|余额不足)/iu.test(diagnostic)) category = "模型服务余额不足";
+    let action = "请稍后重试；若持续出现，请在“设置 → AI / LLM → ReadWeave”检查服务地址和模型";
+    if (/(?:\b402\b|Insufficient Balance|余额不足|insufficient[_\s-]*(?:funds|credits?)|quota exceeded)/iu.test(diagnostic)) {
+        category = "模型服务额度不足";
+        action = "请为该模型服务充值，或在“设置 → AI / LLM → ReadWeave”切换有可用额度的写作模型";
+    }
     else if (/(?:AbortError|TimeoutError|timeout|timed\s*out|ETIMEDOUT)/iu.test(diagnostic)) category = "模型服务请求超时";
     else if (/(?:terminated|premature\s+close|socket\s+hang\s+up|ECONNRESET|EPIPE)/iu.test(diagnostic)) category = "模型服务连接中断";
     else if (/(?:ENOTFOUND|EAI_AGAIN|getaddrinfo|DNS)/iu.test(diagnostic)) category = "模型服务地址解析失败";
     else if (/(?:ECONNREFUSED|ENETUNREACH|EHOSTUNREACH)/iu.test(diagnostic)) category = "模型服务不可达";
-    const failure = new Error(`ReadWeave 无法生成：${category}；问题契约、证据和草稿均未被伪造或替代`);
+    const status = diagnostic.match(/(?:HTTP\s*)?(\d{3})\b/u)?.[1];
+    const upstream = diagnostic.match(/模型服务返回(?: HTTP)? \d{3}：(.+)/u)?.[1];
+    const provider = new URL(config.baseUrl).hostname;
+    const details = [
+        `阶段：${stage}`,
+        `提供商：${provider}`,
+        `模型：${config.model}`,
+        ...(status ? [ `HTTP ${status}` ] : [])
+    ].join("；");
+    const failure = new Error(
+        `ReadWeave 无法生成：${category}（${details}）`
+        + `${upstream ? `；上游返回：${safeProviderMessage(upstream)}` : ""}`
+        + `；处理方法：${action}`
+    );
     failure.cause = error;
     return failure;
 }
@@ -169,7 +196,8 @@ async function requestJson<T>(
     maxTokens: number,
     timeoutMs = 15_000,
     runtimeConfig?: ReadWeaveModelRuntimeConfig,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    stage = "回答生成"
 ): Promise<ModelCallResult<T>> {
     const config = runtimeConfig ?? getReadWeaveRuntimeConfig();
     const providerHost = new URL(config.baseUrl).hostname;
@@ -207,7 +235,7 @@ async function requestJson<T>(
                 signal: signal ? AbortSignal.any([ signal, AbortSignal.timeout(effectiveTimeoutMs) ]) : AbortSignal.timeout(effectiveTimeoutMs)
             });
             const payload = await response.json() as CompletionResponse;
-            if (!response.ok) throw new Error(`模型服务返回 ${response.status}：${payload.error?.message || "未知错误"}`);
+            if (!response.ok) throw new Error(`模型服务返回 HTTP ${response.status}：${payload.error?.message || "未知错误"}`);
             const content = payload.choices?.[0]?.message?.content?.trim();
             if (!content) throw new Error("模型返回了空结果");
             return {
@@ -224,7 +252,7 @@ async function requestJson<T>(
             // being retried.  Credentials, balance and model-not-found errors
             // are genuinely permanent; request-shape responses get the same
             // bounded retry treatment as 429 and connection resets.
-            const permanentClientFailure = /模型服务返回 (?:401|402|403|404)\b/u.test(detail);
+            const permanentClientFailure = /模型服务返回 HTTP (?:401|402|403|404)\b/u.test(detail);
             if (permanentClientFailure) break;
             if (attempt < maximumAttempts - 1) {
                 await new Promise<void>((resolve, reject) => {
@@ -237,7 +265,7 @@ async function requestJson<T>(
             }
         }
     }
-    throw safeModelFailure(lastError);
+    throw safeModelFailure(lastError, config, stage);
 }
 
 function normalizeQuestion(request: ReadWeaveGenerateRequest): string {
@@ -718,19 +746,19 @@ async function _gatherExternalEvidence(
     const sources = selected.map((source, index) => {
         const page = pageByUrl.get(source.url);
         return {
-        sourceId: `S${index + 1}`,
-        sourceType: "external" as const,
-        provider: source.provider,
-        title: source.title,
-        url: source.url,
-        excerpt: cleanText(page?.content || source.snippet, 1_200),
-        publishedAt: source.publishedAt,
-        accessedAt,
-        sourceCategory: source.sourceCategory,
-        evidenceFamily: source.evidenceFamily,
-        originalRank: source.originalRank,
-        rerankScore: source.score,
-        retrievalMode: page?.content ? "page-reader" as const : source.retrievalMode
+            sourceId: `S${index + 1}`,
+            sourceType: "external" as const,
+            provider: source.provider,
+            title: source.title,
+            url: source.url,
+            excerpt: cleanText(page?.content || source.snippet, 1_200),
+            publishedAt: source.publishedAt,
+            accessedAt,
+            sourceCategory: source.sourceCategory,
+            evidenceFamily: source.evidenceFamily,
+            originalRank: source.originalRank,
+            rerankScore: source.score,
+            retrievalMode: page?.content ? "page-reader" as const : source.retrievalMode
         };
     });
     return {
@@ -3064,7 +3092,8 @@ export async function generateReadWeaveLocalRewrite(
         700,
         12_000,
         undefined,
-        signal
+        signal,
+        "局部改写"
     );
     const original = cleanText(completion.value.original, 2_000);
     const replacement = cleanText(completion.value.replacement, 2_000);
@@ -3276,7 +3305,7 @@ export async function generateUnifiedReadWeaveAnswer(
         : `已准备 ${localSources.length} 个文章片段，未取得外部来源`);
 
     report("drafting", "正在按问题契约和证据清单生成回答");
-    const writer = await requestJson<WriterPayload>(writerSystemPrompt(harness, domainProfile), writerInput(contract, sources, request, undefined, answerPlanForWriter), 2_200, 15_000, undefined, signal);
+    const writer = await requestJson<WriterPayload>(writerSystemPrompt(harness, domainProfile), writerInput(contract, sources, request, undefined, answerPlanForWriter), 2_200, 15_000, undefined, signal, "回答生成");
     usages.push(writer.usage);
     let body = formatReadWeaveBody(writer.value.body);
     const sourceIds = new Set(sources.map(source => source.sourceId));

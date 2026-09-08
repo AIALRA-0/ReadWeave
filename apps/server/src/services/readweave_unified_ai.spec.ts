@@ -965,6 +965,17 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.usage?.modelCalls).toBe(1);
     });
 
+    it("reports provider, model, stage and upstream reason for exhausted credit", async () => {
+        vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+            error: { message: "Insufficient Balance" }
+        }, { status: 402 })));
+
+        await expect(generateUnifiedReadWeaveAnswer(request("如何工作？"))).rejects.toThrow(
+            "ReadWeave 无法生成：模型服务额度不足（阶段：回答生成；提供商：api.deepseek.com；模型：deepseek-v4-flash；HTTP 402）；上游返回：Insufficient Balance；处理方法：请为该模型服务充值，或在“设置 → AI / LLM → ReadWeave”切换有可用额度的写作模型"
+        );
+        expect(fetch).toHaveBeenCalledTimes(1);
+    });
+
     it("automatically searches for identity and exhaustive background requests", async () => {
         const result = await generateUnifiedReadWeaveAnswer(request("“肖恩·布鲁克斯”是谁？我需要他的所有背景和资料"));
 

@@ -474,6 +474,21 @@ describe("ReadWeave persisted generation jobs", () => {
         expect(generateMock).toHaveBeenCalledTimes(1);
     });
 
+    it("classifies an exhausted provider balance as configuration instead of evidence", async () => {
+        generateMock.mockRejectedValue(new Error(
+            "ReadWeave 无法生成：模型服务额度不足（阶段：回答生成；提供商：api.deepseek.com；模型：deepseek-v4-flash；HTTP 402）；上游返回：Insufficient Balance"
+        ));
+
+        const started = startReadWeaveGenerationJob({ ...request, anchorId: "range_jobs_balance" });
+        const paused = await waitForStatus(started.jobId, "paused");
+
+        expect(generateMock).toHaveBeenCalledTimes(1);
+        expect(paused.failureClass).toBe("configuration");
+        expect(paused.error).toContain("HTTP 402");
+        expect(paused.issues[0]?.category).toBe("configuration");
+        expect(paused.progress.at(-1)?.issueGroups?.[0]?.category).toBe("configuration");
+    });
+
     it("does not automatically replay a transport failure and waits for a manual retry", async () => {
         generateMock.mockRejectedValue(new Error("upstream timeout"));
 

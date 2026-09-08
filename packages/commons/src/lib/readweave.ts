@@ -261,7 +261,7 @@ export interface ReadWeaveGenerationAudit {
 
 export type ReadWeaveGenerationStage = "queued" | "optimizing" | "gathering-context" | "drafting" | "checking" | "repairing" | "expanding-context" | "complete" | "paused" | "cancelled" | "failed";
 
-export type ReadWeaveGenerationIssueCategory = "format" | "entity" | "evidence" | "integrity" | "other";
+export type ReadWeaveGenerationIssueCategory = "format" | "entity" | "evidence" | "integrity" | "configuration" | "other";
 
 export interface ReadWeaveGenerationIssue {
     code: string;

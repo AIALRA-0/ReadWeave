@@ -373,6 +373,7 @@ function rowFor(jobId: string): JobRow {
 }
 
 function categoryForIssue(message: string): ReadWeaveGenerationIssueCategory {
+    if (/模型服务|提供商|HTTP\s*(?:401|402|403)|余额不足|额度不足|api.?key|密钥|凭据|credential|configuration/iu.test(message)) return "configuration";
     if (/格式|全称|缩写|标点|括号|乱码|空格|大小写|换行|英文名词|canonical|format/i.test(message)) return "format";
     if (/作者|人名|实体|产品|组织|术语|entity|author/i.test(message)) return "entity";
     if (/证据|来源|联网|事实|时效|evidence|source/i.test(message)) return "evidence";
@@ -561,7 +562,7 @@ export function setReadWeaveCommitFaultForTests(point?: typeof commitFaultForTes
 function classifyFailure(error: unknown): ReadWeaveFailureClass {
     const message = error instanceof Error ? error.message : String(error);
     if (/protected session|受保护会话/iu.test(message)) return "protected-session";
-    if (/401|402|403|无效.*(?:api.?key|密钥)|api.?key.*(?:缺失|missing|invalid)|凭据|credential|model.*(?:not found|不存在)|模型不存在|endpoint.*(?:不兼容|unsupported)/iu.test(message)) return "configuration";
+    if (/401|402|403|余额不足|额度不足|Insufficient Balance|insufficient[_\s-]*(?:funds|credits?)|quota exceeded|无效.*(?:api.?key|密钥)|api.?key.*(?:缺失|missing|invalid)|凭据|credential|model.*(?:not found|不存在)|模型不存在|endpoint.*(?:不兼容|unsupported)/iu.test(message)) return "configuration";
     if (/费用|预算|cost|budget/iu.test(message)) return "budget";
     if (/来源|证据|搜索|联网|source|evidence|search/iu.test(message)) return "evidence";
     if (/格式|标点|括号|乱码|format|schema|json/iu.test(message)) return "format";
