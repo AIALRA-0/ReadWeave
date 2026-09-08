@@ -117,7 +117,9 @@ async function createTextNote(app: App, title: string, body: string) {
     // The empty-tab editor can remain visible briefly while the newly created note
     // becomes active. Wait for the title first so we never fill the stale editor.
     await expect(app.currentNoteSplitTitle).toHaveValue(title, { timeout: 15_000 });
-    const editor = app.currentNoteSplit.locator(".note-detail-editable-text-editor");
+    const editor = app.currentNoteSplit
+        .locator(".note-detail-editable-text.visible .note-detail-editable-text-editor")
+        .first();
     // A newly created empty CKEditor is already ready for input before it has
     // materialized its first paragraph. Waiting for a child <p> makes the test
     // depend on an implementation detail and intermittently times out on cold
