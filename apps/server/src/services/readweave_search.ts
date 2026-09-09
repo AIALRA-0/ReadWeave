@@ -912,12 +912,15 @@ export async function readReadWeavePageWithJina(
             "Accept": "text/plain",
             ...(!options.anonymous ? { Authorization: `Bearer ${config.jinaApiKey}` } : {}),
             "X-Return-Format": "markdown",
-            "X-Token-Budget": "4000"
+            // Token-Budget rejects an entire long page (HTTP 409), it does not
+            // truncate it. Anonymous reads have no paid token debit; trim them
+            // to a bounded document before choosing a question-relevant window.
+            ...(options.anonymous ? { "X-Max-Tokens": "12000" } : { "X-Token-Budget": "4000" })
         },
         signal: options.signal ? AbortSignal.any([ options.signal, AbortSignal.timeout(12_000) ]) : AbortSignal.timeout(12_000)
     });
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
-    return plainText(await response.text(), 24_000);
+    return plainText(await response.text(), options.anonymous ? 48_000 : 24_000);
 }
 
 function isCurrentQuery(query: string): boolean {

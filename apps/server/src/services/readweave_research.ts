@@ -5,26 +5,34 @@ import type {
 } from "@triliumnext/commons";
 
 import { READWEAVE_RESEARCH_ACTION_LIMIT,ReadWeaveBudget } from "./readweave_budget.js";
-import { readWeaveExplicitExpansions, readWeaveResearchSubject } from "./readweave_evidence_quality.js";
+import {
+    READWEAVE_ORIGIN_ASSERTION,
+    readWeaveExplicitExpansions,
+    readWeaveResearchSubject
+} from "./readweave_evidence_quality.js";
 import { readReadWeavePageWithJina, searchReadWeaveEvidence } from "./readweave_search.js";
 
 export function readWeaveEvidenceWindow(text: string, question: string, limit = 1800): string {
     if (text.length <= limit) return text;
     const terms = question.match(/[A-Za-z][A-Za-z0-9-]{2,}|[\p{Script=Han}]{2,6}/gu) ?? [];
-    const cues =
-        /stands for|named (?:after|for)|name (?:comes|derives)|abbreviation|acronym|得名|命名|全称|词源/iu;
+    const cues = readWeaveNamingRequirements(question, false).includes("origin")
+        ? READWEAVE_ORIGIN_ASSERTION
+        : /stands for|abbreviation|acronym|全称/iu;
     const position = text.search(cues);
     const firstTerm =
         terms
             .map((term) => text.toLowerCase().indexOf(term.toLowerCase()))
             .find((index) => index >= 0) ?? 0;
-    const start = Math.max(0, (position >= 0 ? position : firstTerm) - 240);
+    // A naming decision may refer back to the inspiration in the preceding
+    // sentence. Keep that provenance, while preserving the same output cap.
+    const start = Math.max(0, (position >= 0 ? position : firstTerm) - 800);
     return text.slice(start, start + limit);
 }
 
 export function readWeaveNamingRequirements(question: string, fallback = true): Array<"expansion" | "origin"> {
     const requested = question.split(/[，,；;。！？?\n]/u)
-        .filter(clause => !/^\s*(?:不要|不用|无需|不必|禁止|不得|请勿)/u.test(clause)).join(" ");
+        .filter(clause => !/^\s*(?:请)?(?:不要|不用|无需|不必|禁止|不得|请勿|别|不(?:介绍|展开|讨论|解释|涉及|包含|添加))/u
+            .test(clause)).join(" ");
     const requirements: Array<"expansion" | "origin"> = [];
     if (/全称|展开|缩写|acronym|abbreviation|full name|stands for/iu.test(requested)) requirements.push("expansion");
     if (/得名|命名|词源|名称.{0,12}(?:来历|来源)|从何而来|named after|etymology|name origin/iu.test(requested)) requirements.push("origin");
@@ -43,7 +51,7 @@ export function readWeaveMissingNamingFacts(sources: ReadWeaveEvidenceSource[], 
         )
             ? []
             : ["正式展开或专名属性"]),
-        ...(!requirements.includes("origin") || /named (?:after|for)|name (?:comes|derives)|得名|命名.{0,30}(?:源于|来自|纪念)|词源/iu.test(
+        ...(!requirements.includes("origin") || READWEAVE_ORIGIN_ASSERTION.test(
             text,
         )
             ? []

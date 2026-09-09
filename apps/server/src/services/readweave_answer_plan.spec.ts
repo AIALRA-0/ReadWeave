@@ -19,6 +19,25 @@ describe("ReadWeave answer plan", () => {
     it("keeps a full-name-only flow short", () => {
         expect(buildReadWeaveAnswerPlan(namingContract("XPT 的全称是什么？")).steps).toHaveLength(1);
     });
+    it("keeps origin answers narrow and honors negative scope", () => {
+        const plan = buildReadWeaveAnswerPlan(namingContract("Lumen 的名称来源是什么？只解释得名原因，不介绍语法和用途"));
+        expect(plan.answerType).toBe("general");
+        expect(plan.steps).toHaveLength(1);
+        expect(plan.answerRequirements).toEqual(plan.steps);
+        expect(plan.exclusions).toContain("不介绍语法和用途");
+    });
+    it("does not erase explicitly requested history from a broader naming question", () => {
+        const plan = buildReadWeaveAnswerPlan(namingContract(
+            "Lumen 的名称来源是什么？它的发展历史和用途是什么？"
+        ));
+        expect(plan.steps.length).toBeGreaterThan(1);
+    });
+    it("answers both the full name and origin when both are explicitly requested", () => {
+        const plan = buildReadWeaveAnswerPlan(namingContract("Lumen 的全称和名称来源是什么？"));
+        expect(plan.steps).toHaveLength(2);
+        expect(plan.steps[0]).toContain("正式全称");
+        expect(plan.steps[1]).toContain("名称从何而来");
+    });
     it("retains broader steps when the user actually requests a mechanism", () => {
         const plan = buildReadWeaveAnswerPlan(namingContract("XPT 的全称是什么？它的运作原理是什么？"));
         expect(plan.answerType).toBe("definition");

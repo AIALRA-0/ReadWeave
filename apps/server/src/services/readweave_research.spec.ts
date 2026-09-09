@@ -31,6 +31,8 @@ const result = (snippet: string, cost = 0.0072) => ({
 });
 describe("bounded targeted research", () => {
     it("does not turn an exclusion into an expensive origin requirement", () => {
+        expect(readWeaveNamingRequirements("XPT 的全称是什么？不介绍名称来历"))
+            .toEqual([ "expansion" ]);
         expect(readWeaveNamingRequirements("XPT 的英文全称是什么？请解释这些词，不要猜测名称来历")).toEqual(["expansion"]);
         expect(readWeaveNamingRequirements("Lumen 从何得名？")).toEqual(["origin"]);
     });
@@ -51,6 +53,29 @@ describe("bounded targeted research", () => {
     it("keeps the relevant fact beyond the first page window", () => {
         const text = `${"Preface ".repeat(1000)  }Lumen was named after a light unit`;
         expect(readWeaveEvidenceWindow(text, "Lumen origin")).toContain("named after a light unit");
+    });
+    it("reads past a contents list and stops at an explicit naming decision", async () => {
+        const text = `Why is it called Lumen? ${"Introduction ".repeat(2000)}`
+            + `The inspiration was a light unit. ${"Context ".repeat(50)}`
+            + "The author decided to call the tool Lumen after the light unit.";
+        read.mockResolvedValue(text);
+        const r = await researchReadWeaveEvidence(
+            { ...contract, normalizedQuestion: "Lumen 的名称来源是什么？" },
+            "Lumen", .07, true, () => {}, undefined, "Lumen"
+        );
+        expect(r.sources[0].excerpt).toContain("decided to call the tool Lumen");
+        expect(r.sources[0].excerpt).toContain("The inspiration was a light unit");
+        expect(r.audit.missingFacts).toEqual([]);
+        expect(r.audit.stopReason).toBe("sufficient");
+        expect(search).toHaveBeenCalledTimes(1);
+        expect(r.searchCostCny).toBe(.0072);
+    });
+    it("does not treat a heading or a different object's naming decision as evidence", () => {
+        const sources = [ {
+            excerpt: "Why is it called Lumen? The author decided to call the tool Other."
+        } ];
+        expect(readWeaveMissingNamingFacts(sources as never, "Lumen", [ "origin" ]))
+            .toEqual([ "命名来历" ]);
     });
     it("does not infer an acronym from a publication title", () => {
         expect(

@@ -6,8 +6,18 @@ export interface ReadWeaveNamingEvidence {
     quote: string;
 }
 
-const NAMING_ASSERTION =
-    /(?:名称|名字|命名|得名|词源).{0,40}(?:源于|源自|来自|意为|暗示)|(?:缩写|全称).{0,40}(?:是|为|展开|表示)|[A-Za-z][\w-]*.{0,20}(?:是|为).{0,160}(?:缩写|首字母)|(?:stands for|named after|name derives|acronym for)/iu;
+export const READWEAVE_ORIGIN_ASSERTION = new RegExp([
+    "named (?:after|for)|name (?:comes|derives)|(?:decided|chose) to (?:call|name)",
+    "(?:chose|chosen).{0,60}(?:name|title)|name.{0,60}(?:chosen|inspired|taken)",
+    "(?:名称|名字|词源).{0,40}(?:源于|源自|来自|来源|意为|暗示)|(?<!可)以.{0,60}(?:命名|为名)",
+    "(?:命名|得名)(?:于|自)|命名.{0,30}(?:源于|来自|纪念)",
+    "名称.{0,20}(?:与.{0,40}无关|不是|并非)"
+].join("|"), "iu");
+const NAMING_ASSERTION = new RegExp([
+    READWEAVE_ORIGIN_ASSERTION.source,
+    "(?:缩写|全称).{0,40}(?:是|为|展开|表示)",
+    "[A-Za-z][\\w-]*.{0,20}(?:是|为).{0,160}(?:缩写|首字母)|stands for|acronym for"
+].join("|"), "iu");
 const GUESS =
     /可能|大概|或许|似乎|暗示|猜测|推测|未.{0,12}(?:明确|给出|提供|确认)|无法确认|具体展开|perhaps|probably|might|may derive/iu;
 
@@ -57,8 +67,11 @@ export function checkReadWeaveNamingEvidence(
         // A quote about another named entity or another English expansion
         // cannot support this sentence merely because it is a real quote.
         const sameNamedWords = assertedWords.every(word => quoteWords.has(word));
+        const quotedNumbers = new Set(entry.quote.match(/\d+(?:\.\d+)?/gu) ?? []);
+        const sameNumbers = (entry.bodyText.match(/\d+(?:\.\d+)?/gu) ?? [])
+            .every(number => quotedNumbers.has(number));
         return (
-            sameNamedWords &&
+            sameNamedWords && sameNumbers &&
             entry.quote.length >= 12 &&
             body.includes(entry.bodyText) &&
             !!source?.excerpt.includes(entry.quote) &&

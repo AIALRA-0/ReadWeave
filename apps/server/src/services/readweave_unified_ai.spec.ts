@@ -928,6 +928,21 @@ describe.skip("ReadWeave retired multi-stage workflow", () => {
 });
 
 describe("ReadWeave one-pass workflow", () => {
+    it("sends the narrow scope and difficult cost target to the writer", async () => {
+        const result = await generateUnifiedReadWeaveAnswer({
+            ...request("Lumen 的名称来源是什么？只解释得名原因，不介绍语法和用途"),
+            activeExternalSearch: false,
+            autoExternalSearch: false
+        });
+        expect(result.answerPlan?.steps).toHaveLength(1);
+        expect(result.audit?.questionContract.answerRequirements).toEqual(result.answerPlan?.steps);
+        expect(result.audit?.questionContract.exclusions).toContain("不介绍语法和用途");
+        expect(result.usage).toMatchObject({ targetCny: 0.05, budgetCny: 0.1 });
+        const payload = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body));
+        const writerInput = payload.messages[1].content;
+        expect(writerInput).toContain("不介绍语法和用途");
+        expect(writerInput).not.toContain("先直接回答问题,再补足理解该答案所必需的机制");
+    });
     it("delivers an explicitly sourced full name with one search and no invented origin requirement", async () => {
         searchMock.mockImplementation(async options => ({
             ...await defaultSearchImplementation(options),
@@ -943,7 +958,8 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.body).toContain("- 示例（Example）\n- 分组（Packet）\n- 传输（Transfer）");
         expect(result.evidenceSources?.some(source=>source.sourceId==="S1")).toBe(true);
         expect(result.audit?.research).toMatchObject({queryCount:1,stopReason:"sufficient",missingFacts:[]});
-        expect(result.usage).toMatchObject({modelCalls:1,budgetCny:.05,withinBudget:true});
+        expect(result.usage).toMatchObject({ modelCalls: 1, targetCny: .01,
+            budgetCny: .05, withinBudget: true });
         expect(searchMock).toHaveBeenCalledTimes(1);
         expect(result.qualityState).toBe("provisional");
         expect(result.audit?.unresolvedIssues?.some(issue=>issue.includes("比较回答"))).toBe(false);

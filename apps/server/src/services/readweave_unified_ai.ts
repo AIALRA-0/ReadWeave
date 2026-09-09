@@ -2547,6 +2547,7 @@ function usageSummary(usages: CompletionUsage[], searchCostCny: number, budgetCn
     const outputTokens = usages.reduce((sum, usage) => sum + (usage.completion_tokens ?? 0), 0);
     const modelCost = (cacheHitInputTokens * 0.02 + cacheMissInputTokens * 1 + outputTokens * 2) / 1_000_000;
     const costCny = Number((modelCost + searchCostCny).toFixed(6));
+    const targetCny = budgetCny > COST_BUDGET_CNY ? COST_BUDGET_CNY : ROUTINE_COST_TARGET_CNY;
     return {
         costBasis: "configured-rate-estimate",
         modelCalls: usages.length,
@@ -2556,9 +2557,9 @@ function usageSummary(usages: CompletionUsage[], searchCostCny: number, budgetCn
         outputTokens,
         totalTokens: usages.reduce((sum, usage) => sum + (usage.total_tokens ?? (usage.prompt_tokens ?? 0) + (usage.completion_tokens ?? 0)), 0),
         costCny,
-        targetCny: ROUTINE_COST_TARGET_CNY,
+        targetCny,
         budgetCny,
-        withinTarget: costCny <= ROUTINE_COST_TARGET_CNY,
+        withinTarget: costCny <= targetCny,
         withinBudget: costCny <= budgetCny
     };
 }
@@ -2804,6 +2805,10 @@ export async function generateUnifiedReadWeaveAnswer(
         ...answerPlanDraft,
         searchQueries: externalSearchDecision.queries
     };
+    // The adopted plan is authoritative for scope. Do not simultaneously send
+    // the writer a generic requirement to expand mechanisms and background.
+    contract.answerRequirements = answerPlan.answerRequirements ?? contract.answerRequirements;
+    contract.exclusions = answerPlan.exclusions ?? contract.exclusions;
     const answerPlanForWriter = answerPlan;
     report("optimizing", `问题已归一化：${contract.normalizedQuestion}`, [], {
         normalizedQuestion: contract.normalizedQuestion,

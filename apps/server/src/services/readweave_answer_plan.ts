@@ -26,13 +26,28 @@ const STEPS: Record<ReadWeaveAnswerPlan["answerType"], string[]> = {
 };
 
 function namingOnlySteps(question: string): string[] | undefined {
-    const requested = question.replace(/(?:不要|不必|无需|不用|(?<!\p{L})别)[^，,。；;！？?\n]*/gu, "");
-    const broader = /(?:定义|本质|机制|原理|运作|用途|作用|应用|历史|词源|来历|区别|比较|优缺点|如何|怎么)/u;
-    if (!/(?:全称|缩写展开|full name|stands for)/iu.test(requested)
-        || broader.test(requested)) return undefined;
-    return /(?:词义|词.{0,8}(?:含义|意思|表示)|每个词|逐词|word meanings?)/iu.test(requested)
+    const requested = question.split(/[，,。；;！？?\n]/u)
+        .filter(clause => !explicitExclusion(clause)).join(" ");
+    const broader = /(?:定义|本质|机制|原理|运作|用途|作用|应用|历史|区别|比较|优缺点|如何|怎么)/u;
+    const asksFullName = /(?:全称|缩写展开|full name|stands for)/iu.test(requested);
+    const asksWordMeanings = /(?:词义|词.{0,8}(?:含义|意思|表示)|每个词|逐词|word meanings?)/iu
+        .test(requested);
+    if (/(?:名称|名字).{0,12}(?:来源|来历)|得名|命名|词源|name origin|named after/iu.test(requested)
+        && !broader.test(requested)) {
+        return [
+            ...(asksFullName ? [ "给出有来源支持的正式全称" ] : []),
+            ...(asksWordMeanings ? [ "逐项解释用户询问的词义" ] : []),
+            "只用直接来源说明名称从何而来，必要时交代命名者；回答后结束，不展开语法、用途、功能或发展历史"
+        ];
+    }
+    if (!asksFullName || broader.test(requested)) return undefined;
+    return asksWordMeanings
         ? [ "给出有来源支持的正式全称", "逐项解释全称中各词的含义，不扩展其他术语或机制" ]
         : [ "直接给出有来源支持的正式全称，不扩展未问的机制、用途或背景" ];
+}
+
+function explicitExclusion(clause: string): boolean {
+    return /^\s*(?:请)?(?:不要|不必|无需|不用|禁止|不得|请勿|别|不(?:介绍|展开|讨论|解释|涉及|包含|添加))/u.test(clause);
 }
 
 export function buildReadWeaveAnswerPlan(
@@ -47,8 +62,12 @@ export function buildReadWeaveAnswerPlan(
         reviewStatus: autoApplied ? "auto-applied" : "draft",
         answerType,
         objective: contract.objective,
-        answerRequirements: contract.answerRequirements,
-        exclusions: contract.exclusions,
+        answerRequirements: namingSteps ?? contract.answerRequirements,
+        exclusions: [ ...new Set([
+            ...contract.normalizedQuestion.split(/[，,。；;！？?\n]/u)
+                .filter(explicitExclusion).map(clause => clause.trim()),
+            ...contract.exclusions
+        ]) ],
         searchQueries: contract.searchQueries,
         steps,
         summary: steps.join(" → "),

@@ -156,6 +156,19 @@ describe("ReadWeave free-source search", () => {
         await expect(readReadWeavePageWithJina("https://wuxili.net/", { fetcher }))
             .resolves.toContain("Principal Software Engineer at AMD/Xilinx");
     });
+    it("truncates anonymous long pages instead of rejecting them", async () => {
+        const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
+            const headers = new Headers(init?.headers);
+            expect(headers.get("Authorization")).toBeNull();
+            expect(headers.get("X-Token-Budget")).toBeNull();
+            expect(headers.get("X-Max-Tokens")).toBe("12000");
+            const text = `${"Introduction ".repeat(2100)}The author decided to call it Lumen.`;
+            return new Response(text, { status: 200 });
+        }) as unknown as typeof fetch;
+        await expect(readReadWeavePageWithJina(
+            "https://example.org/faq", { fetcher, anonymous: true }
+        )).resolves.toContain("decided to call it Lumen");
+    });
 
     it("focuses a definition lookup on the official meaning instead of nearby publications", () => {
         const query = buildFocusedGeneralSearchQuery("DBLP 是什么");

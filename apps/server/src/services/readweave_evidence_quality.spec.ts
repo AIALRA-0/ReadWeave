@@ -65,6 +65,17 @@ describe("naming provenance, not a semantic truth certificate", () => {
     it("does not classify every ordinary definition as a naming claim", () => {
         expect(checkReadWeaveNamingEvidence("光通量是描述光源输出的量", [], []).issues).toEqual([]);
     });
+    it("checks reversed naming assertions and invented dates", () => {
+        const text = "Lumen 的作者以光通量单位命名该工具";
+        const quote = "The author decided to call the tool Lumen after the light unit";
+        const source = { sourceId: "S1", excerpt: quote } as ReadWeaveEvidenceSource;
+        expect(checkReadWeaveNamingEvidence(text, [], [ source ]).issues).toEqual([ text ]);
+        expect(checkReadWeaveNamingEvidence(text,
+            [ { bodyText: text, sourceId: "S1", quote } ], [ source ]).issues).toEqual([]);
+        const dated = text.replace("以", "于 1987 年以");
+        expect(checkReadWeaveNamingEvidence(dated,
+            [ { bodyText: dated, sourceId: "S1", quote } ], [ source ]).issues).toEqual([ dated ]);
+    });
     it("rejects the user-reported reversed abbreviation syntax", () => {
         const text = "名称中的 AURORA 是 Automatic Unverified...(具体展开未在证据中给出)的缩写，但证据未提供官方全称，因此无法确认其确切含义";
         expect(checkReadWeaveNamingEvidence(text, [], []).issues).toEqual([text]);
