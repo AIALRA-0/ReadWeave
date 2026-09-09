@@ -94,6 +94,7 @@ export interface ReadWeaveWorkflowSummary {
 
 export interface ReadWeaveUsageSummary {
     costBasis?: "configured-rate-estimate";
+    pricingVersion?: string;
     modelCalls: number;
     inputTokens: number;
     cacheHitInputTokens: number;

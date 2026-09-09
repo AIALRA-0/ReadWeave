@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-    ReadWeaveBudget, readWeaveModelReservation, readWeaveModelUsageCost
+    ReadWeaveBudget, readWeaveModelReservation, readWeaveModelUsageCost, readWeaveModelRates
 } from "./readweave_budget.js";
 describe("request-wide prepaid budget", () => {
     it.each([0.05, 0.1])("enforces the exact cap %s before a request", (cap) => {
@@ -16,7 +16,7 @@ describe("request-wide prepaid budget", () => {
         expect(new ReadWeaveBudget(0.05).reserve(cost)).toBe(false);
     });
     it("accounts for Chinese UTF-8 input and maximum output", () => {
-        expect(readWeaveModelReservation("规则", "正文", 100)).toBe((12 + 256 + 200) / 1e6);
+        expect(readWeaveModelReservation("规则", "正文", 100)).toBe(((12 + 256) * 3 + 900) / 1e6);
     });
     it("does not hide failed or missing-usage model calls", () => {
         const budget = new ReadWeaveBudget(0.05);
@@ -57,9 +57,9 @@ describe("request-wide prepaid budget", () => {
     });
     it("uses the same receipt rates for the ledger and displayed cost", () => {
         expect(readWeaveModelUsageCost({ prompt_tokens:1000,prompt_cache_hit_tokens:500,
-            prompt_cache_miss_tokens:500,completion_tokens:100 })).toBe(.00071);
+            prompt_cache_miss_tokens:500,completion_tokens:100 })).toBe(.00245);
         expect(readWeaveModelUsageCost({ prompt_tokens:1000,completion_tokens:100 }))
-            .toBe(.0012);
+            .toBe(.0039);
         expect(readWeaveModelUsageCost({ prompt_tokens:0,completion_tokens:0 })).toBe(0);
         expect(readWeaveModelUsageCost({ prompt_tokens:1000 })).toBeUndefined();
         expect(readWeaveModelUsageCost({ prompt_tokens:1000,completion_tokens:NaN }))
@@ -82,5 +82,21 @@ describe("request-wide prepaid budget", () => {
         expect(budget.reportModelUsage(second,.001002)).toBe(true);
         expect(budget.unreportedModelCostCny).toBe(0);
         expect(budget.remainingCny).toBe(.047997);
+    });
+    it.each([
+        [ "2026-09-09T00:59:59Z",4.5 ],[ "2026-09-09T01:00:00Z",9 ],
+        [ "2026-09-09T03:59:59Z",9 ],[ "2026-09-09T04:00:00Z",4.5 ],
+        [ "2026-09-09T06:00:00Z",9 ],[ "2026-09-09T09:59:59Z",9 ],
+        [ "2026-09-09T10:00:00Z",4.5 ],[ "2026-09-12T06:00:00Z",4.5 ]
+    ])("applies the official weekday tariff at %s", (date,output) => {
+        expect(readWeaveModelRates("deepseek-v4-flash",new Date(date)).output).toBe(output);
+    });
+    it("reserves peak rates and distinguishes Pro from Flash", () => {
+        expect(readWeaveModelRates()).toEqual({ cacheHitInput:.1,cacheMissInput:3,output:9 });
+        expect(readWeaveModelRates("deepseek-v4-pro"))
+            .toEqual({ cacheHitInput:.3,cacheMissInput:9,output:27 });
+        const rates = readWeaveModelRates("deepseek-v4-flash",new Date("2026-09-12T06:00:00Z"));
+        expect(readWeaveModelUsageCost({ prompt_tokens:1000,completion_tokens:100 },rates))
+            .toBe(.00195);
     });
 });

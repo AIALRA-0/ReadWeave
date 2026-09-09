@@ -956,14 +956,15 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.usage?.modelCalls).toBe(2);
         expect(result.audit?.validationIssues).toEqual([]);
     });
-    it.each([ "empty", "malformed", "transport" ])(
+    it.each([ "empty", "malformed", "transport", "truncated" ])(
         "retains attempt costs when generation fails: %s", async mode => {
             const progress: ReadWeaveGenerationProgress[] = [];
             const fetch = vi.fn(async () => {
                 if (mode === "transport") throw new Error("connection reset");
                 return Response.json({ model:"deepseek-v4-flash",
-                    choices:[ { message:{
-                        content:mode === "empty" ? '{"body":""}' : "not json" } } ],
+                    choices:[ { finish_reason:mode === "truncated" ? "length" : "stop",message:{
+                        content:mode === "empty" ? '{"body":""}' : mode === "truncated"
+                            ? '{"body":"虽是合法 JSON，但接口已声明截断"}' : "not json" } } ],
                     usage:{ prompt_tokens:1000,completion_tokens:100,total_tokens:1100 } });
             });
             vi.stubGlobal("fetch", fetch);

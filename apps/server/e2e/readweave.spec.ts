@@ -10,8 +10,12 @@ import App from "../../../packages/trilium-e2e/src/support/app";
 test.describe.configure({ retries: 0 });
 
 interface TestEditor {
+    getData: () => string;
     editing: {
-        view: { domConverter: { domRangeToView: (range: Range) => unknown } };
+        view: {
+            getDomRoot: () => HTMLElement;
+            domConverter: { domRangeToView: (range: Range) => unknown };
+        };
         mapper: { toModelRange: (range: unknown) => unknown };
     };
     model: { change: (callback: (writer: { setSelection: (range: unknown) => void }) => void) => void };
@@ -125,16 +129,26 @@ async function createTextNote(app: App, title: string, body: string) {
     // depend on an implementation detail and intermittently times out on cold
     // starts even though the editable root is active and usable.
     await expect(editor).toBeVisible({ timeout: 30_000 });
+    await expect.poll(() => editor.evaluate(async element => {
+        const manager = (window as unknown as TestAppWindow).glob.appContext.tabManager;
+        const active = manager.getActiveContext();
+        return (await active.getTextEditor()).editing.view.getDomRoot() === element;
+    }), { timeout: 15_000 }).toBe(true);
     const firstBodyLine = body.split("\n", 1)[0];
     await expect(async () => {
         await editor.focus();
-        await editor.fill(body);
-        if (!(await editor.innerText()).includes(firstBodyLine)) {
-            await editor.focus();
-            await app.page.keyboard.press("ControlOrMeta+A");
-            await app.page.keyboard.insertText(body);
-        }
+        // Use CKEditor's real input path. A DOM fill can look correct briefly
+        // while its model is still empty, then disappear on the next render.
+        await app.page.keyboard.press("ControlOrMeta+A");
+        await app.page.keyboard.insertText(body);
         await expect(editor).toContainText(firstBodyLine, { timeout: 2_000 });
+        const modelText = await editor.evaluate(async () => {
+            const manager = (window as unknown as TestAppWindow).glob.appContext.tabManager;
+            const active = manager.getActiveContext();
+            const html = (await active.getTextEditor()).getData();
+            return new DOMParser().parseFromString(html,"text/html").body.textContent;
+        });
+        expect(modelText).toContain(firstBodyLine);
     }).toPass({ timeout: 15_000 });
     return editor;
 }

@@ -11,6 +11,7 @@ import type {
 } from "@triliumnext/commons";
 import { ValidationError } from "@triliumnext/core";
 
+import { readWeaveModelRates, READWEAVE_PRICING_VERSION } from "./readweave_budget.js";
 import { selectReadWeaveContext } from "./readweave_engine.js";
 import { getPublishedReadWeaveHarnessProfile } from "./readweave_harness.js";
 import {
@@ -452,10 +453,6 @@ export const READWEAVE_COST_TARGET_CNY = 0.01;
 const READWEAVE_BUDGET_MODEL = "deepseek-v4-flash";
 const READWEAVE_BUDGET_CONTEXT_CHARACTERS = 2_200;
 const READWEAVE_BUDGET_MAX_OUTPUT_TOKENS = 768;
-const DEEPSEEK_PRICING_CNY_PER_MILLION = {
-    "deepseek-v4-flash": { cacheHitInput: 0.02, cacheMissInput: 1, output: 2 },
-    "deepseek-v4-pro": { cacheHitInput: 0.025, cacheMissInput: 3, output: 6 }
-} as const;
 const REDUNDANT_SENTENCE_PUNCTUATION_PATTERN = /\.{2,}|(?:[。！？；!?]){2,}|\.(?=(?:）)?[。！？；!?])/u;
 const ENGLISH_NAME_PUNCTUATION_BEFORE_CLOSING_PARENTHESIS_PATTERN = /[\p{Script=Latin}\p{N}][.,，。;；:：!?！？](?=）)/u;
 const ENGLISH_NAME_TRAILING_SENTENCE_PUNCTUATION_PATTERN = /[.,，。;；:：!?！？]$/u;
@@ -643,9 +640,8 @@ export function calculateReadWeaveUsageSummary(
     usage: ReadWeaveRawUsage,
     budgetCny = READWEAVE_COST_BUDGET_CNY
 ): ReadWeaveUsageSummary {
-    const pricing = model === "deepseek-v4-pro"
-        ? DEEPSEEK_PRICING_CNY_PER_MILLION["deepseek-v4-pro"]
-        : DEEPSEEK_PRICING_CNY_PER_MILLION["deepseek-v4-flash"];
+    // Legacy aggregated usage has no per-call timestamps: use the peak ceiling.
+    const pricing = readWeaveModelRates(model);
     const cacheHitInputTokens = finiteTokenCount(usage.cacheHitInputTokens);
     const explicitlyMissed = finiteTokenCount(usage.cacheMissInputTokens);
     const reportedInput = finiteTokenCount(usage.inputTokens);
@@ -658,6 +654,8 @@ export function calculateReadWeaveUsageSummary(
         + outputTokens * pricing.output
     ) / 1_000_000;
     return {
+        costBasis: "configured-rate-estimate",
+        pricingVersion: READWEAVE_PRICING_VERSION,
         modelCalls: Math.max(0, Math.floor(usage.modelCalls)),
         inputTokens,
         cacheHitInputTokens,
