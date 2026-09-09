@@ -103,15 +103,15 @@ describe("bounded targeted research", () => {
     });
     it("never follows unrelated, credentialed or lookalike naming links", () => {
         const links = [
-            "https://lumen.org.attacker.test/name", "https://lumen.org@attacker.test/name",
-            "https://user:secret@lumen.org/name", "https://lumen.org:8443/name",
-            "https://other.org/name", "https://lumen.org/products", "http://lumen.org/name"
+            "https://example.com.attacker.test/name", "https://example.com@example.com/name",
+            "https://user:placeholder@example.com/name", "https://example.com:8443/name",
+            "https://other.org/name", "https://example.com/products", "http://example.com/name"
         ].map(url=>`[Navigation](${url})`).join(" ");
-        expect(readWeaveNamingReferences(links,"Lumen")).toEqual([]);
-        const title = "Origin of the name", url = "https://lumen.org/name";
-        expect(readWeaveNamingReferences(`[Home](https://lumen.org/) [${title}](${url})`+
-            ` [${title}](${url}#part)`,"Lumen")).toEqual([
-            { title,url },{ title:"Home",url:"https://lumen.org/" }
+        expect(readWeaveNamingReferences(links,"Example")).toEqual([]);
+        const title = "Origin of the name", url = "https://example.com/name";
+        expect(readWeaveNamingReferences(`[Home](https://example.com/) [${title}](${url})`+
+            ` [${title}](${url}#part)`,"Example")).toEqual([
+            { title,url },{ title:"Home",url:"https://example.com/" }
         ]);
     });
     it("keeps the relevant fact beyond the first page window", () => {
