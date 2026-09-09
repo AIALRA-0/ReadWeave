@@ -1,4 +1,6 @@
-import type { ReadWeaveAnswerPlan, ReadWeaveQuestionContract } from "@triliumnext/commons";
+import type {
+    ReadWeaveAnswerPlan, ReadWeaveQuestionContract, ReadWeaveContentType
+} from "@triliumnext/commons";
 
 function answerTypeFor(contract: ReadWeaveQuestionContract): ReadWeaveAnswerPlan["answerType"] {
     const question = contract.normalizedQuestion;
@@ -52,17 +54,22 @@ function explicitExclusion(clause: string): boolean {
 
 export function buildReadWeaveAnswerPlan(
     contract: ReadWeaveQuestionContract,
-    autoApplied = true
+    autoApplied = true,
+    contentType?: ReadWeaveContentType
 ): ReadWeaveAnswerPlan {
+    const summarySteps = contentType === "key-point" ? [
+        "提取选区中的独立知识点，不补外部背景",
+        "每项保留对应数值、否定、条件与关系，按原有顺序输出列表"
+    ] : undefined;
     const namingSteps = namingOnlySteps(contract.normalizedQuestion);
-    const answerType = namingSteps ? "general" : answerTypeFor(contract);
-    const steps = namingSteps ?? STEPS[answerType];
+    const answerType = summarySteps || namingSteps ? "general" : answerTypeFor(contract);
+    const steps = summarySteps ?? namingSteps ?? STEPS[answerType];
     return {
         version: 1,
         reviewStatus: autoApplied ? "auto-applied" : "draft",
         answerType,
         objective: contract.objective,
-        answerRequirements: namingSteps ?? contract.answerRequirements,
+        answerRequirements: summarySteps ?? namingSteps ?? contract.answerRequirements,
         exclusions: [ ...new Set([
             ...contract.normalizedQuestion.split(/[，,。；;！？?\n]/u)
                 .filter(explicitExclusion).map(clause => clause.trim()),

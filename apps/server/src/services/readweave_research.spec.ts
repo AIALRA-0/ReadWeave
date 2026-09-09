@@ -33,6 +33,23 @@ const result = (snippet: string, cost = 0.0072) => ({
     searchCostCny: cost,
 });
 describe("bounded targeted research", () => {
+    it("deduplicates complete full-name passages but preserves conflicting expansions", () => {
+        const base = { sourceType:"external",title:"Reference",provider:"Serper",
+            url:"https://example.org/reference",excerpt:"Example Packet Transfer (XPT)." };
+        const sources = [
+            { ...base,sourceId:"S1" },
+            { ...base,sourceId:"S2",retrievalMode:"page-reader",
+                excerpt:"XPT is an Example Packet Transfer." },
+            { ...base,sourceId:"S3",excerpt:"Example Packet Transport (XPT)." }
+        ];
+        const question = "XPT 的全称是什么？解释这些词的含义，不介绍机制";
+        const chosen = readWeaveWritingEvidence(sources as never,question,"XPT");
+        expect(chosen.map(source=>source.sourceId)).toEqual([ "S2","S3" ]);
+        expect(chosen[0].excerpt).toBe(sources[1].excerpt);
+        expect(sources).toHaveLength(3);
+        expect(readWeaveWritingEvidence(sources as never,"XPT 的全称和工作机制？","XPT"))
+            .toEqual(sources);
+    });
     it("does not turn an exclusion into an expensive origin requirement", () => {
         expect(readWeaveNamingRequirements("XPT 的全称是什么？不介绍名称来历"))
             .toEqual([ "expansion" ]);

@@ -132,7 +132,7 @@ async function createTextNote(app: App, title: string, body: string) {
     await expect.poll(() => editor.evaluate(async element => {
         const manager = (window as unknown as TestAppWindow).glob.appContext.tabManager;
         const active = manager.getActiveContext();
-        return (await active.getTextEditor()).editing.view.getDomRoot() === element;
+        return (await active?.getTextEditor())?.editing.view.getDomRoot() === element;
     }), { timeout: 15_000 }).toBe(true);
     const firstBodyLine = body.split("\n", 1)[0];
     await expect(async () => {
@@ -145,7 +145,7 @@ async function createTextNote(app: App, title: string, body: string) {
         const modelText = await editor.evaluate(async () => {
             const manager = (window as unknown as TestAppWindow).glob.appContext.tabManager;
             const active = manager.getActiveContext();
-            const html = (await active.getTextEditor()).getData();
+            const html = (await active?.getTextEditor())?.getData() ?? "";
             return new DOMParser().parseFromString(html,"text/html").body.textContent;
         });
         expect(modelText).toContain(firstBodyLine);

@@ -928,6 +928,53 @@ describe.skip("ReadWeave retired multi-stage workflow", () => {
 });
 
 describe("ReadWeave one-pass workflow", () => {
+    it("renders structured summary points without guessing sentence boundaries", async () => {
+        const points = [ "采样周期为 4 秒", "原始记录不上传，只保留 3 天汇总",
+            "断网期间继续记录，恢复连接后仅同步汇总" ];
+        vi.stubGlobal("fetch",vi.fn(async (_input,init) => {
+            const payload = JSON.parse(String(init?.body));
+            expect(payload.messages[0].content).toContain("summaryPoints");
+            expect(payload.messages[1].content).not.toContain("解释必要背景");
+            return Response.json({ choices:[ { message:{ content:JSON.stringify({
+                summaryPoints:points,claims:[] }) } } ],
+            usage:{ prompt_tokens:1000,completion_tokens:100 } });
+        }));
+        const result = await generateUnifiedReadWeaveAnswer({
+            ...request("将选区总结成列表"),contentType:"key-point",
+            fragments:[ { id:"selected",role:"selected",text:points.join("；") } ]
+        });
+        expect(result.body).toBe(points.map(point=>`- ${point}`).join("\n"));
+        expect(result.usage?.modelCalls).toBe(1);
+        expect(searchMock).not.toHaveBeenCalled();
+    });
+    it("records search costs even when oversized input prevents writing", async () => {
+        const progress: ReadWeaveGenerationProgress[] = [];
+        searchMock.mockResolvedValue({ ...await defaultSearchImplementation({ query:"example" }),
+            searchCostCny:.0072,sources:Array.from({ length:8 },(_,i)=>({
+                provider:"Reference",title:`Reference ${i}`,url:`https://example.org/${i}`,
+                snippet:"待分析的长篇不同领域材料".repeat(180),score:100,publishedAt:"2025-01-01"
+            })) });
+        await expect(generateUnifiedReadWeaveAnswer(request("比较这些材料的所有差异"),
+            event=>progress.push(event))).rejects.toThrow("剩余预算");
+        expect(fetch).not.toHaveBeenCalled();
+        expect(progress.filter(event=>event.usage).at(-1)?.usage)
+            .toMatchObject({ modelCalls:0,costCny:.0072 });
+    });
+    it("keeps a full-name answer affordable without discarding complete evidence", async () => {
+        const quote = "Example Packet Transfer (XPT) is the full name. " + "Context ".repeat(160);
+        searchMock.mockResolvedValue({ ...await defaultSearchImplementation({ query:"XPT" }),
+            searchCostCny:.0072,sources:Array.from({ length:8 },(_,i)=>({
+                provider:"Reference",title:`Reference ${i}`,url:`https://example.org/${i}`,
+                snippet:quote,score:100,publishedAt:"2025-01-01"
+            })) });
+        installModel([],"XPT 示例分组传输（Example Packet Transfer）：正式全称");
+        const result = await generateUnifiedReadWeaveAnswer({ ...request("XPT 的全称是什么？"),
+            fragments:[ { id:"selected",role:"selected",text:"XPT" } ] });
+        const payload = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body));
+        expect(payload.messages[1].content).toContain(quote.trim());
+        expect(payload.messages[1].content).not.toContain("[S8]");
+        expect(result.usage).toMatchObject({ modelCalls:1,withinBudget:true,budgetCny:.05 });
+    });
     it("enforces JSON-mode instructions for the local terminology request", async () => {
         const body = "Lumen 得名于光通量单位，象征将 ABC 与其他对象连接";
         const quote = "Lumen was named after a light unit to connect ABC with other objects.";

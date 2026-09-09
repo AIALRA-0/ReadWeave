@@ -11,6 +11,13 @@ describe("ReadWeave answer plan", () => {
         searchQueries: [],
         requiresCurrentEvidence: true
     });
+    it("keeps summary output in a factual list instead of adding background", () => {
+        const plan = buildReadWeaveAnswerPlan(
+            namingContract("总结选区，保留数值和否定"),true,"key-point");
+        expect(plan.answerRequirements).toEqual(plan.steps);
+        expect(plan.steps.join(" ")).toContain("输出列表");
+        expect(plan.steps.join(" ")).not.toContain("解释必要背景");
+    });
     it("does not turn a full-name and word-meaning question into a complete definition", () => {
         const plan = buildReadWeaveAnswerPlan(namingContract("XPT 的官方全称是什么？解释这些词分别表示什么，不要猜测名称来历"));
         expect(plan.answerType).toBe("general");

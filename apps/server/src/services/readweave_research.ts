@@ -96,6 +96,40 @@ export function readWeaveWritingEvidence(
     const requirements = readWeaveNamingRequirements(question, false);
     if (!requirements.length) return sources;
     const subject = readWeaveResearchSubject(question, selected);
+    const requested = question.split(/[，,。；;！？?\n]/u).filter(clause =>
+        !/^\s*(?:请)?(?:不要|不必|无需|不用|禁止|不得|不介绍|不展开)/u.test(clause)).join(" ");
+    if (requirements.length === 1 && requirements[0] === "expansion"
+        && !/原理|机制|运作|历史|用途|区别|比较|应用/u.test(requested)) {
+        // One complete passage per distinct expansion, not eight copies of
+        // the same full name. Conflicting expansions remain visible; the full
+        // source catalogue is retained in the audit, without truncating quotes.
+        const seen = new Set<string>();
+        const knownNames = [ ...new Set(sources.flatMap(source =>
+            readWeaveExplicitExpansions(source.excerpt)
+                .filter(pair => pair.abbreviation.toLowerCase() === subject.toLowerCase())
+                .map(pair => pair.englishName.toLowerCase().replace(/\s+/gu," ")))) ];
+        const chosen = sources.filter(source => source.sourceType === "external")
+            .toSorted((a,b) => Number(b.retrievalMode === "page-reader")
+                - Number(a.retrievalMode === "page-reader")
+                || namingReadingPriority(b,subject) - namingReadingPriority(a,subject))
+            .filter(source => {
+                const names = readWeaveExplicitExpansions(source.excerpt)
+                    .filter(pair => pair.abbreviation.toLowerCase() === subject.toLowerCase())
+                    .map(pair => pair.englishName.toLowerCase().replace(/\s+/gu," "));
+                // A primary page can spell out the same name without brackets.
+                // Do not drop it in favor of a bracket-shaped search snippet.
+                const passages = source.excerpt.toLowerCase().split(/[.!?。！？\n]/u)
+                    .filter(passage=>passage.includes(subject.toLowerCase()));
+                names.push(...knownNames.filter(name=>passages.some(passage=>
+                    passage.replace(/\s+/gu," ").includes(name))));
+                if (!names.some(name => !seen.has(name))) return false;
+                names.forEach(name => seen.add(name));
+                return true;
+            });
+        if (chosen.length) return [
+            ...sources.filter(source => source.sourceType === "local"), ...chosen
+        ];
+    }
     const preferred = sources.filter(source => source.sourceType === "external"
         && source.retrievalMode === "page-reader" && namingReadingPriority(source, subject) > 0
         && !readWeaveMissingNamingFacts([ source ], subject, requirements).length);

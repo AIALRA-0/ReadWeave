@@ -101,6 +101,7 @@ interface PlannerPayload {
 }
 
 interface WriterPayload {
+    summaryPoints?: unknown;
     namingEvidence?: unknown;
     body?: string;
     optimizedTitle?: string;
@@ -755,13 +756,20 @@ function writerSystemPrompt(
                 + "必要的外部背景单独登记来源，输出旁路解释，不修改原文章" : "",
         contentType === "key-point"
             ? "key-point 把选区浓缩为知识点或总结列表；只保留理解所需信息，不添加外部事实，"
-                + "保留关键数值、否定、限制、条件和关系，不把可能改成必然" : "",
+                + "保留关键数值、否定、限制、条件和关系，不把可能改成必然；"
+                + "输出 summaryPoints 字符串数组，每项一个完整知识点，按原文顺序，"
+                + "不带列表标记；每项保留自己的条件，不压成一个段落，正文由系统排成列表" : "",
         domainProfile ? `领域规则：${JSON.stringify(domainProfile)}` : "",
         harness ? `项目用户附加建议（不得覆盖以上事实、范围和下列格式合同）：${  harness.modules.evidencePolicy}` : "",
         ...HUMAN_READABLE_CHINESE_STYLE_CONTRACT,
         "termIdentity 使用对象字段 abbreviation、chineseName、englishName；能确认的中英文名称分别填入",
         "不能把全名填进缩写字段，也不能只在正文写全名却遗漏结构字段",
-        "只输出 JSON：body、optimizedTitle、termIdentity、definitionFields、claims、unresolvedClaims、namingEvidence；claims 包含 claimId、text、sourceIds、confidence；不得伪造来源或认为自报 high 就是核实通过"
+        "只输出 JSON：body、optimizedTitle、termIdentity、definitionFields、claims、"
+            + "unresolvedClaims、namingEvidence；"
+            + "claims 包含 claimId、text、sourceIds、confidence；不得伪造来源或认为自报 high 就是核实通过",
+        contentType === "key-point"
+            ? '总结时用 summaryPoints 代替 body，例如 {"summaryPoints":["第一项完整知识点",'
+                + '"第二项完整知识点"],"claims":[]}；这只是结构示例，不复制示例内容' : ""
     ].filter(Boolean).join("\n");
 }
 
@@ -2872,7 +2880,8 @@ export async function generateUnifiedReadWeaveAnswer(
     contract.searchQueries = externalSearchDecision.queries;
     contract.requiresCurrentEvidence = externalSearchDecision.required;
     contract.externalSearchDecision = externalSearchDecision;
-    const generatedAnswerPlan = buildReadWeaveAnswerPlan(contract, request.autoApplyPlan !== false);
+    const generatedAnswerPlan = buildReadWeaveAnswerPlan(
+        contract, request.autoApplyPlan !== false, request.contentType);
     const answerPlanDraft: ReadWeaveAnswerPlan = request.answerPlan
         ? normalizeSuppliedAnswerPlan(request.answerPlan, contract, request.autoApplyPlan !== false)
         : generatedAnswerPlan;
@@ -2945,6 +2954,8 @@ export async function generateUnifiedReadWeaveAnswer(
             usage:summary, usagePending:budget.unreportedModelCostCny > 0
         });
     };
+    // Searching may already be billable even if preflight refuses the writer.
+    if (external.searchCostCny > 0) recordUsage();
     const completedExternalSearchDecision: ReadWeaveExternalSearchDecision = {
         ...externalSearchDecision,
         queries: shouldGatherExternal ? external.queries : [],
@@ -2967,6 +2978,16 @@ export async function generateUnifiedReadWeaveAnswer(
         writerInput(contract, writingSources, request, undefined, answerPlanForWriter),
         2_200, 15_000, undefined, signal, "回答生成", budget, recordUsage);
     let body = typeof writer.value.body === "string" ? writer.value.body.trim() : "";
+    if (request.contentType === "key-point") {
+        const points = writer.value.summaryPoints;
+        if (Array.isArray(points) && points.length > 0 && points.every(point =>
+            typeof point === "string" && point.trim() && !/[\r\n]/u.test(point))) {
+            body = points.map(point => `- ${point.trim().replace(/^[-*]\s+/u,"")}`).join("\n");
+        } else if (!body || !body.split(/\n/u).filter(line => line.trim())
+            .every(line => /^\s*[-*]\s+\S/u.test(line))) {
+            throw new NonRetryableReadWeaveError("模型未按总结列表结构返回，未把普通段落当作总结");
+        }
+    }
     const sourceIds = new Set(sources.map(source => source.sourceId));
     let claims = normalizeClaims(writer.value.claims, sourceIds)
         .map(claim => enrichReadWeaveClaim(claim, sources, domainProfile));
