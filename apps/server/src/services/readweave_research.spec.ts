@@ -37,6 +37,7 @@ describe("bounded targeted research", () => {
             .toEqual([ "expansion" ]);
         expect(readWeaveNamingRequirements("XPT 的英文全称是什么？请解释这些词，不要猜测名称来历")).toEqual(["expansion"]);
         expect(readWeaveNamingRequirements("Lumen 从何得名？")).toEqual(["origin"]);
+        expect(readWeaveNamingRequirements('"Lumen" origin of name', false)).toEqual([ "origin" ]);
     });
     it("searches the short subject and stops after a direct full-name source", async () => {
         search.mockResolvedValue(result("Example Packet Transfer (XPT) is the formal name."));
@@ -46,6 +47,20 @@ describe("bounded targeted research", () => {
         expect(r.audit.stopReason).toBe("sufficient");
         expect(r.audit.missingFacts).toEqual([]);
         expect(r.searchCostCny).toBe(.0072);
+    });
+    it("does not force naming searches into a documentation-only wording", async () => {
+        search.mockResolvedValue({ ...result("unused"), sources:[ {
+            ...result("Lumen is named after a light unit").sources[0], url:"https://lumen.org/name"
+        } ] });
+        read.mockResolvedValue("Lumen is named after a light unit");
+        const r = await researchReadWeaveEvidence(
+            { ...contract,normalizedQuestion:"Lumen 从何得名？" },
+            "", .07, true, ()=>{}, undefined, "Lumen"
+        );
+        expect(search.mock.calls[0][0].query).toBe('"Lumen" origin of name');
+        expect(search).toHaveBeenCalledTimes(1);
+        expect(r.audit.stopReason).toBe("sufficient");
+        expect(r.sources[0].url).toBe("https://lumen.org/name");
     });
     beforeEach(() => {
         vi.clearAllMocks();

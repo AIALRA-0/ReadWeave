@@ -2993,6 +2993,7 @@ export async function generateUnifiedReadWeaveAnswer(
             const result = await requestJson<{ decisions: unknown }>(
                 "仅判断给定简称是不是可省略的来源机构或修饰标签。只在删除简称后不影响问题的核心关系、"
                 + "主体、否定和句子语法时允许 omit=true；作为句子主语、并列对象、核心术语必须保留。"
+                + "每项 fragment 是唯一允许删掉的原文；括号内简称可省略时，只删除该括号片段，保留已有中文名称。"
                 + "不展开简称、不写替换正文。返回 JSON decisions 数组，每项 token、omit、reason",
                 JSON.stringify({ question:originalQuestion, targets }), 350, 15000, undefined,
                 signal, "局部简称检查", budget, recordUsage);

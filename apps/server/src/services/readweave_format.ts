@@ -223,26 +223,40 @@ export function readWeaveFormatIssues(body: string): string[] {
     return [ ...issues ];
 }
 
+interface OptionalQualifier {
+    token: string;
+    fragment: string;
+    before: string;
+    after: string;
+}
+
 /** Only a redundant, unrequested qualifier can be omitted. The model cannot
  * add an expansion or return rewritten prose through this interface. */
 export async function repairReadWeaveOptionalQualifiers(
     original: string, question: string,
-    approve: (targets: Array<{ token: string; before: string; after: string }>) => Promise<unknown>,
+    approve: (targets: OptionalQualifier[]) => Promise<unknown>,
     signal?: AbortSignal
 ) {
-    const targets: Array<{ token: string; start: number; before: string; after: string }> = [];
+    const targets: Array<OptionalQualifier & { start: number }> = [];
     mapReadWeaveProse(original, prose => {
-        for (const match of prose.matchAll(/\b([A-Z]{2,8})\b[ \t]*(?=[\p{Script=Han}]{2})/gu)) {
+        for (const match of prose.matchAll(/\b([A-Z]{2,8})\b/gu)) {
             const token = match[1];
             const start = original.indexOf(token);
             const prefix = original.slice(0, start);
             const after = original.slice(start + token.length, start + token.length + 100);
+            const parenthetical = /[\p{Script=Han}]（$/u.test(prefix) && after.startsWith("）")
+                || /[\p{Script=Han}]\($/u.test(prefix) && after.startsWith(")");
+            if (!parenthetical && !/^[ \t]*[\p{Script=Han}]{2}/u.test(after)) continue;
             if (question.includes(token) || start !== original.lastIndexOf(token)
                 || prefix.lastIndexOf("《") > prefix.lastIndexOf("》")
                 || /^\s*[和与及或的是为不无]/u.test(after)
                 || /^\s*[\p{Script=Han}]{2,40}（[A-Za-z]/u.test(after)) continue;
-            targets.push({ token, start,
-                before:original.slice(Math.max(0, start - 100), start), after });
+            const fragment = parenthetical ? `${prefix.at(-1)}${token}${after[0]}` : token;
+            const fragmentStart = parenthetical ? start - 1 : start;
+            const end = fragmentStart + fragment.length;
+            targets.push({ token, fragment, start:fragmentStart,
+                before:original.slice(Math.max(0, fragmentStart - 100), fragmentStart),
+                after:original.slice(end, end + 100) });
         }
         return prose;
     });
@@ -250,8 +264,8 @@ export async function repairReadWeaveOptionalQualifiers(
     signal?.throwIfAborted();
     try {
         const chosen = targets.slice(0, 2);
-        const result = await approve(chosen.map(({ token, before, after }) =>
-            ({ token, before, after })));
+        const result = await approve(chosen.map(({ token, fragment, before, after }) =>
+            ({ token, fragment, before, after })));
         signal?.throwIfAborted();
         if (!Array.isArray(result)) throw new Error("局部简称检查未返回有效决定");
         let body = original;
@@ -260,7 +274,7 @@ export async function repairReadWeaveOptionalQualifiers(
             if (decision.length !== 1 || decision[0].omit !== true
                 || typeof decision[0].reason !== "string" || decision[0].reason.trim().length < 4)
                 continue;
-            body = body.slice(0, target.start) + body.slice(target.start + target.token.length)
+            body = body.slice(0, target.start) + body.slice(target.start + target.fragment.length)
                 .replace(/^[ \t]+/u, "");
         }
         return { body, rounds:1, warnings:[] as string[] };

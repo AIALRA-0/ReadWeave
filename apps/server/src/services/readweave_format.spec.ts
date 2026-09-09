@@ -34,6 +34,25 @@ describe("versioned formatting contract", () => {
         expect(approve).not.toHaveBeenCalled();
         expect((await repairReadWeaveOptionalQualifiers(body, "来源？", approve)).body).toBe(body);
     });
+    it.each([ "（ABC）", "(ABC)" ])("only omits an approved bracketed alias %s", async fragment => {
+        const body = `Lumen 得名于示例广播公司${fragment}喜剧《Light Story》，12 个字不改`;
+        const approve = vi.fn(async (targets: Array<{ token:string;fragment:string }>) => {
+            expect(targets[0]).toMatchObject({ token:"ABC",fragment });
+            return [ { token:"ABC",omit:true,reason:"中文机构名已保留，别名不影响来历" } ];
+        });
+        const result = await repairReadWeaveOptionalQualifiers(body, "Lumen 从何得名？", approve);
+        expect(result.body).toBe(body.replace(fragment, ""));
+        expect(approve).toHaveBeenCalledTimes(1);
+        expect(result.rounds).toBe(1);
+    });
+    it.each([ "《示例公司（ABC）》", "`示例公司（ABC）`", "示例公司（ABC）与示例公司（ABC）" ])(
+        "does not submit protected or repeated parenthetical names: %s", async body => {
+            const approve = vi.fn();
+            const result = await repairReadWeaveOptionalQualifiers(body, "从何得名？", approve);
+            expect(result.body).toBe(body);
+            expect(approve).not.toHaveBeenCalled();
+        }
+    );
     it("renders a sourced English full-name answer with its separate Chinese identity", () => {
         const input = "XPT 的官方英文全称是 Example Packet Transfer";
         const expected = "XPT 示例分组传输（Example Packet Transfer）";

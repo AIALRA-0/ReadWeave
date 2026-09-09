@@ -82,7 +82,9 @@ export function readWeaveNamingRequirements(question: string, fallback = true): 
             .test(clause)).join(" ");
     const requirements: Array<"expansion" | "origin"> = [];
     if (/全称|展开|缩写|acronym|abbreviation|full name|stands for/iu.test(requested)) requirements.push("expansion");
-    if (/得名|命名|词源|名称.{0,12}(?:来历|来源)|从何而来|named after|etymology|name origin/iu.test(requested)) requirements.push("origin");
+    const originIntent = /得名|命名|词源|名称.{0,12}(?:来历|来源)|从何而来|named after|etymology|name origin/iu;
+    if (originIntent.test(requested) || /origin of (?:the )?name/iu.test(requested))
+        requirements.push("origin");
     return requirements.length || !fallback ? requirements : ["expansion", "origin"];
 }
 
@@ -125,7 +127,10 @@ export async function researchReadWeaveEvidence(
     const requirements = readWeaveNamingRequirements(contract.normalizedQuestion);
     const targeted = [
         ...(requirements.includes("expansion") ? [`"${subject}" full name official documentation`, `"${subject}" stands for acronym`] : []),
-        ...(requirements.includes("origin") ? [`"${subject}" name origin official documentation`, `"${subject}" named after etymology`] : [])
+        // Keep the user's fact dimension, not an assumed document type. Adding
+        // "official documentation" can exclude the owner's naming/history page.
+        ...(requirements.includes("origin")
+            ? [ `"${subject}" origin of name`, `"${subject}" named after etymology` ] : [])
     ];
     const queries = namingRequired ? [...targeted] : [...contract.searchQueries];
     const audit: ReadWeaveResearchAudit = {
