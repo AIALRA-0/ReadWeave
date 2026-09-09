@@ -11,6 +11,15 @@ import {
     repairReadWeaveOptionalQualifiers} from "./readweave_format.js";
 
 describe("versioned formatting contract", () => {
+    it("keeps a continuous bilingual definition while checking ordinary parallel lists", () => {
+        const definition = "- 缓存（Cache）：暂存可复用数据；用于页面、文件、查询等场景；容量有限";
+        expect(readWeaveFormatIssues(definition)).not.toContain(
+            "FMT-010：冒号后的三个以上并列项需要分行"
+        );
+        expect(readWeaveFormatIssues("可选介质：内存、磁盘、远端存储")).toContain(
+            "FMT-010：冒号后的三个以上并列项需要分行"
+        );
+    });
     it("puts a verified Chinese person name before its English or pinyin name", () => {
         expect(formatReadWeavePersonNameOrder(
             "Haoxing Ren（任浩星）是芯片设计研究者",

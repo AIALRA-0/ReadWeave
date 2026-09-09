@@ -3061,12 +3061,14 @@ export async function generateUnifiedReadWeaveAnswer(
         : undefined;
     if (personSubject) body = formatReadWeavePersonNameOrder(body, personSubject);
     if (request.contentType === "key-point") {
-        const points = writer.value.summaryPoints;
-        if (Array.isArray(points) && points.length > 0 && points.every(point =>
-            point && typeof point.text === "string" && point.text.trim()
-            && !/[\r\n]/u.test(point.text) && Array.isArray(point.sourceIds)
-            && point.sourceIds.length > 0 && point.sourceIds.every((id:unknown) =>
-                localSources.some(source=>source.sourceId === id)))) {
+        const rawPoints = writer.value.summaryPoints;
+        const points = Array.isArray(rawPoints) ? rawPoints.map(point => ({
+            text: typeof point === "string" ? point : point?.text,
+            sourceIds: (Array.isArray(point?.sourceIds) ? point.sourceIds : [])
+                .filter((id: unknown) => localSources.some(source => source.sourceId === id))
+        })) : [];
+        if (points.length > 0 && points.every(point =>
+            typeof point.text === "string" && point.text.trim() && !/[\r\n]/u.test(point.text))) {
             body = points.map(point => `- ${point.text.trim().replace(/^[-*]\s+/u,"")}`)
                 .join("\n");
             // A source binding makes each summary point inspectable; it is not
@@ -3075,9 +3077,14 @@ export async function generateUnifiedReadWeaveAnswer(
                 claimId:`summary-${index+1}`,text:point.text.trim(),
                 sourceIds:point.sourceIds,confidence:"medium"
             }));
-        } else if (!body || !body.split(/\n/u).filter(line => line.trim())
-            .every(line => /^\s*[-*]\s+\S/u.test(line))) {
-            throw new NonRetryableReadWeaveError("模型未按总结列表结构返回，未把普通段落当作总结");
+        } else if (body) {
+            // Only add list markers at existing line boundaries. Do not split
+            // sentences, guess source bindings, change facts or call the model again.
+            body = body.split(/\n/u).filter(line => line.trim()).map(line =>
+                /^\s*[-*]\s+\S/u.test(line) ? line : `- ${line.trim()}`
+            ).join("\n");
+        } else {
+            throw new NonRetryableReadWeaveError("模型未返回总结内容，不能保存空回答");
         }
     }
     const sourceIds = new Set(writingSources.map(source => source.sourceId));

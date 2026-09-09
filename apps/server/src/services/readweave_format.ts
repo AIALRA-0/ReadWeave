@@ -236,7 +236,9 @@ export function readWeaveFormatIssues(body: string): string[] {
         if (/。/u.test(text)) issues.add("FMT-009：普通正文仍含中文句号");
         if (/[；。][ \t]*(?:\n|$)/u.test(text)) issues.add("FMT-018：段末标点不符合规则");
         if (/\n(?:[ \t]*\n){2,}/u.test(text)) issues.add("FMT-024：存在多余空白行");
-        if (/：[^\n：]+、[^\n：]+、[^\n：]+/u.test(text))
+        const definitionOpening = /^\s*(?:[-*]\s+)?(?:[A-Z][A-Z0-9.-]*\s+)?[\p{Script=Han}][^：\n]{0,100}（[^（）\n]+）：/u;
+        if (text.split("\n").some(line => !definitionOpening.test(line)
+            && /：[^\n：；。]+、[^\n：；。]+、[^\n：；。]+/u.test(line)))
             issues.add("FMT-010：冒号后的三个以上并列项需要分行");
         if (/[\p{Script=Han}][A-Za-z0-9]|[A-Za-z0-9][\p{Script=Han}]/u.test(text))
             issues.add("FMT-013：中文与英文或数字之间缺少空格");

@@ -962,6 +962,22 @@ describe("ReadWeave one-pass workflow", () => {
             .toEqual(points.map(text=>text.normalize("NFKC")));
         expect(result.audit?.validationIssues).toEqual([]);
     });
+    it.each([
+        { summaryPoints:[ { text:"记录保留 3 天，不上传原始文件", sourceIds:[ "unknown" ] } ] },
+        { summaryPoints:[ "记录保留 3 天，不上传原始文件" ] },
+        { body:"记录保留 3 天，不上传原始文件" }
+    ])("accepts summary layout variants without inventing source bindings", async payload => {
+        vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+            choices:[ { message:{ content:JSON.stringify(payload) } } ],
+            usage:{ prompt_tokens:1000, completion_tokens:100 }
+        })));
+        const result = await generateUnifiedReadWeaveAnswer({
+            ...request("总结选区"), contentType:"key-point"
+        });
+        expect(result.body).toBe("- 记录保留 3 天，不上传原始文件");
+        expect(result.claims.flatMap(claim => claim.sourceIds)).toEqual([]);
+        expect(fetch).toHaveBeenCalledTimes(1);
+    });
     it("keeps writing with oversized search results and reserves complete output space", async () => {
         const progress: ReadWeaveGenerationProgress[] = [];
         searchMock.mockResolvedValue({ ...await defaultSearchImplementation({ query:"example" }),
