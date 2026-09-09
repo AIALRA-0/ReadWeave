@@ -34,13 +34,26 @@ describe("versioned formatting contract", () => {
         expect(result.body).toBe(body);
         expect(result.knowledgeTerms).toEqual([]);
     });
-    it.each([ "`ABC`","《ABC Book》","ABC 示例连接（Alpha Beta Connection）","ABC 与 ABC" ])(
+    it.each([ "`ABC`","《ABC Book》","ABC 示例连接（Alpha Beta Connection）","ABC 与 ABC",
+        "示例机构（Lumen ABC）", "示例机构 (Lumen ABC)",
+        `示例机构（${"Label ".repeat(40)}ABC）` ])(
         "does not annotate protected or ambiguous occurrences: %s", async body => {
             const resolve = vi.fn();
             expect((await repairReadWeaveConventionalTerms(body,"来源？",resolve)).body).toBe(body);
             expect(resolve).not.toHaveBeenCalled();
         }
     );
+    it("preserves an existing label while annotating a separate prose initialism", async () => {
+        const body = "示例机构（Lumen DEF）将 ABC 与其他对象连接";
+        const resolve = vi.fn(async (targets: Array<{ token:string }>) => {
+            expect(targets.map(target=>target.token)).toEqual([ "ABC" ]);
+            return [ { token:"ABC",chineseName:"示例连接",englishName:"Alpha Beta Connection",
+                confidence:"high",basis:"established-usage",contextReason:"当前上下文指通行连接" } ];
+        });
+        const result = await repairReadWeaveConventionalTerms(body,"名称来历？",resolve);
+        expect(result.body).toBe("示例机构（Lumen DEF）将 ABC 示例连接（Alpha Beta Connection）与其他对象连接");
+        expect(resolve).toHaveBeenCalledTimes(1);
+    });
     it("leaves the question's own acronym to the sourced naming path", async () => {
         const resolve = vi.fn();
         const result = await repairReadWeaveConventionalTerms(

@@ -303,6 +303,9 @@ export async function repairReadWeaveConventionalTerms(
             const after = original.slice(start+token.length,start+token.length+150);
             if (question.includes(token) || start !== original.lastIndexOf(token)
                 || before.lastIndexOf("《") > before.lastIndexOf("》")
+                // Parenthetical names are already a complete label. Inserting an
+                // expansion inside one changes that label and creates nested brackets.
+                || /[（(][^（）()\n]*$/u.test(original.slice(0,start))
                 || /^[ \t]*[\p{Script=Han}]{2,40}（[A-Za-z]/u.test(after)) continue;
             targets.push({ token,start,before,after });
         }
