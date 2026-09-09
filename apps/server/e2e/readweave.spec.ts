@@ -1744,7 +1744,7 @@ test("ReadWeave settings store a masked server-side key and expose model selecti
     const fakeSecret = "test-not-a-real-api-key-6789";
     await settings.getByTestId("readweave-base-url").fill("https://api.deepseek.com");
     await settings.getByTestId("readweave-api-key").fill(fakeSecret);
-    await settings.getByTestId("readweave-model").selectOption("deepseek-v4-pro");
+    await settings.getByTestId("readweave-model").fill("deepseek-v4-pro");
     await settings.getByTestId("readweave-settings-save").click();
     await expect(settings).toContainText("Settings saved.");
     await expect(settings).toContainText("tes••••••••6789");
@@ -1760,4 +1760,25 @@ test("ReadWeave settings store a masked server-side key and expose model selecti
     const genericText = await generic.text();
     expect(genericText).not.toContain(fakeSecret);
     expect(genericText).not.toContain("readWeaveApiKey");
+
+    await settings.getByTestId("readweave-provider-type").selectOption("deepseek-compatible");
+    await settings.getByTestId("readweave-base-url").fill("https://gateway.example");
+    await settings.getByTestId("readweave-api-key").fill("test-third-party-key-1234");
+    await settings.getByTestId("readweave-model").fill("vendor/deepseek-chat");
+    await settings.getByTestId("readweave-pricing").locator("summary").click();
+    await settings.getByTestId("readweave-price_cache_hit").fill("0.1");
+    await settings.getByTestId("readweave-price_input").fill("0.5");
+    await settings.getByTestId("readweave-price_output").fill("1");
+    await settings.getByTestId("readweave-settings-save").click();
+    await expect(settings.getByTestId("readweave-base-url")).toHaveValue("https://gateway.example/v1");
+    const thirdParty = await (await page.request.get(`${origin}/api/readweave/settings`)).json();
+    expect(thirdParty).toMatchObject({ providerType:"deepseek-compatible",model:"vendor/deepseek-chat",
+        pricing:{ source:"custom",cacheHitInputCnyPerMillion:0.1,cacheMissInputCnyPerMillion:0.5,outputCnyPerMillion:1 } });
+    expect(JSON.stringify(thirdParty)).not.toContain("test-third-party-key-1234");
+    await settings.getByTestId("readweave-provider-type").selectOption("deepseek-official");
+    await settings.getByTestId("readweave-base-url").fill("https://api.deepseek.com");
+    await settings.getByTestId("readweave-api-key").fill(fakeSecret);
+    await settings.getByTestId("readweave-model").fill("deepseek-v4-pro");
+    await settings.getByTestId("readweave-settings-save").click();
+    await expect(settings).toContainText("Settings saved.");
 });

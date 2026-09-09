@@ -23,8 +23,8 @@ import { ValidationError } from "@triliumnext/core";
 
 import { buildReadWeaveAnswerPlan } from "./readweave_answer_plan.js";
 import {
-    ReadWeaveBudget, readWeaveModelReservation, readWeaveModelUsageCost,
-    readWeaveModelRates, READWEAVE_PRICING_VERSION, type ReadWeaveModelRates
+    READWEAVE_PRICING_VERSION, ReadWeaveBudget, type ReadWeaveModelRates,
+    readWeaveModelRates, readWeaveModelReservation, readWeaveModelUsageCost
 } from "./readweave_budget.js";
 import {
     buildReadWeaveDomainProfile,
@@ -44,9 +44,9 @@ import {
     formatReadWeavePersonNameOrder,
     READWEAVE_FORMAT_VERSION,
     readWeaveFormatIssues,
-    repairReadWeaveOptionalQualifiers,
     repairReadWeaveConventionalTerms,
-    repairReadWeaveFormat
+    repairReadWeaveFormat,
+    repairReadWeaveOptionalQualifiers
 } from "./readweave_format.js";
 import {
     readWeaveNamingRequirements, readWeaveNamingSourceGuidance, readWeaveWritingEvidence,
@@ -59,6 +59,7 @@ import {
 } from "./readweave_settings.js";
 import { HUMAN_READABLE_CHINESE_STYLE_CONTRACT } from "./readweave_style_contract.js";
 import { KNOWN_PRODUCT_CANONICAL_FORMS } from "./readweave_term_catalog.js";
+import { fitReadWeaveWriterEvidence } from "./readweave_writer_budget.js";
 const WORKFLOW_VERSION = "quality-closure-v2" as const;
 // Quality-first ceiling.  Routine answers should remain around ¥0.001–0.015,
 // while difficult evidence or repair paths may spend more instead of exposing
@@ -70,6 +71,7 @@ const DEFAULT_CONTEXT_BUDGET = 6_000;
 
 interface CompletionUsage {
     readWeaveRates?: ReadWeaveModelRates;
+    readWeavePricingVersion?: string;
     prompt_tokens?: number;
     prompt_cache_hit_tokens?: number;
     prompt_cache_miss_tokens?: number;
@@ -124,6 +126,24 @@ interface ModelCallResult<T> {
     usage: CompletionUsage;
 }
 
+class ReadWeaveTaskBudgetError extends NonRetryableReadWeaveError {}
+
+function taskBudgetError(
+    stage: string,
+    budget: ReadWeaveBudget,
+    requiredCny: number
+): ReadWeaveTaskBudgetError {
+    return new ReadWeaveTaskBudgetError(
+        `ReadWeave 未调用模型：本题费用上限不足（阶段：${stage}；本题上限 ¥${budget.limitCny.toFixed(2)}`
+        + `；当前剩余 ¥${budget.remainingCny.toFixed(4)}；本次至少需要约 ¥${requiredCny.toFixed(4)}）`
+        + "；这是 ReadWeave 的单题成本保护，不代表模型供应商账户余额不足，本次请求尚未发送"
+    );
+}
+
+function optionalBudgetDiagnostic(message: string): boolean {
+    return /本题费用上限不足|余量不足|剩余额度保留|局部修改次数已达上限/u.test(message);
+}
+
 function safeProviderMessage(value: string): string {
     return cleanText(value, 300)
         .replace(/\b(?:sk|key|token)[-_A-Za-z0-9]{12,}\b/giu, "[已隐藏]")
@@ -142,6 +162,26 @@ function safeModelFailure(
         category = "模型服务额度不足";
         action = "请为该模型服务充值，或在“设置 → AI / LLM → ReadWeave”切换有可用额度的写作模型";
     }
+    else if (/(?:\b401\b|invalid[_\s-]*(?:api[_\s-]*)?(?:key|token)|unauthorized|鉴权失败|密钥无效)/iu.test(diagnostic)) {
+        category = "模型服务拒绝了 API 密钥";
+        action = "请检查当前模型来源对应的 API 密钥；网页账号密码不能代替 API 密钥";
+    }
+    else if (/(?:\b403\b|forbidden|无权限|permission denied)/iu.test(diagnostic)) {
+        category = "模型服务拒绝访问";
+        action = "请确认该 API 密钥有权调用所选模型，且服务没有限制当前服务器地址";
+    }
+    else if (/(?:\b404\b|model.{0,24}(?:not found|不存在)|unknown model)/iu.test(diagnostic)) {
+        category = "模型名称或接口路径不存在";
+        action = "请检查第三方服务地址是否包含正确的 /v1 路径，并从模型列表选择实际可用的模型";
+    }
+    else if (/(?:\b429\b|rate.?limit|too many requests|限流)/iu.test(diagnostic)) {
+        category = "模型服务正在限流";
+        action = "请稍后再试，或在设置中切换到当前可用的模型来源";
+    }
+    else if (/(?:\b5\d\d\b|bad gateway|service unavailable|gateway timeout)/iu.test(diagnostic)) {
+        category = "模型服务暂时不可用";
+        action = "这是上游服务异常，请稍后再试；ReadWeave 不会自动改用其他来源并重复扣费";
+    }
     else if (/(?:AbortError|TimeoutError|timeout|timed\s*out|ETIMEDOUT)/iu.test(diagnostic)) category = "模型服务请求超时";
     else if (/(?:terminated|premature\s+close|socket\s+hang\s+up|ECONNRESET|EPIPE)/iu.test(diagnostic)) category = "模型服务连接中断";
     else if (/(?:ENOTFOUND|EAI_AGAIN|getaddrinfo|DNS)/iu.test(diagnostic)) category = "模型服务地址解析失败";
@@ -151,16 +191,16 @@ function safeModelFailure(
     const provider = new URL(config.baseUrl).hostname;
     const details = [
         `阶段：${stage}`,
-        `提供商：${provider}`,
+        `提供商：${provider}${config.providerType === "deepseek-compatible" ? "（第三方 OpenAI 兼容接口）" : ""}`,
         `模型：${config.model}`,
         ...(status ? [ `HTTP ${status}` ] : [])
     ].join("；");
     const failure = new Error(
         `ReadWeave 无法生成：${category}（${details}）`
-        + `${upstream ? `；上游返回：${safeProviderMessage(upstream)}` : ""}`
+        + `${upstream ? `；上游返回：${safeProviderMessage(upstream.replaceAll(config.apiKey, "[已隐藏]"))}` : ""}`
         + `；处理方法：${action}`
     );
-    failure.cause = error;
+    failure.cause = new Error(safeProviderMessage(diagnostic.replaceAll(config.apiKey, "[已隐藏]")));
     return failure;
 }
 
@@ -227,29 +267,36 @@ async function requestJson<T>(
 ): Promise<ModelCallResult<T>> {
     const config = runtimeConfig ?? getReadWeaveRuntimeConfig();
     const providerHost = new URL(config.baseUrl).hostname;
-    const isDeepSeek = /(^|\.)deepseek\.com$/iu.test(providerHost);
+    const providerType = config.providerType
+        ?? (/(^|\.)deepseek\.com$/iu.test(providerHost) ? "deepseek-official" : "deepseek-compatible");
+    const isDeepSeek = providerType === "deepseek-official"
+        || providerType === "deepseek-compatible" && /(?:^|\/)deepseek(?:-|$)/iu.test(config.model);
     const isKimiCode = providerHost === "api.kimi.com";
     let effectiveMaxTokens = isKimiCode ? Math.max(maxTokens, 4_096) : maxTokens;
     const effectiveTimeoutMs = isKimiCode ? Math.max(timeoutMs, 30_000) : timeoutMs;
     // JSON-mode providers require an explicit JSON instruction in the messages,
     // including small repair prompts that only show an object-shaped example.
     const jsonSystem = /json/iu.test(system) ? system : `${system}\n只返回合法 JSON 对象`;
-    const reserveRates = readWeaveModelRates(config.model);
+    const configuredRates = config.rates ?? readWeaveModelRates(config.model);
+    const reserveRates = providerType === "deepseek-official"
+        ? readWeaveModelRates(config.model) : configuredRates;
+    const pricingVersion = config.pricingVersion
+        ?? (providerType === "deepseek-official" ? READWEAVE_PRICING_VERSION : "third-party-conservative-cny-v1");
     if (budget && !isKimiCode) {
         const inputCost = readWeaveModelReservation(jsonSystem,user,0,reserveRates);
-        const affordable = Math.floor(
+        const minimumOutputTokens = Math.min(maxTokens,512);
+        const minimumCost = inputCost + minimumOutputTokens * reserveRates.output / 1e6;
+        const affordable = reserveRates.output === 0 ? effectiveMaxTokens : Math.floor(
             (budget.remainingCny - inputCost) * 1e6 / reserveRates.output);
-        if (affordable < Math.min(maxTokens,512)) {
-            throw new NonRetryableReadWeaveError(
-                "剩余预算不足以保留完整输入和最低输出空间，未调用模型");
+        if (affordable < minimumOutputTokens) {
+            throw taskBudgetError(stage, budget, minimumCost);
         }
         effectiveMaxTokens = Math.min(effectiveMaxTokens,affordable);
     }
     const reservation = readWeaveModelReservation(
         jsonSystem, user, effectiveMaxTokens,reserveRates);
     if (budget && !budget.reserve(reservation)) {
-        throw new NonRetryableReadWeaveError("剩余预算不足以预留本次调用，未发起请求：需要约 ¥"
-            + reservation.toFixed(4) + "，剩余 ¥" + budget.remainingCny.toFixed(4));
+        throw taskBudgetError(stage, budget, reservation);
     }
     let lastError: unknown;
     // One model stage means one provider request. The background job owns the
@@ -275,7 +322,7 @@ async function requestJson<T>(
                     max_tokens: effectiveMaxTokens,
                     ...(isDeepSeek || isKimiCode ? {
                         response_format: { type: "json_object" },
-                        ...(isDeepSeek && /^deepseek-v4(?:-|$)/iu.test(config.model) ? { thinking: { type: "disabled" } } : {})
+                        ...(isDeepSeek && /(?:^|\/)deepseek-v4(?:-|$)/iu.test(config.model) ? { thinking: { type: "disabled" } } : {})
                     } : {}),
                     messages: [
                         { role: "system", content: jsonSystem },
@@ -284,14 +331,23 @@ async function requestJson<T>(
                 }),
                 signal: signal ? AbortSignal.any([ signal, AbortSignal.timeout(effectiveTimeoutMs) ]) : AbortSignal.timeout(effectiveTimeoutMs)
             });
-            const payload = await response.json() as CompletionResponse;
-            const startRates = readWeaveModelRates(config.model,startedAt);
-            const endRates = readWeaveModelRates(config.model,new Date());
+            const responseText = await response.text();
+            let payload: CompletionResponse;
+            try {
+                payload = JSON.parse(responseText) as CompletionResponse;
+            } catch {
+                throw new Error(`模型服务返回 HTTP ${response.status}：响应不是 JSON，请检查服务地址是否指向 OpenAI 兼容的 /v1 接口`);
+            }
+            const startRates = providerType === "deepseek-official"
+                ? readWeaveModelRates(config.model,startedAt) : configuredRates;
+            const endRates = providerType === "deepseek-official"
+                ? readWeaveModelRates(config.model,new Date()) : configuredRates;
             // When a call crosses a tariff boundary, keep the higher estimate.
             const settlementRates = startRates.output >= endRates.output ? startRates : endRates;
             const actualCost = readWeaveModelUsageCost(payload.usage,settlementRates);
             reportedUsage = actualCost === undefined ? undefined
-                : { ...payload.usage,readWeaveRates:settlementRates };
+                : { ...payload.usage,readWeaveRates:settlementRates,
+                    readWeavePricingVersion:pricingVersion };
             if (receipt !== undefined && actualCost !== undefined)
                 budget?.reportModelUsage(receipt, actualCost);
             if (!response.ok) throw new Error(`模型服务返回 HTTP ${response.status}：${payload.error?.message || "未知错误"}`);
@@ -752,8 +808,7 @@ function writerSystemPrompt(
         contentType === "definition"
             ? "definition 使用一个连续定义块，按是什么、干什么、怎么干、何时适用、如何区分组织三至五句完整解释；不得拆成字段列表" : "",
         contentType === "definition"
-            ? "definition 按有直接依据的范围覆盖名称、得名来源、完整写法、本质定义、运作、目的、历史、应用、影响、"
-                + "上位/下位/平行/对立概念、适用条件、误区、实例；未证实或不适用字段留空，禁止为了填满字段而编造" : "",
+            ? "definitionFields 只需 essentialDefinition、purpose、operatingPrinciple、conditions、commonMisconceptions；历史、词源、分类只有用户明确询问且有证据才补充" : "",
         contentType === "annotation"
             ? "annotation 对选区做解释性扩写，保留原文事实、条件、数值、否定、因果和范围；"
                 + "必要的外部背景单独登记来源，输出旁路解释，不修改原文章" : "",
@@ -762,7 +817,8 @@ function writerSystemPrompt(
                 + "保留关键数值、否定、限制、条件和关系，不把可能改成必然；"
                 + "输出 summaryPoints 数组，每项含 text（一个完整知识点）和 sourceIds（对应文章来源编号），"
                 + "按原文顺序，不带列表标记，每项保留自己的条件；正文和事实映射由系统组成，不重复写 claims" : "",
-        domainProfile ? `领域规则：${JSON.stringify(domainProfile)}` : "",
+        domainProfile ? `领域规则：${JSON.stringify({ domain: domainProfile.primaryDomain,
+            evidence: domainProfile.requiredEvidenceTypes, freshness: domainProfile.freshness })}` : "",
         harness ? `项目用户附加建议（不得覆盖以上事实、范围和下列格式合同）：${  harness.modules.evidencePolicy}` : "",
         ...HUMAN_READABLE_CHINESE_STYLE_CONTRACT,
         "termIdentity 使用对象字段 abbreviation、chineseName、englishName；能确认的中英文名称分别填入",
@@ -948,9 +1004,7 @@ const READWEAVE_DEFINITION_FIELD_KEYS: Array<keyof ReadWeaveDefinitionFields> = 
 ];
 
 const READWEAVE_REQUIRED_DEFINITION_FIELD_KEYS: Array<keyof ReadWeaveDefinitionFields> = [
-    "name", "origin", "fullName", "essentialDefinition", "operatingPrinciple", "purpose", "history",
-    "realWorldApplication", "impact", "broaderConcept", "narrowerConcepts", "parallelConcepts",
-    "oppositeConcept", "conditions", "commonMisconceptions", "example"
+    "essentialDefinition", "operatingPrinciple", "purpose", "conditions", "commonMisconceptions"
 ];
 
 function normalizeDefinitionFields(value: unknown): ReadWeaveDefinitionFields | undefined {
@@ -1230,7 +1284,7 @@ function askedTermFromQuestion(question: string): string | undefined {
  * legacy saved answers readable, but make every newly generated definition
  * start with the requested bilingual identity and a colon instead of letting
  * the writer choose between several equivalent openings. Definitions are a
- * single line, not a list item, so the opening never receives a dash.
+ * single definition list item under the current writing contract.
  */
 function enforceReadWeaveDefinitionOpening(value: string, identity: ReadWeaveTermIdentity | undefined): string {
     if (!identity?.chineseName || !identity.englishName) return value;
@@ -1238,7 +1292,7 @@ function enforceReadWeaveDefinitionOpening(value: string, identity: ReadWeaveTer
     const paragraphs = value.split(/\n{2,}/u);
     const opening = paragraphs[0]?.trim() ?? "";
     if (!opening) return value;
-    if (opening.startsWith(`${canonical}：`)) return value;
+    if (opening.startsWith(`- ${canonical}：`)) return value;
 
     let remainder = opening.replace(/^\s*[-*•]\s*/u, "");
     if (remainder.startsWith(canonical)) remainder = remainder.slice(canonical.length).trimStart();
@@ -1251,7 +1305,7 @@ function enforceReadWeaveDefinitionOpening(value: string, identity: ReadWeaveTer
     }
     remainder = remainder.replace(/^是\s*/u, "").replace(/^：\s*/u, "");
     if (!remainder) return value;
-    paragraphs[0] = `${canonical}：${remainder}`;
+    paragraphs[0] = `- ${canonical}：${remainder}`;
     return paragraphs.join("\n\n");
 }
 
@@ -2526,8 +2580,8 @@ function deterministicIssues(
     if (kind === "term" && termIdentity?.chineseName && termIdentity.englishName) {
         const prefix = termIdentity.abbreviation ? `${escapeRegExp(termIdentity.abbreviation)}\\s+` : "";
         const identity = `${prefix}${escapeRegExp(termIdentity.chineseName)}（${escapeRegExp(termIdentity.englishName)}）`;
-        const openingPattern = new RegExp(`^\\s*${identity}：|^\\s*${identity}是`, "u");
-        if (!openingPattern.test(body)) issues.push("定义必须以“中文名称（English Name）：定义内容”开头，不得使用列表短横线或额外缩进");
+        const openingPattern = new RegExp(`^\\s*- ${identity}：`, "u");
+        if (!openingPattern.test(body)) issues.push("定义必须以“- 中文名称（English Name）：定义内容”开头，单个定义不拆子项");
     }
     if (kind === "term" && termIdentity?.abbreviation
         && termIdentity.abbreviation.toLocaleLowerCase() !== "dblp"
@@ -2630,7 +2684,8 @@ function usageSummary(usages: CompletionUsage[], searchCostCny: number, budgetCn
     const targetCny = budgetCny > COST_BUDGET_CNY ? COST_BUDGET_CNY : ROUTINE_COST_TARGET_CNY;
     return {
         costBasis: "configured-rate-estimate",
-        pricingVersion: READWEAVE_PRICING_VERSION,
+        pricingVersion: usages.findLast(usage => usage.readWeavePricingVersion)?.readWeavePricingVersion
+            ?? READWEAVE_PRICING_VERSION,
         modelCalls: usages.length,
         inputTokens,
         cacheHitInputTokens,
@@ -2658,10 +2713,8 @@ function writerInput(
         : "";
     const definitionContract = request.kind === "term"
         ? [
-            "定义字段合同：有直接依据的必填项必须覆盖；命名、全称和历史无直接证据时留空并登记缺口，禁止常识补齐或猜测；确实不适用的维度不得编造",
-            "必填：名称、得名于哪里、全称、本质定义、运作原理、功能目的、历史背景、现实应用、影响后果、上位概念、下位概念、平行概念、对立概念、适用条件、常见误区、具体示例",
-            "可选：别名、缩写、所属学科、所属领域、优势、劣势",
-            "第一行固定为“中文名称（English Name）：定义内容”，有确认缩写时固定为“缩写 中文全称（English Full Name）：定义内容”，不得用列表短横线或缩进开头"
+            "定义采用一个连续列表项，覆盖本质、用途、原理、适用条件和区分边界；无依据的词源、历史、分类不要补造",
+            "第一行固定为“- 中文名称（English Name）：定义内容”，有确认缩写时固定为“- 缩写 中文全称（English Full Name）：定义内容”"
         ].join("\n")
         : "";
     return [
@@ -2771,15 +2824,15 @@ export async function generateUnifiedReadWeaveAnswer(
     if (!request || typeof request !== "object") throw new ValidationError("ReadWeave 生成请求无效");
     const originalQuestion = normalizeQuestion(request);
     const namingRequirements = readWeaveNamingRequirements(originalQuestion, false);
-    const namingRequired = request.kind === "term" || namingRequirements.length > 0;
-    const budgetCny = request.kind === "term" || namingRequirements.includes("origin") ? 0.10 : COST_BUDGET_CNY;
-    const budget = new ReadWeaveBudget(budgetCny);
+    const namingRequired = namingRequirements.length > 0;
+    let budgetCny = request.kind === "term" || namingRequirements.includes("origin") ? 0.10 : COST_BUDGET_CNY;
+    let budget = new ReadWeaveBudget(budgetCny);
     if (!originalQuestion) throw new ValidationError("问题或术语不能为空");
     if (!Array.isArray(request.fragments) || request.fragments.length === 0) throw new ValidationError("生成回答需要文章选区或上下文");
 
     // Missing credentials cannot be repaired by searching or retrying. Fail
     // before evidence work so persisted jobs expose one actionable error.
-    getReadWeaveRuntimeConfig();
+    const runtime = getReadWeaveRuntimeConfig();
 
     let round = 0;
     const report = (
@@ -2925,6 +2978,25 @@ export async function generateUnifiedReadWeaveAnswer(
 
     const accessedAt = new Date().toISOString();
     const localSources = localEvidence(selected.fragments, accessedAt);
+    const writerSystem = writerSystemPrompt(harness, domainProfile,
+        request.contentType ?? (request.kind === "term" ? "definition" : "problem"));
+    const writerOutputTokens = request.kind === "term" ? 2_200 : 1_600;
+    const writerRates = runtime.rates ?? readWeaveModelRates(runtime.model);
+    const mandatoryIds = new Set(localSources.filter(source => source.title === "用户选择的原文片段")
+        .map(source => source.sourceId));
+    const buildWriterInput = (evidence: ReadWeaveEvidenceSource[]) =>
+        writerInput(contract, evidence, request, undefined, answerPlanForWriter);
+    const baseWriter = fitReadWeaveWriterEvidence(localSources.filter(source => mandatoryIds.has(source.sourceId)),
+        mandatoryIds, buildWriterInput, writerSystem, writerOutputTokens, writerRates, budgetCny);
+    // Classify unusually large inputs before any paid work, within the user's difficult-task ceiling.
+    if (baseWriter.reservation > budgetCny && baseWriter.reservation <= 0.10) {
+        budgetCny = 0.10;
+        budget = new ReadWeaveBudget(budgetCny);
+        report("gathering-context", "输入较长，按困难问题安排费用，先保留完整回答空间");
+    }
+    if (baseWriter.reservation > budgetCny) throw taskBudgetError("开始前的配置检查", budget, baseWriter.reservation);
+    // Keep space for both the answer and one useful external passage before searching.
+    const searchAllowance = Math.max(0, budgetCny - baseWriter.reservation - 0.006);
     let external: { sources: ReadWeaveEvidenceSource[]; queries: string[]; providers: string[]; cacheHit: boolean; searchCostCny: number; warnings: string[]; audit?: ReadWeaveResearchAudit } = {
         sources: [] as ReadWeaveEvidenceSource[],
         queries: [] as string[],
@@ -2936,7 +3008,7 @@ export async function generateUnifiedReadWeaveAnswer(
     const shouldGatherExternal = externalSearchDecision.required;
     if (shouldGatherExternal) {
         try {
-            external = await _gatherExternalEvidence(contract, context, message => report("gathering-context", message), signal, budgetCny - 0.03, namingRequired, selectedFragment);
+            external = await _gatherExternalEvidence(contract, context, message => report("gathering-context", message), signal, searchAllowance, namingRequired, selectedFragment);
             budget.reserve(external.searchCostCny);
         } catch (error) {
             signal?.throwIfAborted();
@@ -2945,9 +3017,13 @@ export async function generateUnifiedReadWeaveAnswer(
         }
     }
     const sources = [ ...localSources, ...external.sources ].map(enrichReadWeaveEvidenceSource);
-    const writingSources = readWeaveWritingEvidence(
+    const preferredSources = readWeaveWritingEvidence(
         sources, contract.normalizedQuestion, selectedFragment
     );
+    const preparedWriter = fitReadWeaveWriterEvidence(preferredSources, mandatoryIds, buildWriterInput,
+        writerSystem, writerOutputTokens, writerRates, budget.remainingCny);
+    const writingSources = preparedWriter.sources;
+    report("gathering-context", `已安排回答空间，采用 ${writingSources.length} 个完整证据片段；检索目录保留 ${sources.length} 个来源`);
     const recordUsage = (usage?: CompletionUsage) => {
         if (usage) usages.push(usage);
         const summary = usageSummary(usages,
@@ -2976,10 +3052,8 @@ export async function generateUnifiedReadWeaveAnswer(
         : `已准备 ${localSources.length} 个文章片段，未取得外部来源`);
 
     report("drafting", "正在按问题契约和证据清单生成回答");
-    const writer = await requestJson<WriterPayload>(writerSystemPrompt(harness, domainProfile,
-        request.contentType ?? (request.kind === "term" ? "definition" : "problem")),
-        writerInput(contract, writingSources, request, undefined, answerPlanForWriter),
-        2_200, 15_000, undefined, signal, "回答生成", budget, recordUsage);
+    const writer = await requestJson<WriterPayload>(writerSystem, preparedWriter.input,
+        writerOutputTokens, 30_000, runtime, signal, "回答生成", budget, recordUsage);
     let body = typeof writer.value.body === "string" ? writer.value.body.trim() : "";
     const personSubject = /(?:谁|人物|个人简介|背景|履历|资料)|\bwho\s+is\b|\bbiograph(?:y|ical)\b/iu
         .test(contract.normalizedQuestion)
@@ -3006,7 +3080,7 @@ export async function generateUnifiedReadWeaveAnswer(
             throw new NonRetryableReadWeaveError("模型未按总结列表结构返回，未把普通段落当作总结");
         }
     }
-    const sourceIds = new Set(sources.map(source => source.sourceId));
+    const sourceIds = new Set(writingSources.map(source => source.sourceId));
     let claims = normalizeClaims(writer.value.claims, sourceIds)
         .map(claim => personSubject
             ? { ...claim, text: formatReadWeavePersonNameOrder(claim.text, personSubject) }
@@ -3037,8 +3111,8 @@ export async function generateUnifiedReadWeaveAnswer(
                 "namingEvidence 是数组，每项含 bodyText（完整 replacement）、sourceId、quote"
             ].join("\n"), JSON.stringify({ fragments, diagnostics,
                 evidence: writingSources.map(source => ({
-                sourceId: source.sourceId, title: source.title,
-                url: source.url, excerpt: source.excerpt
+                    sourceId: source.sourceId, title: source.title,
+                    url: source.url, excerpt: source.excerpt
                 })) }), 1200, 15000, undefined, signal, "局部证据修改", budget, recordUsage);
             return result.value.patches;
         }, signal
@@ -3049,7 +3123,7 @@ export async function generateUnifiedReadWeaveAnswer(
         text.includes(claim.text) || claim.text.includes(text.replace(/[。；;]+$/u, ""))));
     for (const supported of namingCheck.supported) {
         if (supported.bodyText && supported.sourceId && !claims.some(claim => claim.text === supported.bodyText)) {
-            claims.push(enrichReadWeaveClaim({ claimId: `naming-${claims.length + 1}`, text: supported.bodyText, sourceIds: [supported.sourceId], confidence: "medium" }, sources, domainProfile));
+            claims.push(enrichReadWeaveClaim({ claimId: `naming-${claims.length + 1}`, text: supported.bodyText, sourceIds: [ supported.sourceId ], confidence: "medium" }, sources, domainProfile));
         }
     }
     body = omitUnsupportedReadWeaveNaming(body, namingCheck.issues);
@@ -3114,8 +3188,8 @@ export async function generateUnifiedReadWeaveAnswer(
             if (terminology.warnings.length)
                 report("checking", "局部术语响应未应用", terminology.warnings);
             if (terminology.knowledgeTerms.length)
-                report("checking", "通行用法注释（模型常识，非来源原文）："
-                    + terminology.knowledgeTerms.join("、"));
+                report("checking", `通行用法注释（模型常识，非来源原文）：${
+                    terminology.knowledgeTerms.join("、")}`);
         } catch (error) {
             signal?.throwIfAborted();
             report("checking", "局部术语请求未完成，保留原文", [ error instanceof Error
@@ -3137,6 +3211,11 @@ export async function generateUnifiedReadWeaveAnswer(
     body = repaired.body;
     const repairRounds = namingRepair.rounds + qualifierRepair.rounds
         + terminologyRounds + repaired.rounds;
+    const skippedRepairs = [ ...repaired.warnings, ...qualifierRepair.warnings, ...namingRepair.warnings ]
+        .filter(optionalBudgetDiagnostic);
+    if (skippedRepairs.length) report("checking", "辅助修改已达到本题安排的费用，保留已生成回答", [], {
+        usage: usageSummary(usages, external.searchCostCny + budget.unreportedModelCostCny, budgetCny)
+    });
     const independentVerification = "not-run" as const;
     const verificationStateIssues: string[] = [];
 
@@ -3147,9 +3226,8 @@ export async function generateUnifiedReadWeaveAnswer(
     if (request.kind === "term") body = enforceReadWeaveDefinitionOpening(body, termIdentity);
     issues = Array.from(new Set([
         ...readWeaveFormatIssues(body),
-        ...repaired.warnings,
-        ...qualifierRepair.warnings,
-        ...namingRepair.warnings,
+        ...[ ...repaired.warnings, ...qualifierRepair.warnings, ...namingRepair.warnings ]
+            .filter(message => !optionalBudgetDiagnostic(message)),
         ...namingCheck.issues.map(text => `命名缺少直接依据，未交付该片段：${text}`),
         ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, request, termIdentity, verifiedNonExpandableArtifact),
         ...(request.kind === "term"

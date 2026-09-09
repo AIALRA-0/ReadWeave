@@ -74,6 +74,9 @@ export default function LlmSettings() {
 
 function ReadWeaveSettings() {
     const [settings, setSettings] = useState<ReadWeaveAiSettings>();
+    const [providerType, setProviderType] = useState<ReadWeaveAiSettings["providerType"]>("deepseek-official");
+    const [pricing, setPricing] = useState(["", "", ""]);
+    const [customPricing, setCustomPricing] = useState(false);
     const [baseUrl, setBaseUrl] = useState("");
     const [model, setModel] = useState("");
     const [apiKey, setApiKey] = useState("");
@@ -110,6 +113,9 @@ function ReadWeaveSettings() {
     useEffect(() => {
         void server.get<ReadWeaveAiSettings>("readweave/settings").then(value => {
             setSettings(value);
+            setProviderType(value.providerType);
+            setPricing([value.pricing.cacheHitInputCnyPerMillion, value.pricing.cacheMissInputCnyPerMillion, value.pricing.outputCnyPerMillion].map(String));
+            setCustomPricing(value.pricing.source === "custom");
             setBaseUrl(value.baseUrl);
             setModel(value.model);
             setSearchMode(value.searchMode === "off" ? "off" : "always");
@@ -125,9 +131,18 @@ function ReadWeaveSettings() {
         setStatus(t("readweave_settings.saving"));
         try {
             const parsedSearchBudget = Number.parseFloat(searchBudgetCny);
+            if (customPricing && pricing.some(value => !value.trim() || !Number.isFinite(Number(value)) || Number(value) < 0)) {
+                throw new Error(t("readweave_settings.invalid_pricing"));
+            }
             const value = await server.put<ReadWeaveAiSettings>("readweave/settings", {
+                providerType,
                 baseUrl,
                 model,
+                ...(providerType === "deepseek-compatible" && customPricing ? {
+                    cacheHitInputCnyPerMillion: Number(pricing[0]),
+                    cacheMissInputCnyPerMillion: Number(pricing[1]),
+                    outputCnyPerMillion: Number(pricing[2])
+                } : {}),
                 ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
                 clearApiKey,
                 searchMode,
@@ -149,6 +164,9 @@ function ReadWeaveSettings() {
                 } : {})
             });
             setSettings(value);
+            setProviderType(value.providerType);
+            setPricing([value.pricing.cacheHitInputCnyPerMillion, value.pricing.cacheMissInputCnyPerMillion, value.pricing.outputCnyPerMillion].map(String));
+            setCustomPricing(value.pricing.source === "custom");
             setBaseUrl(value.baseUrl);
             setModel(value.model);
             setSearchMode(value.searchMode === "off" ? "off" : "always");
@@ -170,8 +188,10 @@ function ReadWeaveSettings() {
             });
             setModels([]);
             setStatus(t("readweave_settings.saved"));
-        } catch {
-            setStatus(t("readweave_settings.save_failed"));
+            return true;
+        } catch (error) {
+            setStatus(`${t("readweave_settings.save_failed")} ${settingsError(error)}`);
+            return false;
         } finally {
             setBusy(false);
         }
@@ -185,7 +205,7 @@ function ReadWeaveSettings() {
             if (Object.values(searchKeys).some(value => value.trim())
                 || searchMode !== (settings?.searchMode === "off" ? "off" : "always")
                 || Number.parseFloat(searchBudgetCny) !== settings?.searchBudgetCny) {
-                await saveSettings(false);
+                if (!await saveSettings(false)) return;
             }
             const value = await server.post<ReadWeaveSearchTestResult>("readweave/settings/search-test", { query: searchQuery });
             setSearchResult(value);
@@ -208,15 +228,13 @@ function ReadWeaveSettings() {
         setBusy(true);
         setStatus(t("readweave_settings.testing"));
         try {
-            if (apiKey.trim() || baseUrl !== settings?.baseUrl || model !== settings?.model) {
-                await saveSettings(false);
-            }
+            if (!await saveSettings(false)) return;
             const value = await server.get<{ models: ReadWeaveModelInfo[] }>("readweave/settings/models");
             setModels(value.models);
-            if (!value.models.some(item => item.id === model) && value.models[0]) setModel(value.models[0].id);
+            if (!model.trim() && value.models[0]) setModel(value.models[0].id);
             setStatus(t("readweave_settings.test_succeeded", { count: value.models.length }));
-        } catch {
-            setStatus(t("readweave_settings.test_failed"));
+        } catch (error) {
+            setStatus(`${t("readweave_settings.test_failed")} ${settingsError(error)}`);
         } finally {
             setBusy(false);
         }
@@ -224,6 +242,13 @@ function ReadWeaveSettings() {
 
     return (
         <OptionsSection title={t("readweave_settings.title")} description={t("readweave_settings.description")}>
+            <OptionsRow name="readweave-provider-type" label={t("readweave_settings.provider_type")} stacked>
+                <select className="form-select" value={providerType} data-testid="readweave-provider-type"
+                    onChange={event => setProviderType(event.currentTarget.value as ReadWeaveAiSettings["providerType"])}>
+                    <option value="deepseek-official">{t("readweave_settings.provider_official")}</option>
+                    <option value="deepseek-compatible">{t("readweave_settings.provider_compatible")}</option>
+                </select>
+            </OptionsRow>
             <OptionsRow name="readweave-base-url" label={t("readweave_settings.base_url")} description={t("readweave_settings.base_url_description")} stacked>
                 <input
                     type="url"
@@ -247,15 +272,34 @@ function ReadWeaveSettings() {
                 />
             </OptionsRow>
             <OptionsRow name="readweave-model" label={t("readweave_settings.model")} description={t("readweave_settings.model_description")} stacked>
-                <select
-                    className="form-select"
-                    value={model}
-                    onChange={event => setModel(event.currentTarget.value)}
-                    data-testid="readweave-model"
-                >
-                    {selectableModels.map(modelId => <option value={modelId} key={modelId}>{modelId}</option>)}
-                </select>
+                <>
+                    <input
+                        className="form-control"
+                        value={model}
+                        list="readweave-model-options"
+                        onInput={event => setModel(event.currentTarget.value)}
+                        data-testid="readweave-model"
+                    />
+                    <datalist id="readweave-model-options">
+                        {selectableModels.map(modelId => <option value={modelId} key={modelId} />)}
+                    </datalist>
+                </>
             </OptionsRow>
+            {providerType === "deepseek-compatible" && <details className="mb-3" data-testid="readweave-pricing">
+                <summary>{t("readweave_settings.pricing_title")}</summary>
+                <p className="form-text">{t("readweave_settings.pricing_description")}</p>
+                {(["price_cache_hit", "price_input", "price_output"] as const).map((name, index) => (
+                    <OptionsRow key={name} name={`readweave-${name}`} label={t(`readweave_settings.${name}`)} stacked>
+                        <input type="number" className="form-control" min="0" max="10000" step="0.001"
+                            value={pricing[index]} data-testid={`readweave-${name}`}
+                            onInput={event => {
+                                const value = event.currentTarget.value;
+                                setPricing(current => current.map((item, i) => i === index ? value : item));
+                                setCustomPricing(true);
+                            }} />
+                    </OptionsRow>
+                ))}
+            </details>}
             <div className="d-flex flex-wrap gap-2">
                 <button type="button" className="btn btn-primary" disabled={busy || !baseUrl.trim() || !model.trim()} onClick={() => saveSettings(false)} data-testid="readweave-settings-save">
                     {t("common.save")}
@@ -439,6 +483,14 @@ function ReadWeaveSettings() {
             )}
         </OptionsSection>
     );
+}
+
+function settingsError(error: unknown): string {
+    if (typeof error === "string") {
+        try { return settingsError(JSON.parse(error)); } catch { return error.replace(/<[^>]*>/gu, "").slice(0, 400); }
+    }
+    if (error && typeof error === "object" && "message" in error && typeof error.message === "string") return error.message.slice(0, 400);
+    return "";
 }
 
 const HARNESS_MODULE_LABELS: Array<[ keyof ReadWeaveHarnessModules, string ]> = [

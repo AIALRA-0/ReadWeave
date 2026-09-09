@@ -9,7 +9,7 @@ import {
     type ReadWeaveGenerationIssue,
     type ReadWeaveGenerationIssueCategory,
     type ReadWeaveGenerationJob,
-    type ReadWeaveGenerationProgress} from "@triliumnext/commons";
+    type ReadWeaveGenerationProgress } from "@triliumnext/commons";
 import { becca, cls, NotFoundError, protected_session as protectedSessionModule, ValidationError } from "@triliumnext/core";
 import { randomUUID } from "crypto";
 
@@ -752,12 +752,13 @@ function runJob(jobId: string) {
         if (controller.signal.aborted || current.status === "cancelled" || current.activeAttemptId !== attemptId) return;
         const message = error instanceof Error ? error.message : "ReadWeave 后台任务等待恢复";
         const failureClass = classifyFailure(error);
-        const status = failureClass === "internal" ? "failed" : "paused";
+        const status = failureClass === "internal" || failureClass === "budget" ? "failed" : "paused";
         if (!current.isProtected || protectedSession.isProtectedSessionAvailable()) {
             appendProgress(jobId, {
                 stage: status === "failed" ? "failed" : "paused",
                 round: 0,
-                message: status === "failed" ? "任务数据异常，已停止执行" : "任务已暂停，保留全部状态并等待重试",
+                message: failureClass === "budget" ? "当前模型价格无法完成本题，请调整模型配置"
+                    : status === "failed" ? "任务数据异常，已停止执行" : "任务已暂停，保留全部状态并等待重试",
                 issues: [ message ]
             });
         }

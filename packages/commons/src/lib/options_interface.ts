@@ -229,8 +229,12 @@ export interface OptionDefinitions extends KeyboardShortcutsOptions<KeyboardActi
     // ReadWeave AI settings are local-only. The API key is intentionally not
     // exposed through the generic options endpoint.
     readWeaveApiKey: string;
+    readWeaveProviderType: string;
     readWeaveBaseUrl: string;
     readWeaveModel: string;
+    readWeaveCacheHitInputCnyPerMillion: string;
+    readWeaveCacheMissInputCnyPerMillion: string;
+    readWeaveOutputCnyPerMillion: string;
     readWeaveVerifierApiKey: string;
     readWeaveVerifierBaseUrl: string;
     readWeaveVerifierModel: string;

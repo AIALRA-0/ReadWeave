@@ -589,6 +589,7 @@ export interface ReadWeaveDeleteResult {
 }
 
 export interface ReadWeaveAiSettings {
+    providerType: "deepseek-official" | "deepseek-compatible";
     baseUrl: string;
     model: string;
     hasApiKey: boolean;
@@ -597,6 +598,12 @@ export interface ReadWeaveAiSettings {
     searchMode: "off" | "automatic" | "always";
     searchBudgetCny: number;
     mathShortcut: string;
+    pricing: {
+        cacheHitInputCnyPerMillion: number;
+        cacheMissInputCnyPerMillion: number;
+        outputCnyPerMillion: number;
+        source: "official" | "custom" | "conservative-default";
+    };
     verifier: {
         baseUrl: string;
         model: string;
@@ -627,10 +634,14 @@ export interface ReadWeaveAiSettings {
 }
 
 export interface ReadWeaveAiSettingsUpdate {
+    providerType?: "deepseek-official" | "deepseek-compatible";
     baseUrl: string;
     model: string;
     apiKey?: string;
     clearApiKey?: boolean;
+    cacheHitInputCnyPerMillion?: number;
+    cacheMissInputCnyPerMillion?: number;
+    outputCnyPerMillion?: number;
     searchMode?: "off" | "automatic" | "always";
     searchBudgetCny?: number;
     mathShortcut?: string;
