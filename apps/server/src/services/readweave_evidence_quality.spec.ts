@@ -1,12 +1,13 @@
 import type { ReadWeaveEvidenceSource } from "@triliumnext/commons";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
     checkReadWeaveNamingEvidence,
-    omitUnsupportedReadWeaveNaming,
     normalizeReadWeaveEvidenceText,
+    omitUnsupportedReadWeaveNaming,
     readWeaveExplicitExpansions,
     readWeaveResearchSubject,
+    repairReadWeaveNamingEvidence
 } from "./readweave_evidence_quality.js";
 describe("naming provenance, not a semantic truth certificate", () => {
     it("extracts the selected entity instead of quoting an instruction as an entity", () => {
@@ -83,9 +84,9 @@ describe("naming provenance, not a semantic truth certificate", () => {
     });
     it("matches visible link labels and typographic quotes", () => {
         const decision = " She decided to call the tool Lumen after this story.";
-        const excerpt = "The author was reading [“Light’s Journey”](https://example.org/light)."
-            + decision;
-        const quote = 'The author was reading "Light\'s Journey".' + decision;
+        const excerpt = `The author was reading [“Light’s Journey”](https://example.org/light).${
+            decision}`;
+        const quote = `The author was reading "Light's Journey".${  decision}`;
         const body = "Lumen 的名称来源于故事《Light's Journey》。";
         const checked = checkReadWeaveNamingEvidence(body,
             [ { bodyText: body, sourceId: "S1", quote } ],
@@ -125,5 +126,52 @@ describe("naming provenance, not a semantic truth certificate", () => {
         const checked = checkReadWeaveNamingEvidence(text, [], []);
         expect(checked.issues).toEqual([ "开发者先讨论了光照，然后提出了这一名称，灵感来自未知故事。" ]);
         expect(omitUnsupportedReadWeaveNaming(text, checked.issues)).toBe("Lumen 用于测量。");
+    });
+    it("accepts an explicitly negative abbreviation statement, not a guessed expansion", () => {
+        const excerpt = "Lumen is not an acronym and doesn't stand for anything";
+        const body = "Lumen 并非缩写";
+        expect(checkReadWeaveNamingEvidence(body,
+            [ { bodyText:body, sourceId:"S1", quote:excerpt } ],
+            [ { sourceId:"S1", excerpt } ] as ReadWeaveEvidenceSource[]).issues).toEqual([]);
+    });
+    it("repairs only the faulty sentence once and preserves all other bytes", async () => {
+        const faulty = "Lumen 于 1987 年得名于光通量单位。";
+        const replacement = "Lumen 得名于光通量单位。";
+        const text = `第一段不动。\n${faulty}\n第三段不动。`;
+        const repair = vi.fn(async () => [ { original:faulty,replacement,
+            namingEvidence:[ { bodyText:replacement,sourceId:"S1",quote } ] } ]);
+        const result = await repairReadWeaveNamingEvidence(text, [], [ source ], repair);
+        expect(repair).toHaveBeenCalledExactlyOnceWith([ faulty ]);
+        expect(result.body).toBe(`第一段不动。\n${replacement}\n第三段不动。`);
+        expect(result.check.issues).toEqual([]);
+        expect(result.removed).toEqual([ faulty ]);
+        expect(result.rounds).toBe(1);
+    });
+    it.each([ "whole answer", "invented quote", "empty replacement" ])(
+        "rejects a %s patch without a retry", async mode => {
+            const faulty = "Lumen 于 1987 年得名于光通量单位。";
+            const replacement = mode === "empty replacement" ? "" : "Lumen 得名于光通量单位。";
+            const text = `前文。${faulty}后文。`;
+            const repair = vi.fn(async () => [ {
+                original:mode === "whole answer" ? text : faulty, replacement,
+                namingEvidence:[ { bodyText:replacement,sourceId:"S1",
+                    quote:mode === "invented quote"
+                        ? "Lumen is named after an invented place" : quote } ]
+            } ]);
+            const result = await repairReadWeaveNamingEvidence(text, [], [ source ], repair);
+            expect(result.body).toBe(text);
+            expect(result.warnings).toHaveLength(1);
+            expect(repair).toHaveBeenCalledTimes(1);
+        }
+    );
+    it("does not spend on valid text or after cancellation", async () => {
+        const repair = vi.fn();
+        expect((await repairReadWeaveNamingEvidence("已知事实", [], [], repair)).rounds).toBe(0);
+        const controller = new AbortController();
+        controller.abort();
+        await expect(repairReadWeaveNamingEvidence(
+            "Lumen 得名于未知故事。", [], [], repair, controller.signal
+        )).rejects.toThrow();
+        expect(repair).not.toHaveBeenCalled();
     });
 });

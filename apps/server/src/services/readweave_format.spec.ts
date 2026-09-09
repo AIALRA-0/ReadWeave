@@ -99,6 +99,15 @@ describe("versioned formatting contract", () => {
         expect((await repairReadWeaveFormat("合格文本", repair)).rounds).toBe(0);
         expect(repair).not.toHaveBeenCalled();
     });
+    it("shares the repair allowance with earlier evidence repairs", async () => {
+        const repair = vi.fn(async (text: string) => text.replace(/。/gu, ""));
+        const result = await repairReadWeaveFormat("第一句。\n\n第二句。", repair, undefined, 1);
+        expect(repair).toHaveBeenCalledTimes(1);
+        expect(result.rounds).toBe(1);
+        repair.mockClear();
+        await repairReadWeaveFormat("第一句。", repair, undefined, 0);
+        expect(repair).not.toHaveBeenCalled();
+    });
     it("retains the original after an unsafe model patch", async () => {
         const result = await repairReadWeaveFormat("不增加。", async () => "增加");
         expect(result.body).toBe("不增加。");

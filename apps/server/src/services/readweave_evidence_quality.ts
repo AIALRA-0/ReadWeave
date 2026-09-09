@@ -17,6 +17,7 @@ export const READWEAVE_ORIGIN_ASSERTION = new RegExp([
 const NAMING_ASSERTION = new RegExp([
     READWEAVE_ORIGIN_ASSERTION.source,
     "(?:缩写|全称).{0,40}(?:是|为|展开|表示)",
+    "not an acronym|not an abbreviation|doesn't stand for|(?:不是|并非)缩写",
     "[A-Za-z][\\w-]*.{0,20}(?:是|为).{0,160}(?:缩写|首字母)|stands for|acronym for"
 ].join("|"), "iu");
 const GUESS =
@@ -113,6 +114,14 @@ export function checkReadWeaveNamingEvidence(
     const issues = body
         .split(/(?<=[。；;！？!?])|\n+/u)
         .map((text) => text.trim())
+        .map(text => {
+            // A new subject immediately after a comma can be an independent
+            // naming clause. Never cut at a noun inside "提出了这一名称".
+            const boundary = text.match(/[，,]\s*(?=(?:其)?(?:名称|名字|词源|缩写|全称))/u);
+            return boundary?.index !== undefined
+                && !NAMING_ASSERTION.test(text.slice(0, boundary.index))
+                ? text.slice(boundary.index + boundary[0].length) : text;
+        })
         .filter(
             (text) =>
                 NAMING_ASSERTION.test(text) &&
@@ -139,4 +148,66 @@ export function omitUnsupportedReadWeaveNaming(body: string, clauses: string[]):
         result = result.slice(0, start) + result.slice(start + clause.length);
     }
     return result.replace(/[，,]\s*(?=\n|$)/gu, "").replace(/\n{3,}/gu, "\n\n").trim();
+}
+
+/** One bounded batch of exact sentence patches, never a second whole writer. */
+export async function repairReadWeaveNamingEvidence(
+    original: string,
+    evidence: unknown,
+    sources: ReadWeaveEvidenceSource[],
+    repair: (fragments: string[]) => Promise<unknown>,
+    signal?: AbortSignal
+) {
+    const entries = Array.isArray(evidence) ? [ ...evidence ] : [];
+    const initial = checkReadWeaveNamingEvidence(original, entries, sources);
+    const fragments = initial.issues.filter(text => text.length <= 600
+        && original.indexOf(text) === original.lastIndexOf(text)).slice(0, 2);
+    let body = original;
+    let rounds = 0;
+    const warnings: string[] = [];
+    if (fragments.length) {
+        signal?.throwIfAborted();
+        rounds++;
+        try {
+            const patches = await repair(fragments);
+            signal?.throwIfAborted();
+            if (!Array.isArray(patches) || patches.length > fragments.length)
+                throw new Error("局部证据修复的补丁数量无效");
+            const seen = new Set<string>();
+            // Validate the complete batch before applying any patch.
+            const accepted: Array<{
+                original: string; replacement: string; evidence: unknown[]
+            }> = [];
+            for (const patch of patches) {
+                if (!patch || typeof patch.original !== "string"
+                    || !fragments.includes(patch.original) || seen.has(patch.original)
+                    || typeof patch.replacement !== "string" || !patch.replacement.trim()
+                    || patch.replacement.length > Math.max(patch.original.length * 2, 400))
+                    throw new Error("局部证据修复超出原句范围");
+                const checked = checkReadWeaveNamingEvidence(
+                    patch.replacement, patch.namingEvidence, sources
+                );
+                const full = normalizeReadWeaveEvidenceText(patch.replacement);
+                if (checked.issues.length || !checked.supported.some(entry =>
+                    normalizeReadWeaveEvidenceText(entry.bodyText ?? "") === full))
+                    throw new Error("局部证据修复仍未绑定完整原句和直接依据");
+                seen.add(patch.original);
+                accepted.push({ ...patch, evidence: checked.supported });
+            }
+            // Original offsets prevent a replacement from changing the target
+            // of a later patch; non-patched bytes remain exactly unchanged.
+            for (const patch of accepted.toSorted((a, b) =>
+                original.indexOf(b.original) - original.indexOf(a.original))) {
+                const start = original.indexOf(patch.original);
+                body = body.slice(0, start) + patch.replacement
+                    + body.slice(start + patch.original.length);
+                entries.push(...patch.evidence);
+            }
+        } catch (error) {
+            signal?.throwIfAborted();
+            warnings.push(error instanceof Error ? error.message : "局部证据修复未应用");
+        }
+    }
+    return { body, check: checkReadWeaveNamingEvidence(body, entries, sources), rounds, warnings,
+        removed: initial.issues.filter(text => !body.includes(text)) };
 }

@@ -213,12 +213,13 @@ export function readWeaveFormatIssues(body: string): string[] {
 export async function repairReadWeaveFormat(
     original: string,
     repair: (fragment: string, issues: string[]) => Promise<string>,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    maxRounds = 2
 ): Promise<{ body: string; rounds: number; warnings: string[] }> {
     let body = original;
     let rounds = 0;
     const warnings: string[] = [];
-    for (; rounds < 2; ) {
+    for (; rounds < Math.min(2, Math.max(0, maxRounds)); ) {
         let fragment: string | undefined;
         mapReadWeaveProse(body, (text) => {
             fragment ??= text

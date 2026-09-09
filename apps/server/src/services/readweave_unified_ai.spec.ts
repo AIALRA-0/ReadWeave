@@ -928,11 +928,43 @@ describe.skip("ReadWeave retired multi-stage workflow", () => {
 });
 
 describe("ReadWeave one-pass workflow", () => {
+    it("repairs an unsupported naming qualifier within the original task budget", async () => {
+        const original = "Lumen 于 1987 年得名于光通量单位。";
+        const replacement = "Lumen 得名于光通量单位。";
+        const quote = "Lumen is named after a light unit";
+        searchMock.mockImplementation(async options => ({
+            ...await defaultSearchImplementation(options),
+            sources:[ { provider:"Official documentation",title:"Lumen name",
+                url:"https://example.org/lumen",snippet:quote,score:100,publishedAt:"2025-01-01" } ]
+        }));
+        let calls = 0;
+        vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
+            const prompt = JSON.parse(String(init?.body)).messages[1].content;
+            const content = calls++ === 0
+                ? { body:original,claims:[],
+                    namingEvidence:[ { bodyText:original,sourceId:"S1",quote } ] }
+                : { patches:[ { original,replacement,
+                    namingEvidence:[ { bodyText:replacement,sourceId:"S1",quote } ] } ] };
+            if (calls === 2) expect(JSON.parse(prompt).fragments).toEqual([ original ]);
+            return Response.json({ model:"deepseek-v4-flash",
+                choices:[ { message:{ content:JSON.stringify(content) } } ],
+                usage:{ prompt_tokens:1000,completion_tokens:100,total_tokens:1100 } });
+        }));
+        const result = await generateUnifiedReadWeaveAnswer({
+            ...request("Lumen 的名称来源是什么？只解释得名原因"),
+            fragments:[ { id:"selected",role:"selected",text:"Lumen" } ]
+        });
+        expect(result.body).toBe(replacement.replace("。", ""));
+        expect(result.usage).toMatchObject({ modelCalls:2,withinBudget:true,budgetCny:.1 });
+        expect(result.workflow?.repairRounds).toBe(1);
+        expect(result.audit?.validationIssues?.some(issue=>issue.includes("命名缺少"))).toBe(false);
+        expect(result.evidenceSources?.some(source=>source.sourceId==="S1")).toBe(true);
+    });
     it("preserves the complete bounded evidence window and the supported answer", async () => {
         const decision = " She decided to call the tool Lumen after this story.";
         const excerpt = `${"Context ".repeat(140)}`
-            + "The author was reading [“Light’s Journey”](https://example.org/story)." + decision;
-        const quote = 'The author was reading "Light\'s Journey".' + decision;
+            + `The author was reading [“Light’s Journey”](https://example.org/story).${  decision}`;
+        const quote = `The author was reading "Light's Journey".${  decision}`;
         const body = "Lumen 的名称来源于故事《Light's Journey》。";
         searchMock.mockImplementation(async options => ({
             ...await defaultSearchImplementation(options),
