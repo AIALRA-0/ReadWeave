@@ -27,8 +27,9 @@ const STEPS: Record<ReadWeaveAnswerPlan["answerType"], string[]> = {
 
 function namingOnlySteps(question: string): string[] | undefined {
     const requested = question.replace(/(?:不要|不必|无需|不用|(?<!\p{L})别)[^，,。；;！？?\n]*/gu, "");
+    const broader = /(?:定义|本质|机制|原理|运作|用途|作用|应用|历史|词源|来历|区别|比较|优缺点|如何|怎么)/u;
     if (!/(?:全称|缩写展开|full name|stands for)/iu.test(requested)
-        || /(?:定义|本质|机制|原理|运作|用途|作用|应用|历史|词源|来历|区别|比较|优缺点|如何|怎么)/u.test(requested)) return undefined;
+        || broader.test(requested)) return undefined;
     return /(?:词义|词.{0,8}(?:含义|意思|表示)|每个词|逐词|word meanings?)/iu.test(requested)
         ? [ "给出有来源支持的正式全称", "逐项解释全称中各词的含义，不扩展其他术语或机制" ]
         : [ "直接给出有来源支持的正式全称，不扩展未问的机制、用途或背景" ];

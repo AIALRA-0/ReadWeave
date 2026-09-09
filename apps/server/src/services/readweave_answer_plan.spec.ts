@@ -20,7 +20,8 @@ describe("ReadWeave answer plan", () => {
         expect(buildReadWeaveAnswerPlan(namingContract("XPT 的全称是什么？")).steps).toHaveLength(1);
     });
     it("retains broader steps when the user actually requests a mechanism", () => {
-        expect(buildReadWeaveAnswerPlan(namingContract("XPT 的全称是什么？它的运作原理是什么？")).answerType).toBe("definition");
+        const plan = buildReadWeaveAnswerPlan(namingContract("XPT 的全称是什么？它的运作原理是什么？"));
+        expect(plan.answerType).toBe("definition");
     });
     it("builds a compact definition flow from an unrelated software question", () => {
         const plan = buildReadWeaveAnswerPlan({

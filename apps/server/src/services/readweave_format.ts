@@ -3,27 +3,35 @@ import { Lexer } from "marked";
 export const READWEAVE_FORMAT_VERSION = "format-2026-09-v1";
 
 function normalizeSimpleMathNotation(value: string): string {
+    const scientific = new RegExp(
+        String.raw`(?<![\p{L}\p{N}$])(\d+(?:\.\d+)?)\s*[×x]\s*10\s*\^\s*`
+        + String.raw`([+-]?\d+)(?![\p{L}\p{N}])`, "gu"
+    );
+    const inequality = new RegExp(
+        String.raw`(?<![\p{L}\p{N}$])([A-Za-z])\s*(>=|<=|!=)\s*`
+        + String.raw`(-?\d+(?:\.\d+)?)(?![\p{L}\p{N}])`, "gu"
+    );
     return value
         .split(/(\$\$[\s\S]*?\$\$|\$(?!\$)[^$\n]+?\$)/u)
         .map((part, index) => {
             if (index % 2 === 1) return part;
             return part
                 .replace(
-                    /(?<![\p{L}\p{N}$])(\d+(?:\.\d+)?)\s*[×x]\s*10\s*\^\s*([+-]?\d+)(?![\p{L}\p{N}])/gu,
+                    scientific,
                     (_match, coefficient: string, exponent: string) =>
-                        `$${coefficient} \\times 10^{${exponent}}$`,
+                        `$${coefficient} \\times 10^{${exponent}}$`
                 )
                 .replace(
                     /(?<![\p{L}\p{N}$])10\s*\^\s*([+-]?\d+)(?![\p{L}\p{N}])/gu,
-                    (_match, exponent: string) => `$10^{${exponent}}$`,
+                    (_match, exponent: string) => `$10^{${exponent}}$`
                 )
                 .replace(
-                    /(?<![\p{L}\p{N}$])([A-Za-z])\s*(>=|<=|!=)\s*(-?\d+(?:\.\d+)?)(?![\p{L}\p{N}])/gu,
+                    inequality,
                     (_match, variable: string, operator: string, operand: string) => {
                         const latexOperator =
                             operator === ">=" ? "\\geq" : operator === "<=" ? "\\leq" : "\\neq";
                         return `$${variable} ${latexOperator} ${operand}$`;
-                    },
+                    }
                 );
         })
         .join("");
@@ -31,13 +39,17 @@ function normalizeSimpleMathNotation(value: string): string {
 
 // These are opaque data, not Chinese prose. Block code, tables and quotations
 // are handled by the Markdown lexer; this pattern protects inline data.
-const INLINE_DATA =
-    /(`+[^`\n]*`+|\$\$[\s\S]*?\$\$|\$(?!\$)[^$\n]+?\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]|!?\[[^\]\n]*\]\([^\n]*?\)|https?:\/\/[^\s<>，；。]+|(?:[A-Za-z]:[\\/]|(?:\.{0,2})\/)[^\s，；。]+|[“「『][^”」』\n]*[”」』])/gu;
+const INLINE_DATA = new RegExp([
+    "(`+[^`\\n]*`+|",
+    String.raw`\$\$[\s\S]*?\$\$|\$(?!\$)[^$\n]+?\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]|`,
+    String.raw`!?\[[^\]\n]*\]\([^\n]*?\)|https?:\/\/[^\s<>，；。]+|`,
+    String.raw`(?:[A-Za-z]:[\\/]|(?:\.{0,2})\/)[^\s，；。]+|[“「『][^”」』\n]*[”」』])`
+].join(""), "gu");
 
 export function mapReadWeaveProse(body: string, transform: (text: string) => string): string {
     return Lexer.lex(body)
         .map((token) => {
-            if (["code", "table", "blockquote", "html"].includes(token.type)) return token.raw;
+            if ([ "code", "table", "blockquote", "html" ].includes(token.type)) return token.raw;
             return token.raw
                 .split(INLINE_DATA)
                 .map((part, index) => (index % 2 ? part : transform(part)))
@@ -49,6 +61,7 @@ export function mapReadWeaveProse(body: string, transform: (text: string) => str
 /** Group only explicit, adjacent bilingual definitions, never infer a list from prose. */
 function groupBilingualDefinitions(body: string): string {
     const tokens = Lexer.lex(body);
+    const label = /^[\p{Script=Han}][\p{Script=Han} ]{0,49}（[A-Za-z][A-Za-z -]{0,99}）：/u;
     let group: number[] = [];
     const flush = () => {
         if (group.length >= 3) {
@@ -59,7 +72,7 @@ function groupBilingualDefinitions(body: string): string {
     for (let index = 0; index < tokens.length; index++) {
         const token = tokens[index];
         if (token.type === "space") continue;
-        if (token.type === "paragraph" && /^[\p{Script=Han}][\p{Script=Han} ]{0,49}（[A-Za-z][A-Za-z -]{0,99}）：/u.test(token.raw)) {
+        if (token.type === "paragraph" && label.test(token.raw)) {
             group.push(index);
         } else {
             flush();
@@ -72,10 +85,19 @@ function groupBilingualDefinitions(body: string): string {
 /** FMT-003/008: never rewrite code, URLs, quotations, tables or formulae. */
 export function formatReadWeaveMarkdown(value: unknown): string {
     if (typeof value !== "string") return "";
+    const fullName = new RegExp(
+        String.raw`\b([A-Z][A-Z0-9-]{1,15})\s*的(?:官方|完整|英文|中文)*全称(?:是|为)\s*`
+        + String.raw`([A-Za-z][A-Za-z -]{3,100})[（(]([\p{Script=Han}][\p{Script=Han}\s]{1,50})[)）]`,
+        "gu"
+    );
+    const englishFirst = new RegExp(
+        String.raw`^([ \t]*(?:[-*+] )?)([A-Za-z][A-Za-z -]{0,99})[（(]`
+        + String.raw`([\p{Script=Han}][\p{Script=Han} ]{0,49})[)）][：:]`, "gmu"
+    );
     return groupBilingualDefinitions(mapReadWeaveProse(value, (text) =>
         normalizeSimpleMathNotation(text)
-            .replace(/\b([A-Z][A-Z0-9-]{1,15})\s*的(?:官方|完整|英文|中文)*全称(?:是|为)\s*([A-Za-z][A-Za-z -]{3,100})[（(]([\p{Script=Han}][\p{Script=Han}\s]{1,50})[)）]/gu, "$1 $3（$2）")
-            .replace(/^([ \t]*(?:[-*+] )?)([A-Za-z][A-Za-z -]{0,99})[（(]([\p{Script=Han}][\p{Script=Han} ]{0,49})[)）][：:]/gmu, "$1$3（$2）：")
+            .replace(fullName, "$1 $3（$2）")
+            .replace(englishFirst, "$1$3（$2）：")
             .replace(/。(?=[ \t]*(?:\n|$))/gu, "")
             .replace(/。/gu, "；")
             .replace(/；(?=[ \t]*(?:\n|$))/gu, "")
@@ -88,17 +110,25 @@ export function formatReadWeaveMarkdown(value: unknown): string {
             .replace(/\n(?:[ \t]*\n){2,}/gu, "\n\n")
             .replace(/^[^\n]+$/gmu, line => {
                 const clauses = line.split("；").map(part => part.trim()).filter(Boolean);
-                const isMeaning = (part: string) => /^(?:其中\s*)?[A-Za-z][A-Za-z -]{0,40}\s*(?:指|表示|意为|是指)/u.test(part);
+                const meaningStart = /^(?:其中\s*)?[A-Za-z][A-Za-z -]{0,40}\s*(?:指|表示|意为|是指)/u;
+                const isMeaning = (part: string) => meaningStart.test(part);
                 let count = 0;
                 while (count < clauses.length && isMeaning(clauses[count])) count++;
                 if (count < 3) return line;
                 const list = clauses.slice(0, count).map(part => {
-                    const meaning = part.match(/^(?:其中\s*)?([A-Za-z][A-Za-z -]{0,40}?)\s*(?:指|表示|意为|是指)\s*([\p{Script=Han}]{1,12})(?:[，,](.*))?$/u);
+                    const pattern = new RegExp(
+                        String.raw`^(?:其中\s*)?([A-Za-z][A-Za-z -]{0,40}?)\s*(?:指|表示|意为|是指)\s*`
+                        + String.raw`([\p{Script=Han}]{1,12})(?:[，,](.*))?$`, "u"
+                    );
+                    const meaning = part.match(pattern);
+                    const explanation = meaning?.[3] ? `：${meaning[3].trim()}` : "";
                     return meaning
-                        ? `- ${meaning[2]}（${meaning[1].trim()}）${meaning[3] ? `：${meaning[3].trim()}` : ""}`
+                        ? `- ${meaning[2]}（${meaning[1].trim()}）${explanation}`
                         : `- ${part}`;
                 }).join("\n");
-                return list + (count < clauses.length ? `\n\n${clauses.slice(count).join("；")}` : "");
+                const remainder = count < clauses.length
+                    ? `\n\n${clauses.slice(count).join("；")}` : "";
+                return list + remainder;
             })
             .replace(
                 /^([^\n：（）()]{1,24}：)([^\n：；。]+、[^\n：；。]+、[^\n：；。]+)$/gmu,
@@ -107,7 +137,7 @@ export function formatReadWeaveMarkdown(value: unknown): string {
                         items
                             .split("、")
                             .map((item) => `  - ${item.trim()}`)
-                            .join("\n")}`,
+                            .join("\n")}`
             )
             .replace(
                 /^([^\n：]{1,24}(?:包括|包含|如下)：)\n([^\n]+(?:\n[^\n]+)+)$/gmu,
@@ -118,8 +148,8 @@ export function formatReadWeaveMarkdown(value: unknown): string {
                             rows
                                 .split("\n")
                                 .map((row) => `  - ${row.trim()}`)
-                                .join("\n")}`,
-            ),
+                                .join("\n")}`
+            )
     ).trim());
 }
 
@@ -132,7 +162,7 @@ export interface ReadWeaveTextPatch {
 
 /** A stale or overlapping patch batch is rejected atomically. */
 export function applyReadWeaveFormatPatches(body: string, patches: ReadWeaveTextPatch[]): string {
-    const ordered = [...patches].sort((a, b) => a.start - b.start);
+    const ordered = [ ...patches ].sort((a, b) => a.start - b.start);
     let end = 0;
     for (const patch of ordered) {
         if (
@@ -160,7 +190,7 @@ export function applyReadWeaveFormatPatches(body: string, patches: ReadWeaveText
                 value.slice(0, patch.start) +
                 patch.replacement +
                 value.slice(patch.start + patch.original.length),
-            body,
+            body
         );
 }
 
@@ -176,14 +206,14 @@ export function readWeaveFormatIssues(body: string): string[] {
             issues.add("FMT-013：中文与英文或数字之间缺少空格");
         return text;
     });
-    return [...issues];
+    return [ ...issues ];
 }
 
 /** Only submit a failing prose line, never the complete answer, for repair. */
 export async function repairReadWeaveFormat(
     original: string,
     repair: (fragment: string, issues: string[]) => Promise<string>,
-    signal?: AbortSignal,
+    signal?: AbortSignal
 ): Promise<{ body: string; rounds: number; warnings: string[] }> {
     let body = original;
     let rounds = 0;
@@ -205,7 +235,7 @@ export async function repairReadWeaveFormat(
             const replacement = await repair(fragment, readWeaveFormatIssues(fragment));
             signal?.throwIfAborted();
             const next = applyReadWeaveFormatPatches(body, [
-                { start, original: fragment, replacement, rule: "FMT-local" },
+                { start, original: fragment, replacement, rule: "FMT-local" }
             ]);
             if (next === body) break;
             body = next;
