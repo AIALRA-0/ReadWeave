@@ -2488,7 +2488,7 @@ function deterministicIssues(
         && !/(?:因为|原因|导致|使得|取决于|源于|因此|所以|由于)/u.test(body)) {
         issues.push("原因回答没有给出可核对的因果关系");
     }
-    if (/(?:区别|比较|差异|不同之处|分别)/u.test(contract.normalizedQuestion)) {
+    if (/(?:区别|比较|差异|不同之处)/u.test(contract.normalizedQuestion)) {
         const comparedSubjects = Array.from(contract.normalizedQuestion.matchAll(
             /[A-Za-z][A-Za-z0-9+._/-]{1,}|[\p{Script=Han}]{2,12}/gu
         ), match => match[0]).filter(subject => !/(?:区别|比较|差异|什么|核心|分别|之间|有什么)/u.test(subject));

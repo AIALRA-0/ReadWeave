@@ -936,7 +936,7 @@ describe("ReadWeave one-pass workflow", () => {
         }));
         installModel([], "XPT 的官方英文全称是 Example Packet Transfer（示例分组传输）。\n\nExample 指示例；Packet 指分组；Transfer 指传输");
         const result = await generateUnifiedReadWeaveAnswer({
-            ...request("XPT 的官方英文全称是什么？请解释这些词，不要猜测名称来历"),
+            ...request("XPT 的官方英文全称是什么？请解释这些词分别表示什么，不要猜测名称来历"),
             fragments:[{id:"selected",role:"selected",text:"XPT"}]
         });
         expect(result.body).toContain("XPT 示例分组传输（Example Packet Transfer）");
@@ -946,6 +946,7 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.usage).toMatchObject({modelCalls:1,budgetCny:.05,withinBudget:true});
         expect(searchMock).toHaveBeenCalledTimes(1);
         expect(result.qualityState).toBe("provisional");
+        expect(result.audit?.unresolvedIssues?.some(issue=>issue.includes("比较回答"))).toBe(false);
     });
     beforeEach(() => {
         searchMock.mockReset();
