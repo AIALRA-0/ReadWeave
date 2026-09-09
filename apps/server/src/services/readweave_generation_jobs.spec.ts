@@ -83,6 +83,22 @@ async function waitUntil(predicate: () => boolean) {
 }
 
 describe("ReadWeave persisted generation jobs", () => {
+    it("retains billed usage after failure without inventing a result", async () => {
+        const usage = { costBasis:"configured-rate-estimate",modelCalls:1,inputTokens:1000,
+            cacheHitInputTokens:0,cacheMissInputTokens:1000,outputTokens:100,totalTokens:1100,
+            costCny:.0012,targetCny:.01,budgetCny:.05,withinTarget:true,withinBudget:true };
+        generateMock.mockImplementation(async (_request, progress) => {
+            progress({ stage:"checking",round:1,message:"本题累计用量",issues:[],
+                usage,usagePending:false });
+            throw new NonRetryableReadWeaveError("没有可交付正文");
+        });
+        const job = startReadWeaveGenerationJob(request);
+        const failed = await waitForStatus(job.jobId, "paused");
+        expect(failed.result).toBeUndefined();
+        expect(getReadWeaveGenerationJob(job.jobId).progress.find(event => event.usage))
+            .toMatchObject({ usage,usagePending:false });
+        expect(generateMock).toHaveBeenCalledTimes(1);
+    });
     beforeAll(async () => {
         sqlInit.initializeDb();
         await sqlInit.dbReady;

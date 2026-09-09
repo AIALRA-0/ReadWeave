@@ -10,6 +10,7 @@ import {
     readWeaveMissingNamingFacts,
     readWeaveNamingRequirements,
     readWeaveNamingSourceGuidance,
+    readWeaveWritingEvidence,
     researchReadWeaveEvidence,
 } from "./readweave_research.js";
 const contract = {
@@ -112,6 +113,12 @@ describe("bounded targeted research", () => {
             { ...source,sourceId:"S2",url:"https://lumen.org/about",originalRank:3 }
         ];
         const guide = readWeaveNamingSourceGuidance(sources as never, "Lumen 从何得名？");
+        expect(readWeaveWritingEvidence(sources as never, "Lumen 从何得名？"))
+            .toEqual([ sources[1] ]);
+        expect(readWeaveWritingEvidence(sources as never, "怎样使用 Lumen？"))
+            .toEqual(sources);
+        expect(readWeaveWritingEvidence([ sources[0] ] as never, "Lumen 从何得名？"))
+            .toEqual([ sources[0] ]);
         expect(guide).toContain("首读原文：[S2]");
         expect(guide).toContain("若发现矛盾，分别归因");
         expect(readWeaveNamingSourceGuidance(sources as never, "怎样使用 Lumen？")).toBe("");

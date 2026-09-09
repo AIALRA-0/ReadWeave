@@ -1,4 +1,4 @@
-import type { ReadWeaveGenerateRequest } from "@triliumnext/commons";
+import type { ReadWeaveGenerateRequest, ReadWeaveGenerationProgress } from "@triliumnext/commons";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { searchMock, defaultSearchImplementation, verifierConfig } = vi.hoisted(() => {
@@ -928,6 +928,29 @@ describe.skip("ReadWeave retired multi-stage workflow", () => {
 });
 
 describe("ReadWeave one-pass workflow", () => {
+    it.each([ "empty", "malformed", "transport" ])(
+        "retains attempt costs when generation fails: %s", async mode => {
+            const progress: ReadWeaveGenerationProgress[] = [];
+            const fetch = vi.fn(async () => {
+                if (mode === "transport") throw new Error("connection reset");
+                return Response.json({ model:"deepseek-v4-flash",
+                    choices:[ { message:{
+                        content:mode === "empty" ? '{"body":""}' : "not json" } } ],
+                    usage:{ prompt_tokens:1000,completion_tokens:100,total_tokens:1100 } });
+            });
+            vi.stubGlobal("fetch", fetch);
+            await expect(generateUnifiedReadWeaveAnswer({ ...request("这是什么意思？"),
+                activeExternalSearch:false,autoExternalSearch:false
+            }, event => progress.push(event))).rejects.toThrow();
+            const last = progress.filter(event => event.usage).at(-1)!;
+            expect(fetch).toHaveBeenCalledTimes(1);
+            expect(last.usage?.modelCalls).toBe(1);
+            expect(last.usage?.costCny).toBeGreaterThan(0);
+            expect(last.usagePending).toBe(mode === "transport");
+            expect(last.usage?.inputTokens).toBe(mode === "transport" ? 0 : 1000);
+            expect(last.usage?.outputTokens).toBe(mode === "transport" ? 0 : 100);
+        }
+    );
     it("repairs an unsupported naming qualifier within the original task budget", async () => {
         const original = "Lumen 于 1987 年得名于光通量单位。";
         const replacement = "Lumen 得名于光通量单位。";

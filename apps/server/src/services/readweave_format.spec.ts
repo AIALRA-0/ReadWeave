@@ -4,10 +4,36 @@ import {
     applyReadWeaveFormatPatches,
     formatReadWeaveFullNameOpening,
     formatReadWeaveMarkdown,
-    repairReadWeaveFormat
+    repairReadWeaveFormat,
+    repairReadWeaveOptionalQualifiers
 } from "./readweave_format.js";
 
 describe("versioned formatting contract", () => {
+    it("only omits an approved unrequested qualifier, never rewrites prose", async () => {
+        const body = "Lumen 得名于 ABC 喜剧《Light Story》，其余 12 个字不改";
+        const approve = vi.fn(async () => [ { token:"ABC",omit:true,reason:"只是额外的来源机构标签",
+            replacement:"模型企图返回新正文" } ]);
+        const result = await repairReadWeaveOptionalQualifiers(body, "Lumen 从何得名？", approve);
+        expect(result.body).toBe(body.replace("ABC ", ""));
+        expect(approve).toHaveBeenCalledTimes(1);
+        expect(result.rounds).toBe(1);
+        expect(result.body).toContain("12");
+    });
+    it.each([
+        "ABC 和另一对象", "ABC 是核心对象", "“ABC 来源机构”", "《ABC 喜剧》",
+        "`ABC 来源机构`", "ABC 示例机构（Example Institution）", "ABC 标签及 ABC 标签"
+    ])("never submits protected or ambiguous qualifiers: %s", async body => {
+        const approve = vi.fn();
+        expect((await repairReadWeaveOptionalQualifiers(body, "来源？", approve)).body).toBe(body);
+        expect(approve).not.toHaveBeenCalled();
+    });
+    it("preserves requested qualifiers and rejected proposals", async () => {
+        const body = "ABC 来源机构";
+        const approve = vi.fn(async () => [ { token:"ABC",omit:false,reason:"不能删除主体" } ]);
+        expect((await repairReadWeaveOptionalQualifiers(body, "ABC 是谁？", approve)).rounds).toBe(0);
+        expect(approve).not.toHaveBeenCalled();
+        expect((await repairReadWeaveOptionalQualifiers(body, "来源？", approve)).body).toBe(body);
+    });
     it("renders a sourced English full-name answer with its separate Chinese identity", () => {
         const input = "XPT 的官方英文全称是 Example Packet Transfer";
         const expected = "XPT 示例分组传输（Example Packet Transfer）";

@@ -223,6 +223,54 @@ export function readWeaveFormatIssues(body: string): string[] {
     return [ ...issues ];
 }
 
+/** Only a redundant, unrequested qualifier can be omitted. The model cannot
+ * add an expansion or return rewritten prose through this interface. */
+export async function repairReadWeaveOptionalQualifiers(
+    original: string, question: string,
+    approve: (targets: Array<{ token: string; before: string; after: string }>) => Promise<unknown>,
+    signal?: AbortSignal
+) {
+    const targets: Array<{ token: string; start: number; before: string; after: string }> = [];
+    mapReadWeaveProse(original, prose => {
+        for (const match of prose.matchAll(/\b([A-Z]{2,8})\b[ \t]*(?=[\p{Script=Han}]{2})/gu)) {
+            const token = match[1];
+            const start = original.indexOf(token);
+            const prefix = original.slice(0, start);
+            const after = original.slice(start + token.length, start + token.length + 100);
+            if (question.includes(token) || start !== original.lastIndexOf(token)
+                || prefix.lastIndexOf("《") > prefix.lastIndexOf("》")
+                || /^\s*[和与及或的是为不无]/u.test(after)
+                || /^\s*[\p{Script=Han}]{2,40}（[A-Za-z]/u.test(after)) continue;
+            targets.push({ token, start,
+                before:original.slice(Math.max(0, start - 100), start), after });
+        }
+        return prose;
+    });
+    if (!targets.length) return { body:original, rounds:0, warnings:[] as string[] };
+    signal?.throwIfAborted();
+    try {
+        const chosen = targets.slice(0, 2);
+        const result = await approve(chosen.map(({ token, before, after }) =>
+            ({ token, before, after })));
+        signal?.throwIfAborted();
+        if (!Array.isArray(result)) throw new Error("局部简称检查未返回有效决定");
+        let body = original;
+        for (const target of chosen.toSorted((a, b) => b.start - a.start)) {
+            const decision = result.filter(item => item?.token === target.token);
+            if (decision.length !== 1 || decision[0].omit !== true
+                || typeof decision[0].reason !== "string" || decision[0].reason.trim().length < 4)
+                continue;
+            body = body.slice(0, target.start) + body.slice(target.start + target.token.length)
+                .replace(/^[ \t]+/u, "");
+        }
+        return { body, rounds:1, warnings:[] as string[] };
+    } catch (error) {
+        signal?.throwIfAborted();
+        return { body:original, rounds:1,
+            warnings:[ error instanceof Error ? error.message : "局部简称检查未应用" ] };
+    }
+}
+
 /** Only submit a failing prose line, never the complete answer, for repair. */
 export async function repairReadWeaveFormat(
     original: string,

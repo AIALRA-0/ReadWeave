@@ -218,9 +218,13 @@ export async function repairReadWeaveNamingEvidence(
                     .replace(/[。；;！？!?]+$/u, "");
                 if (checked.issues.length || !checked.supported.some(entry =>
                     normalizeReadWeaveEvidenceText(entry.bodyText ?? "")
-                        .replace(/[。；;！？!?]+$/u, "") === full))
-                    throw new Error(`局部证据修复未通过：${checked.diagnostics.join("；")
+                        .replace(/[。；;！？!?]+$/u, "") === full)) {
+                    warnings.push(`局部证据修复未通过：${checked.diagnostics.join("；")
                         || "未绑定完整原句和直接依据"}`);
+                    // An unsupported optional sentence must not discard an
+                    // independently valid core-sentence patch in this batch.
+                    continue;
+                }
                 seen.add(patch.original);
                 accepted.push({ ...patch, evidence: checked.supported });
             }

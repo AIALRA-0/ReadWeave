@@ -309,6 +309,9 @@ export interface ReadWeaveGenerationProgress {
     unchangedSegmentsVerified?: boolean;
     normalizedQuestion?: string;
     answerPlanSummary?: string;
+    /** Cumulative estimate for this attempt, retained even when no answer survives. */
+    usage?: ReadWeaveUsageSummary;
+    usagePending?: boolean;
 }
 
 export interface ReadWeaveGenerationJob {

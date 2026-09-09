@@ -888,12 +888,10 @@ test("ReadWeave confirms a pending selection from the right panel and enables ge
     await expect.poll(() => reloadedAnchor.evaluate(element =>
         element.classList.contains("readweave-anchor-status-running") || element.classList.contains("readweave-anchor-status-unread")
     )).toBe(true);
-    const reloadedAnchorBox = await reloadedAnchor.boundingBox();
-    expect(reloadedAnchorBox).not.toBeNull();
-    await page.mouse.click(
-        reloadedAnchorBox!.x + reloadedAnchorBox!.width / 2,
-        reloadedAnchorBox!.y + reloadedAnchorBox!.height / 2
-    );
+    // Reload recovery can finish decorating between reading a bounding box
+    // and dispatching a raw coordinate click. Let Playwright wait for the
+    // actual anchor to be stable and in view; keep all restoration assertions.
+    await reloadedAnchor.click();
     const restoredPanel = app.sidebar.locator("#readweave-panel");
     const generationMonitor = restoredPanel.getByTestId("readweave-generation-monitor");
     const runningState = generationMonitor.locator(".readweave-generation-state");

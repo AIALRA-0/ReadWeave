@@ -40,10 +40,12 @@ import {
     formatReadWeaveMarkdown,
     READWEAVE_FORMAT_VERSION,
     readWeaveFormatIssues,
+    repairReadWeaveOptionalQualifiers,
     repairReadWeaveFormat
 } from "./readweave_format.js";
 import {
-    readWeaveNamingRequirements, readWeaveNamingSourceGuidance, researchReadWeaveEvidence
+    readWeaveNamingRequirements, readWeaveNamingSourceGuidance, readWeaveWritingEvidence,
+    researchReadWeaveEvidence
 } from "./readweave_research.js";
 import {
     getReadWeaveRuntimeConfig,
@@ -213,7 +215,8 @@ async function requestJson<T>(
     runtimeConfig?: ReadWeaveModelRuntimeConfig,
     signal?: AbortSignal,
     stage = "回答生成",
-    budget?: ReadWeaveBudget
+    budget?: ReadWeaveBudget,
+    onUsage?: (usage?: CompletionUsage) => void
 ): Promise<ModelCallResult<T>> {
     const config = runtimeConfig ?? getReadWeaveRuntimeConfig();
     const providerHost = new URL(config.baseUrl).hostname;
@@ -231,8 +234,10 @@ async function requestJson<T>(
     // silently run the same generation stage a second time.
     const maximumAttempts = 1;
     for (let attempt = 0; attempt < maximumAttempts; attempt++) {
+        let reportedUsage: CompletionUsage | undefined;
         try {
             budget?.beginModelRequest(reservation);
+            onUsage?.();
             const response = await fetch(endpoint(config.baseUrl), {
                 method: "POST",
                 headers: {
@@ -256,11 +261,12 @@ async function requestJson<T>(
                 signal: signal ? AbortSignal.any([ signal, AbortSignal.timeout(effectiveTimeoutMs) ]) : AbortSignal.timeout(effectiveTimeoutMs)
             });
             const payload = await response.json() as CompletionResponse;
+            reportedUsage = payload.usage;
+            if (reportedUsage) budget?.reportModelUsage(reservation);
             if (!response.ok) throw new Error(`模型服务返回 HTTP ${response.status}：${payload.error?.message || "未知错误"}`);
             const content = payload.choices?.[0]?.message?.content?.trim();
             if (!content) throw new Error("模型返回了空结果");
             const value = parseJson<T>(content);
-            if (payload.usage) budget?.reportModelUsage(reservation);
             return {
                 value,
                 model: payload.model || config.model,
@@ -286,6 +292,8 @@ async function requestJson<T>(
                     }, { once: true });
                 });
             }
+        } finally {
+            onUsage?.(reportedUsage);
         }
     }
     throw safeModelFailure(lastError, config, stage);
@@ -2719,7 +2727,8 @@ export async function generateUnifiedReadWeaveAnswer(
         stage: ReadWeaveGenerationProgress["stage"],
         message: string,
         issues: string[] = [],
-        metadata?: Pick<ReadWeaveGenerationProgress, "normalizedQuestion" | "answerPlanSummary">
+        metadata?: Pick<ReadWeaveGenerationProgress,
+            "normalizedQuestion" | "answerPlanSummary" | "usage" | "usagePending">
     ) => {
         onProgress?.({ stage, round: ++round, message, issues, ...metadata });
     };
@@ -2876,6 +2885,18 @@ export async function generateUnifiedReadWeaveAnswer(
         }
     }
     const sources = [ ...localSources, ...external.sources ].map(enrichReadWeaveEvidenceSource);
+    const writingSources = readWeaveWritingEvidence(
+        sources, contract.normalizedQuestion, selectedFragment
+    );
+    const recordUsage = (usage?: CompletionUsage) => {
+        if (usage) usages.push(usage);
+        const summary = usageSummary(usages,
+            external.searchCostCny + budget.unreportedModelCostCny, budgetCny);
+        summary.modelCalls = budget.modelRequests;
+        report("checking", "已记录本题累计用量", [], {
+            usage:summary, usagePending:budget.unreportedModelCostCny > 0
+        });
+    };
     const completedExternalSearchDecision: ReadWeaveExternalSearchDecision = {
         ...externalSearchDecision,
         queries: shouldGatherExternal ? external.queries : [],
@@ -2893,8 +2914,9 @@ export async function generateUnifiedReadWeaveAnswer(
         : `已准备 ${localSources.length} 个文章片段，未取得外部来源`);
 
     report("drafting", "正在按问题契约和证据清单生成回答");
-    const writer = await requestJson<WriterPayload>(writerSystemPrompt(harness, domainProfile), writerInput(contract, sources, request, undefined, answerPlanForWriter), 2_200, 15_000, undefined, signal, "回答生成", budget);
-    usages.push(writer.usage);
+    const writer = await requestJson<WriterPayload>(writerSystemPrompt(harness, domainProfile),
+        writerInput(contract, writingSources, request, undefined, answerPlanForWriter),
+        2_200, 15_000, undefined, signal, "回答生成", budget, recordUsage);
     let body = typeof writer.value.body === "string" ? writer.value.body.trim() : "";
     const sourceIds = new Set(sources.map(source => source.sourceId));
     let claims = normalizeClaims(writer.value.claims, sourceIds)
@@ -2923,11 +2945,10 @@ export async function generateUnifiedReadWeaveAnswer(
                 "返回 JSON patches 数组，每项含 original（指定原句）、replacement（修复句）和 namingEvidence；无法修复则返回空数组",
                 "namingEvidence 是数组，每项含 bodyText（完整 replacement）、sourceId、quote"
             ].join("\n"), JSON.stringify({ fragments, diagnostics,
-                evidence: sources.map(source => ({
+                evidence: writingSources.map(source => ({
                 sourceId: source.sourceId, title: source.title,
                 url: source.url, excerpt: source.excerpt
-            })) }), 1200, 15000, undefined, signal, "局部证据修改", budget);
-            usages.push(result.usage);
+                })) }), 1200, 15000, undefined, signal, "局部证据修改", budget, recordUsage);
             return result.value.patches;
         }, signal
     );
@@ -2966,18 +2987,30 @@ export async function generateUnifiedReadWeaveAnswer(
     body = formatReadWeaveBody(body);
     let unresolvedClaims = stringList(writer.value.unresolvedClaims, 12, 500);
     let issues: string[] = [];
+    const qualifierRepair = namingRequirements.includes("origin") && budget.modelRequests < 3
+        ? await repairReadWeaveOptionalQualifiers(body, originalQuestion, async targets => {
+            if (budget.remainingCny < 0.005) throw new Error("余量不足，未追加局部简称检查");
+            const result = await requestJson<{ decisions: unknown }>(
+                "仅判断给定简称是不是可省略的来源机构或修饰标签。只在删除简称后不影响问题的核心关系、"
+                + "主体、否定和句子语法时允许 omit=true；作为句子主语、并列对象、核心术语必须保留。"
+                + "不展开简称、不写替换正文。返回 JSON decisions 数组，每项 token、omit、reason",
+                JSON.stringify({ question:originalQuestion, targets }), 350, 15000, undefined,
+                signal, "局部简称检查", budget, recordUsage);
+            return result.value.decisions;
+        }, signal) : { body, rounds:0, warnings:[] as string[] };
+    body = qualifierRepair.body;
     const repaired = await repairReadWeaveFormat(body, async (fragment, failures) => {
         if (budget.modelRequests >= 3) throw new Error("本题局部修改次数已达上限");
         if (budget.remainingCny < 0.005) throw new Error("剩余额度保留给已生成答案，未追加格式调用");
         report("checking", "仅修正命中的格式片段，不重写整篇");
         const result = await requestJson<{ replacement: string }>(
             "只修复给定片段的排版和标点，逐字保留术语、数值、否定、条件、代码与网址，不添加、删除或调换事实。输出 JSON replacement 字段，不输出整篇答案",
-            JSON.stringify({ fragment, failures }), 900, 15_000, undefined, signal, "局部格式修改", budget);
-        usages.push(result.usage);
+            JSON.stringify({ fragment, failures }), 900, 15_000, undefined, signal,
+            "局部格式修改", budget, recordUsage);
         return result.value.replacement;
     }, signal, Math.max(0, 3 - budget.modelRequests));
     body = repaired.body;
-    const repairRounds = namingRepair.rounds + repaired.rounds;
+    const repairRounds = namingRepair.rounds + qualifierRepair.rounds + repaired.rounds;
     const independentVerification = "not-run" as const;
     const verificationStateIssues: string[] = [];
 
@@ -2989,6 +3022,7 @@ export async function generateUnifiedReadWeaveAnswer(
     issues = Array.from(new Set([
         ...readWeaveFormatIssues(body),
         ...repaired.warnings,
+        ...qualifierRepair.warnings,
         ...namingRepair.warnings,
         ...namingCheck.issues.map(text => `命名缺少直接依据，未交付该片段：${text}`),
         ...deterministicIssues(body, claims, sourceIds, sources, contract, request.kind, request, termIdentity, verifiedNonExpandableArtifact),

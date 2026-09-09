@@ -61,6 +61,21 @@ export function readWeaveNamingSourceGuidance(
         + "不要附带无关年份、机构简称、设备简称或履历。此阅读顺序不是独立事实核验结论";
 }
 
+/** For a narrow naming question, don't make a complete subject-site passage
+ * compete with eight generic snippets. Keep the search catalogue separately. */
+export function readWeaveWritingEvidence(
+    sources: ReadWeaveEvidenceSource[], question: string, selected?: string
+): ReadWeaveEvidenceSource[] {
+    const requirements = readWeaveNamingRequirements(question, false);
+    if (!requirements.length) return sources;
+    const subject = readWeaveResearchSubject(question, selected);
+    const preferred = sources.filter(source => source.sourceType === "external"
+        && source.retrievalMode === "page-reader" && namingReadingPriority(source, subject) > 0
+        && !readWeaveMissingNamingFacts([ source ], subject, requirements).length);
+    if (!preferred.length) return sources;
+    return sources.filter(source => source.sourceType === "local" || preferred.includes(source));
+}
+
 export function readWeaveNamingRequirements(question: string, fallback = true): Array<"expansion" | "origin"> {
     const requested = question.split(/[，,；;。！？?\n]/u)
         .filter(clause => !/^\s*(?:请)?(?:不要|不用|无需|不必|禁止|不得|请勿|别|不(?:介绍|展开|讨论|解释|涉及|包含|添加))/u

@@ -198,6 +198,21 @@ describe("naming provenance, not a semantic truth certificate", () => {
         )).rejects.toThrow();
         expect(repair).not.toHaveBeenCalled();
     });
+    it("keeps a valid core patch when an optional patch lacks evidence", async () => {
+        const first = "Lumen 于 1987 年得名于光通量单位。";
+        const second = "Lumen 的名称来源于 Invented 在 1988 年提出的故事。";
+        const replacement = "Lumen 得名于光通量单位。";
+        const repair = vi.fn(async () => [
+            { original:first,replacement,
+                namingEvidence:[ { bodyText:replacement,sourceId:"S1",quote } ] },
+            { original:second,replacement:second,
+                namingEvidence:[ { bodyText:second,sourceId:"S1",quote } ] }
+        ]);
+        const result = await repairReadWeaveNamingEvidence(first + second, [], [ source ], repair);
+        expect(result.body).toBe(replacement + second);
+        expect(result.check.issues).toEqual([ second ]);
+        expect(result.warnings).toHaveLength(1);
+    });
     it("allows terminal punctuation differences in a complete repaired sentence", async () => {
         const original = "Lumen 于 1987 年得名于光通量单位。";
         const replacement = "Lumen 得名于光通量单位。";
