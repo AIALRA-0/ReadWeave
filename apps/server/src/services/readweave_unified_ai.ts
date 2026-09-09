@@ -2992,7 +2992,7 @@ export async function generateUnifiedReadWeaveAnswer(
     if (baseWriter.reservation > budgetCny && baseWriter.reservation <= 0.10) {
         budgetCny = 0.10;
         budget = new ReadWeaveBudget(budgetCny);
-        report("gathering-context", "输入较长，按困难问题安排费用，先保留完整回答空间");
+        report("gathering-context", "按当前输入和模型价格使用较高费用上限，先保留完整回答空间");
     }
     if (baseWriter.reservation > budgetCny) throw taskBudgetError("开始前的配置检查", budget, baseWriter.reservation);
     // Keep space for both the answer and one useful external passage before searching.
@@ -3250,10 +3250,10 @@ export async function generateUnifiedReadWeaveAnswer(
         deliveryStateIssues.push(`本次费用 ¥${usage.costCny} 达到 ¥${usage.budgetCny} 上限`);
     }
     const internalIssues = Array.from(new Set([ ...issues, ...verificationStateIssues, ...deliveryStateIssues ]));
-    // The single local check is visible in the audit record only. A complete
-    // answer is deliverable without an independent verifier or an automatic
-    // rewrite; only the hard budget can prevent delivery.
-    const unresolvedIssues = deliveryStateIssues;
+    // Enforce reservations before paid work, not by withholding a completed answer.
+    // Unexpected provider metering stays visible in usage/audit and prevents further
+    // calls through the ledger; hiding the answer cannot undo an already billed call.
+    const unresolvedIssues: string[] = [];
     const evidenceState = internalIssues.some(issue => /冲突/u.test(issue))
         ? "conflicted" as const
         : citedSources.some(source => source.sourceType === "external")

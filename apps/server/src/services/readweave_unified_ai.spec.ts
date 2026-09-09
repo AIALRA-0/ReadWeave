@@ -1387,6 +1387,19 @@ describe("third-party provider and prepaid answer delivery", () => {
         expect(result.audit?.validationIssues?.join(" ")).not.toMatch(/预算|余量|额度/);
         expect(fetch).toHaveBeenCalledTimes(1);
     });
+    it("reports unexpected provider metering without withholding an already paid answer", async () => {
+        runtimeConfig.current.rates = { cacheHitInput:0, cacheMissInput:0, output:9 };
+        vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+            choices:[ { message:{ content:JSON.stringify({ body:"保留完整回答", claims:[] }) } } ],
+            usage:{ prompt_tokens:100, completion_tokens:6000 }
+        })));
+        const result = await generateUnifiedReadWeaveAnswer(request("这是什么？"));
+        expect(result.body).toBe("保留完整回答");
+        expect(result.usage?.withinBudget).toBe(false);
+        expect(result.audit.unresolvedIssues?.join(" ")).toContain("费用");
+        expect(result.unresolvedIssues).toEqual([]);
+        expect(fetch).toHaveBeenCalledTimes(1);
+    });
 });
 
 describe("ReadWeave natural paragraph formatting", () => {
