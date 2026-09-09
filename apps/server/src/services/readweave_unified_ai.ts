@@ -22,7 +22,9 @@ import type {
 import { ValidationError } from "@triliumnext/core";
 
 import { buildReadWeaveAnswerPlan } from "./readweave_answer_plan.js";
-import { ReadWeaveBudget, readWeaveModelReservation } from "./readweave_budget.js";
+import {
+    ReadWeaveBudget, readWeaveModelReservation, readWeaveModelUsageCost
+} from "./readweave_budget.js";
 import {
     buildReadWeaveDomainProfile,
     buildReadWeaveEvidencePackSummary,
@@ -227,7 +229,8 @@ async function requestJson<T>(
     const effectiveTimeoutMs = isKimiCode ? Math.max(timeoutMs, 30_000) : timeoutMs;
     const reservation = readWeaveModelReservation(system, user, effectiveMaxTokens);
     if (budget && !budget.reserve(reservation)) {
-        throw new NonRetryableReadWeaveError("本次查证与写作已达到费用上限，未继续调用模型");
+        throw new NonRetryableReadWeaveError("剩余预算不足以预留本次调用，未发起请求：需要约 ¥"
+            + reservation.toFixed(4) + "，剩余 ¥" + budget.remainingCny.toFixed(4));
     }
     let lastError: unknown;
     // One model stage means one provider request. The background job owns the
@@ -237,7 +240,7 @@ async function requestJson<T>(
     for (let attempt = 0; attempt < maximumAttempts; attempt++) {
         let reportedUsage: CompletionUsage | undefined;
         try {
-            budget?.beginModelRequest(reservation);
+            const receipt = budget?.beginModelRequest(reservation);
             onUsage?.();
             const response = await fetch(endpoint(config.baseUrl), {
                 method: "POST",
@@ -262,8 +265,10 @@ async function requestJson<T>(
                 signal: signal ? AbortSignal.any([ signal, AbortSignal.timeout(effectiveTimeoutMs) ]) : AbortSignal.timeout(effectiveTimeoutMs)
             });
             const payload = await response.json() as CompletionResponse;
-            reportedUsage = payload.usage;
-            if (reportedUsage) budget?.reportModelUsage(reservation);
+            const actualCost = readWeaveModelUsageCost(payload.usage);
+            reportedUsage = actualCost === undefined ? undefined : payload.usage;
+            if (receipt !== undefined && actualCost !== undefined)
+                budget?.reportModelUsage(receipt, actualCost);
             if (!response.ok) throw new Error(`模型服务返回 HTTP ${response.status}：${payload.error?.message || "未知错误"}`);
             const content = payload.choices?.[0]?.message?.content?.trim();
             if (!content) throw new Error("模型返回了空结果");
@@ -2573,7 +2578,7 @@ function usageSummary(usages: CompletionUsage[], searchCostCny: number, budgetCn
     const cacheHitInputTokens = usages.reduce((sum, usage) => sum + (usage.prompt_cache_hit_tokens ?? 0), 0);
     const cacheMissInputTokens = usages.reduce((sum, usage) => sum + (usage.prompt_cache_miss_tokens ?? Math.max(0, (usage.prompt_tokens ?? 0) - (usage.prompt_cache_hit_tokens ?? 0))), 0);
     const outputTokens = usages.reduce((sum, usage) => sum + (usage.completion_tokens ?? 0), 0);
-    const modelCost = (cacheHitInputTokens * 0.02 + cacheMissInputTokens * 1 + outputTokens * 2) / 1_000_000;
+    const modelCost = usages.reduce((sum, usage) => sum + (readWeaveModelUsageCost(usage) ?? 0), 0);
     const costCny = Number((modelCost + searchCostCny).toFixed(6));
     const targetCny = budgetCny > COST_BUDGET_CNY ? COST_BUDGET_CNY : ROUTINE_COST_TARGET_CNY;
     return {

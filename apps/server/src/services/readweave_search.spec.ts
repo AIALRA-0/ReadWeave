@@ -12,6 +12,11 @@ import { updateReadWeaveAiSettings } from "./readweave_settings.js";
 import sqlInit from "./sql_init.js";
 
 describe("ReadWeave free-source search", () => {
+    it("preserves prepared English full-name queries as well as origin queries", () => {
+        for (const query of [ '"XPT" full name official documentation',
+            '"Lumen" origin of name', "site:example.com XPT specification" ])
+            expect(buildFocusedGeneralSearchQuery(query)).toBe(query);
+    });
     beforeAll(async () => {
         sqlInit.initializeDb();
         await sqlInit.dbReady;

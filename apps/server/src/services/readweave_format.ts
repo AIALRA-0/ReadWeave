@@ -330,8 +330,9 @@ export async function repairReadWeaveConventionalTerms(
             .map((word:string)=>word[0]).join("").toUpperCase();
         if (initials !== target.token) continue;
         const annotation = `${target.token} ${term.chineseName}（${term.englishName}）`;
-        body = body.slice(0,target.start) + annotation
-            + body.slice(target.start+target.token.length);
+        const after = body.slice(target.start+target.token.length)
+            .replace(/^[ \t]+(?=\p{Script=Han})/u, "");
+        body = body.slice(0,target.start) + annotation + after;
         knowledgeTerms.push(target.token);
     }
     return { body,rounds:1,knowledgeTerms };

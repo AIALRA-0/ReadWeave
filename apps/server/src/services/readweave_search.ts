@@ -965,9 +965,9 @@ export function buildFocusedGeneralSearchQuery(query: string): string {
     if (!normalized) return "";
     // The research layer already prepared this precise query. Selecting its
     // longest English phrase as a new anchor drops the quoted subject and then
-    // duplicates the intent. Do not rewrite provider-ready naming queries.
-    if (!/\p{Script=Han}/u.test(normalized)
-        && /origin of (?:the )?name|name origin|named after|etymology/iu.test(normalized))
+    // duplicates the intent. Keep prepared English queries; person queries
+    // retain their existing disambiguation path below.
+    if (!/\p{Script=Han}/u.test(normalized) && !isPersonProfileQuery(normalized))
         return normalized;
 
     const years = Array.from(normalized.matchAll(/\b(20[0-3]\d)\b/gu), match => match[1]);

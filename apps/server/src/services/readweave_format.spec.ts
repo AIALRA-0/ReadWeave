@@ -17,7 +17,7 @@ describe("versioned formatting contract", () => {
             confidence:"high",basis:"established-usage",contextReason:"当前上下文指这种通行连接",
             replacement:"禁止替换整篇" } ]);
         const result = await repairReadWeaveConventionalTerms(body,"名称来历是什么？",resolve);
-        expect(result.body).toBe(body.replace("ABC","ABC 示例连接（Alpha Beta Connection）"));
+        expect(result.body).toBe(body.replace("ABC ","ABC 示例连接（Alpha Beta Connection）"));
         expect(result.knowledgeTerms).toEqual([ "ABC" ]);
         expect(resolve).toHaveBeenCalledTimes(1);
     });
