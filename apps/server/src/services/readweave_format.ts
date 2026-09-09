@@ -160,6 +160,20 @@ export interface ReadWeaveTextPatch {
     rule: string;
 }
 
+/** Render an already-sourced full name using the writer's separate Chinese
+ * identity, without changing names or expanding the answer into a definition. */
+export function formatReadWeaveFullNameOpening(body: string, chineseName?: string): string {
+    if (!chineseName || !/^[\p{Script=Han}][\p{Script=Han} ]{1,49}$/u.test(chineseName))
+        return body;
+    const opening = body.split(/\n{2,}/u)[0];
+    const match = opening.match(new RegExp(
+        "^([A-Z][A-Z0-9-]{1,15})\\s*的(?:官方|正式|完整|英文|中文)*全称(?:是|为)\\s*"
+        + "([A-Za-z][A-Za-z &/-]{2,199}?)[。；;]?$", "u"
+    ));
+    if (!match) return body;
+    return `${match[1]} ${chineseName}（${match[2].trim()}）${body.slice(opening.length)}`;
+}
+
 /** A stale or overlapping patch batch is rejected atomically. */
 export function applyReadWeaveFormatPatches(body: string, patches: ReadWeaveTextPatch[]): string {
     const ordered = [ ...patches ].sort((a, b) => a.start - b.start);

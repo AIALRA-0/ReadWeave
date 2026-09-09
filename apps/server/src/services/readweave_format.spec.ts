@@ -2,11 +2,21 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
     applyReadWeaveFormatPatches,
+    formatReadWeaveFullNameOpening,
     formatReadWeaveMarkdown,
     repairReadWeaveFormat
 } from "./readweave_format.js";
 
 describe("versioned formatting contract", () => {
+    it("renders a sourced English full-name answer with its separate Chinese identity", () => {
+        const input = "XPT 的官方英文全称是 Example Packet Transfer";
+        const expected = "XPT 示例分组传输（Example Packet Transfer）";
+        expect(formatReadWeaveFullNameOpening(input, "示例分组传输")).toBe(expected);
+        expect(formatReadWeaveFullNameOpening(expected, "示例分组传输")).toBe(expected);
+        expect(formatReadWeaveFullNameOpening(input)).toBe(input);
+        const paragraph = `${input}，还有另外的解释`;
+        expect(formatReadWeaveFullNameOpening(paragraph, "示例分组传输")).toBe(paragraph);
+    });
     it("normalizes a supplied bilingual name without inventing either name", () => {
         expect(formatReadWeaveMarkdown("XPT 的官方英文全称是 Example Packet Transfer（示例分组传输）。"))
             .toBe("XPT 示例分组传输（Example Packet Transfer）");

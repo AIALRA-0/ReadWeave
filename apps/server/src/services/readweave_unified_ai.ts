@@ -35,7 +35,13 @@ import {
     omitUnsupportedReadWeaveNaming,
     repairReadWeaveNamingEvidence
 } from "./readweave_evidence_quality.js";
-import { formatReadWeaveMarkdown, READWEAVE_FORMAT_VERSION,readWeaveFormatIssues, repairReadWeaveFormat } from "./readweave_format.js";
+import {
+    formatReadWeaveFullNameOpening,
+    formatReadWeaveMarkdown,
+    READWEAVE_FORMAT_VERSION,
+    readWeaveFormatIssues,
+    repairReadWeaveFormat
+} from "./readweave_format.js";
 import { readWeaveNamingRequirements, researchReadWeaveEvidence } from "./readweave_research.js";
 import {
     getReadWeaveRuntimeConfig,
@@ -702,6 +708,8 @@ function writerSystemPrompt(harness?: ReadWeaveHarnessProfile, domainProfile?: R
         domainProfile ? `领域规则：${JSON.stringify(domainProfile)}` : "",
         harness ? `项目用户附加建议（不得覆盖以上事实、范围和下列格式合同）：${  harness.modules.evidencePolicy}` : "",
         ...HUMAN_READABLE_CHINESE_STYLE_CONTRACT,
+        "termIdentity 使用对象字段 abbreviation、chineseName、englishName；能确认的中英文名称分别填入",
+        "不能把全名填进缩写字段，也不能只在正文写全名却遗漏结构字段",
         "只输出 JSON：body、optimizedTitle、termIdentity、definitionFields、claims、unresolvedClaims、namingEvidence；claims 包含 claimId、text、sourceIds、confidence；不得伪造来源或认为自报 high 就是核实通过"
     ].filter(Boolean).join("\n");
 }
@@ -2901,7 +2909,7 @@ export async function generateUnifiedReadWeaveAnswer(
     if (selectedVerifiedArtifact) termIdentity = undefined;
     // No whole-body catalog rewrites or subject substitutions after writing.
     const namingRepair = await repairReadWeaveNamingEvidence(
-        body, writer.value.namingEvidence, sources, async fragments => {
+        body, writer.value.namingEvidence, sources, async (fragments, diagnostics) => {
             if (budget.remainingCny < 0.005) throw new Error("余量不足，未追加局部证据修复");
             report("checking", `仅修正 ${fragments.length} 个命名证据片段，不重写整篇`);
             const result = await requestJson<{ patches: unknown }>([
@@ -2910,7 +2918,8 @@ export async function generateUnifiedReadWeaveAnswer(
                 "只用提供的原文；quote 引用连续的完整原句，包含命名关系、主体以及 replacement 所有英文名称和数字；不得猜测",
                 "返回 JSON patches 数组，每项含 original（指定原句）、replacement（修复句）和 namingEvidence；无法修复则返回空数组",
                 "namingEvidence 是数组，每项含 bodyText（完整 replacement）、sourceId、quote"
-            ].join("\n"), JSON.stringify({ fragments, evidence: sources.map(source => ({
+            ].join("\n"), JSON.stringify({ fragments, diagnostics,
+                evidence: sources.map(source => ({
                 sourceId: source.sourceId, title: source.title,
                 url: source.url, excerpt: source.excerpt
             })) }), 1200, 15000, undefined, signal, "局部证据修改", budget);
@@ -2948,6 +2957,8 @@ export async function generateUnifiedReadWeaveAnswer(
             }
         }
     }
+    if (namingCheck.supported.length)
+        body = formatReadWeaveFullNameOpening(body, termIdentity?.chineseName);
     body = formatReadWeaveBody(body);
     let unresolvedClaims = stringList(writer.value.unresolvedClaims, 12, 500);
     let issues: string[] = [];

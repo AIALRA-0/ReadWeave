@@ -68,6 +68,7 @@ export function checkReadWeaveNamingEvidence(
     sources: ReadWeaveEvidenceSource[],
 ) {
     const entries = Array.isArray(evidence) ? (evidence as Partial<ReadWeaveNamingEvidence>[]) : [];
+    const diagnostics: string[] = [];
     const supported = entries.filter((entry) => {
         if (
             typeof entry.bodyText !== "string" ||
@@ -87,14 +88,21 @@ export function checkReadWeaveNamingEvidence(
         const quotedNumbers = new Set(quote.match(/\d+(?:\.\d+)?/gu) ?? []);
         const sameNumbers = (assertion.match(/\d+(?:\.\d+)?/gu) ?? [])
             .every(number => quotedNumbers.has(number));
-        return (
-            sameNamedWords && sameNumbers &&
-            quote.length >= 12 &&
-            normalizeReadWeaveEvidenceText(body).includes(assertion) &&
-            !!source && normalizeReadWeaveEvidenceText(source.excerpt).includes(quote) &&
-            !GUESS.test(assertion) && !GUESS.test(quote) &&
-            (NAMING_ASSERTION.test(quote) || readWeaveExplicitExpansions(quote).length > 0)
-        );
+        const reasons = [
+            ...(!sameNamedWords ? [ `引用缺少英文名称：${assertedWords.filter(word =>
+                !quoteWords.has(word)).join("、")}` ] : []),
+            ...(!sameNumbers ? [ "引用没有覆盖正文的数字，不得把推算的年代写成原文事实" ] : []),
+            ...(quote.length < 12 ? [ "引用过短" ] : []),
+            ...(!normalizeReadWeaveEvidenceText(body).includes(assertion)
+                ? [ "bodyText 与正文不匹配" ] : []),
+            ...(!source || !normalizeReadWeaveEvidenceText(source.excerpt).includes(quote)
+                ? [ "quote 并非该来源的连续原文" ] : []),
+            ...(GUESS.test(assertion) || GUESS.test(quote) ? [ "正文或引用含猜测" ] : []),
+            ...(!NAMING_ASSERTION.test(quote) && !readWeaveExplicitExpansions(quote).length
+                ? [ "引用未包含明确命名或全称关系" ] : [])
+        ];
+        if (reasons.length) diagnostics.push(`${entry.sourceId}：${reasons.join("；")}`);
+        return reasons.length === 0;
     });
     // A writer can omit namingEvidence even when a source explicitly gives
     // the same name pair. Recover that direct provenance, never a guessed name.
@@ -136,7 +144,7 @@ export function checkReadWeaveNamingEvidence(
                 ) ||
                     GUESS.test(text)),
         );
-    return { supported, issues };
+    return { supported, issues, diagnostics };
 }
 
 /** Remove only ungrounded naming clauses, never substitute a plausible story. */
@@ -155,7 +163,7 @@ export async function repairReadWeaveNamingEvidence(
     original: string,
     evidence: unknown,
     sources: ReadWeaveEvidenceSource[],
-    repair: (fragments: string[]) => Promise<unknown>,
+    repair: (fragments: string[], diagnostics: string[]) => Promise<unknown>,
     signal?: AbortSignal
 ) {
     const entries = Array.isArray(evidence) ? [ ...evidence ] : [];
@@ -169,7 +177,7 @@ export async function repairReadWeaveNamingEvidence(
         signal?.throwIfAborted();
         rounds++;
         try {
-            const patches = await repair(fragments);
+            const patches = await repair(fragments, initial.diagnostics);
             signal?.throwIfAborted();
             if (!Array.isArray(patches) || patches.length > fragments.length)
                 throw new Error("局部证据修复的补丁数量无效");
@@ -187,10 +195,13 @@ export async function repairReadWeaveNamingEvidence(
                 const checked = checkReadWeaveNamingEvidence(
                     patch.replacement, patch.namingEvidence, sources
                 );
-                const full = normalizeReadWeaveEvidenceText(patch.replacement);
+                const full = normalizeReadWeaveEvidenceText(patch.replacement)
+                    .replace(/[。；;！？!?]+$/u, "");
                 if (checked.issues.length || !checked.supported.some(entry =>
-                    normalizeReadWeaveEvidenceText(entry.bodyText ?? "") === full))
-                    throw new Error("局部证据修复仍未绑定完整原句和直接依据");
+                    normalizeReadWeaveEvidenceText(entry.bodyText ?? "")
+                        .replace(/[。；;！？!?]+$/u, "") === full))
+                    throw new Error(`局部证据修复未通过：${checked.diagnostics.join("；")
+                        || "未绑定完整原句和直接依据"}`);
                 seen.add(patch.original);
                 accepted.push({ ...patch, evidence: checked.supported });
             }

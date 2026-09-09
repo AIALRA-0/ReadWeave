@@ -141,7 +141,7 @@ describe("naming provenance, not a semantic truth certificate", () => {
         const repair = vi.fn(async () => [ { original:faulty,replacement,
             namingEvidence:[ { bodyText:replacement,sourceId:"S1",quote } ] } ]);
         const result = await repairReadWeaveNamingEvidence(text, [], [ source ], repair);
-        expect(repair).toHaveBeenCalledExactlyOnceWith([ faulty ]);
+        expect(repair).toHaveBeenCalledExactlyOnceWith([ faulty ], []);
         expect(result.body).toBe(`第一段不动。\n${replacement}\n第三段不动。`);
         expect(result.check.issues).toEqual([]);
         expect(result.removed).toEqual([ faulty ]);
@@ -173,5 +173,20 @@ describe("naming provenance, not a semantic truth certificate", () => {
             "Lumen 得名于未知故事。", [], [], repair, controller.signal
         )).rejects.toThrow();
         expect(repair).not.toHaveBeenCalled();
+    });
+    it("allows terminal punctuation differences in a complete repaired sentence", async () => {
+        const original = "Lumen 于 1987 年得名于光通量单位。";
+        const replacement = "Lumen 得名于光通量单位。";
+        const repair = vi.fn(async () => [ { original,replacement,namingEvidence:[ {
+            bodyText:replacement.slice(0,-1),sourceId:"S1",quote
+        } ] } ]);
+        const result = await repairReadWeaveNamingEvidence(original,
+            [ { bodyText:original,sourceId:"S1",quote } ], [ source ], repair);
+        expect(repair.mock.calls).toHaveLength(1);
+        expect(result.body).toBe(replacement);
+        expect(result.warnings).toEqual([]);
+        expect(checkReadWeaveNamingEvidence(original,
+            [ { bodyText:original,sourceId:"S1",quote } ], [ source ]).diagnostics.join(" "))
+            .toContain("数字");
     });
 });
