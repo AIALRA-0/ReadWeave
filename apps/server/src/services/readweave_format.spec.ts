@@ -18,6 +18,17 @@ describe("versioned formatting contract", () => {
         expect(formatReadWeaveMarkdown(formatted)).toBe(formatted);
         expect(formatReadWeaveMarkdown("先读入记录；计算结果；保存摘要")).toBe("先读入记录；计算结果；保存摘要");
     });
+    it("groups separate bilingual meaning paragraphs without rewriting their content", () => {
+        const input = "Example（示例）：表示一个实例\n\nPacket（分组）：表示一组记录\n\nTransfer（传输）：表示传递过程\n\n后续说明不改变";
+        const expected = "- 示例（Example）：表示一个实例\n\n- 分组（Packet）：表示一组记录\n\n- 传输（Transfer）：表示传递过程\n\n后续说明不改变";
+        expect(formatReadWeaveMarkdown(input)).toBe(expected);
+        expect(formatReadWeaveMarkdown(expected)).toBe(expected);
+    });
+    it("does not group isolated definitions across a heading or protected block", () => {
+        const body = "示例（Example）：一个实例\n\n## 中间标题\n\n分组（Packet）：一组记录\n\n> Transfer（传输）：逐字引文。\n\n传输（Transfer）：传递过程";
+        expect(formatReadWeaveMarkdown(body)).toBe(body);
+        expect(formatReadWeaveMarkdown("Example（示例）：一个实例")).toBe("示例（Example）：一个实例");
+    });
     const protectedCases = [
         "https://example.org/a?x=1&y=2",
         "`const x = {a: 1};`",

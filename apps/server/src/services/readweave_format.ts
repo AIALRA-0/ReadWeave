@@ -46,12 +46,36 @@ export function mapReadWeaveProse(body: string, transform: (text: string) => str
         .join("");
 }
 
+/** Group only explicit, adjacent bilingual definitions, never infer a list from prose. */
+function groupBilingualDefinitions(body: string): string {
+    const tokens = Lexer.lex(body);
+    let group: number[] = [];
+    const flush = () => {
+        if (group.length >= 3) {
+            for (const index of group) tokens[index].raw = `- ${tokens[index].raw}`;
+        }
+        group = [];
+    };
+    for (let index = 0; index < tokens.length; index++) {
+        const token = tokens[index];
+        if (token.type === "space") continue;
+        if (token.type === "paragraph" && /^[\p{Script=Han}][\p{Script=Han} ]{0,49}（[A-Za-z][A-Za-z -]{0,99}）：/u.test(token.raw)) {
+            group.push(index);
+        } else {
+            flush();
+        }
+    }
+    flush();
+    return tokens.map(token => token.raw).join("");
+}
+
 /** FMT-003/008: never rewrite code, URLs, quotations, tables or formulae. */
 export function formatReadWeaveMarkdown(value: unknown): string {
     if (typeof value !== "string") return "";
-    return mapReadWeaveProse(value, (text) =>
+    return groupBilingualDefinitions(mapReadWeaveProse(value, (text) =>
         normalizeSimpleMathNotation(text)
             .replace(/\b([A-Z][A-Z0-9-]{1,15})\s*的(?:官方|完整|英文|中文)*全称(?:是|为)\s*([A-Za-z][A-Za-z -]{3,100})[（(]([\p{Script=Han}][\p{Script=Han}\s]{1,50})[)）]/gu, "$1 $3（$2）")
+            .replace(/^([ \t]*(?:[-*+] )?)([A-Za-z][A-Za-z -]{0,99})[（(]([\p{Script=Han}][\p{Script=Han} ]{0,49})[)）][：:]/gmu, "$1$3（$2）：")
             .replace(/。(?=[ \t]*(?:\n|$))/gu, "")
             .replace(/。/gu, "；")
             .replace(/；(?=[ \t]*(?:\n|$))/gu, "")
@@ -96,7 +120,7 @@ export function formatReadWeaveMarkdown(value: unknown): string {
                                 .map((row) => `  - ${row.trim()}`)
                                 .join("\n")}`,
             ),
-    ).trim();
+    ).trim());
 }
 
 export interface ReadWeaveTextPatch {
