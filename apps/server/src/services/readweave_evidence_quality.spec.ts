@@ -109,6 +109,18 @@ describe("naming provenance, not a semantic truth certificate", () => {
             [ { sourceId:"S1",excerpt:accented } ] as ReadWeaveEvidenceSource[]).issues)
             .toHaveLength(1);
     });
+    it("removes linked footnote numbers without treating them as factual dates", () => {
+        const excerpt = "Lumen is named after a light unit"
+            + "[[1987]](https://example.org/#cite_note-1987).";
+        const body = "Lumen 得名于光通量单位。";
+        expect(checkReadWeaveNamingEvidence(body,
+            [ { bodyText:body,sourceId:"S1",quote:"Lumen is named after a light unit." } ],
+            [ { sourceId:"S1",excerpt } ] as ReadWeaveEvidenceSource[]).issues).toEqual([]);
+        const dated = "Lumen 于 1987 年得名于光通量单位。";
+        expect(checkReadWeaveNamingEvidence(dated,
+            [ { bodyText:dated,sourceId:"S1",quote:excerpt } ],
+            [ { sourceId:"S1",excerpt } ] as ReadWeaveEvidenceSource[]).issues).toEqual([ dated ]);
+    });
     it("completes an adjacent naming decision without a model call", async () => {
         const quote = 'While building Lumen, the author read "Light Stories".';
         const decision = " She decided to call the tool Lumen after the story.";

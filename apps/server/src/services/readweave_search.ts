@@ -3,6 +3,7 @@ import type { ReadWeaveObjectKind, ReadWeaveSearchTestResult } from "@triliumnex
 import { getReadWeaveSearchRuntimeConfig, type ReadWeaveSearchRuntimeConfig } from "./readweave_settings.js";
 
 const PROVIDER_TIMEOUT_MS = 5_500;
+const SERPER_PROVIDER_TIMEOUT_MS = 10_000;
 const TAVILY_PROVIDER_TIMEOUT_MS = 12_000;
 const CACHE_TTL_MS = 24 * 60 * 60 * 1_000;
 const CURRENT_CACHE_TTL_MS = 2 * 60 * 60 * 1_000;
@@ -777,7 +778,7 @@ const serperSearch: SearchAdapter = async (query, config, fetcher) => {
         method: "POST",
         headers: { "X-API-KEY": config.serperApiKey, "Content-Type": "application/json" },
         body: JSON.stringify({ q: query, num: 5 })
-    });
+    }, SERPER_PROVIDER_TIMEOUT_MS);
     const rows = payload.organic ?? [];
     if (payload.knowledgeGraph?.website) {
         rows.unshift({

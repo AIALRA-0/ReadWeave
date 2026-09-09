@@ -100,6 +100,31 @@ describe("ReadWeave free-source search", () => {
             retrievalMode: "raw-serp"
         });
     });
+    it("gives the primary search a bounded ten-second window without retrying", async () => {
+        cls.init(() => updateReadWeaveAiSettings({
+            baseUrl:"https://api.deepseek.com",model:"deepseek-v4-flash",
+            searchMode:"automatic",searchBudgetCny:.009,serperApiKey:"serper-test-key"
+        }));
+        const timeout = vi.spyOn(AbortSignal, "timeout");
+        let calls = 0;
+        try {
+            await cls.init(() => searchReadWeaveEvidence({
+                query:"Lumen name origin",force:true,forcePaidFallback:true
+            }, { bypassCache:true,fetcher:async input => {
+                if (String(input).includes("google.serper.dev")) {
+                    calls++;
+                    return Response.json({ organic:[ {
+                        title:"Lumen",link:"https://lumen.org",snippet:"Lumen is named after light"
+                    } ] });
+                }
+                return Response.json({ query:{ pages:{} } });
+            } }));
+            expect(calls).toBe(1);
+            expect(timeout).toHaveBeenCalledWith(10_000);
+        } finally {
+            timeout.mockRestore();
+        }
+    });
 
     it("runs Exa beside Serper for people only when the configured budget allows it", async () => {
         cls.init(() => {

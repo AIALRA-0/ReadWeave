@@ -105,6 +105,21 @@ describe("bounded targeted research", () => {
             ] as never),
         ).toHaveLength(2);
     });
+    it("checks a direct account once when the first complete result is secondary", async () => {
+        search.mockResolvedValueOnce({ ...result("unused"),sources:[ {
+            ...result("Lumen is named after a light unit").sources[0],sourceCategory:"secondary"
+        } ] }).mockResolvedValueOnce({ ...result("unused"),sources:[ {
+            ...result("Lumen is named after a light unit").sources[0],url:"https://lumen.org/name"
+        } ] });
+        read.mockResolvedValue("Lumen is named after a light unit");
+        const r = await researchReadWeaveEvidence(
+            { ...contract,normalizedQuestion:"Lumen 从何得名？" },
+            "", .07, true, ()=>{}, undefined, "Lumen"
+        );
+        expect(search).toHaveBeenCalledTimes(2);
+        expect(r.audit).toMatchObject({ queryCount:2,stopReason:"sufficient",searchCostCny:.0144 });
+        expect(r.sources[0].url).toBe("https://lumen.org/name");
+    });
     it("directs naming writing to the relevant first-hand-looking page, not rank one", () => {
         const source = { sourceType:"external",retrievalMode:"page-reader",title:"Name history",
             excerpt:"Lumen is named after a light unit" };

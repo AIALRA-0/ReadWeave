@@ -27,6 +27,8 @@ const GUESS =
  * Words, accents, numbers and word order remain significant. */
 export function normalizeReadWeaveEvidenceText(text: string): string {
     return text.normalize("NFC")
+        // Linked citation numbers are metadata, not dates or words in a quote.
+        .replace(/\[\[\d+\]\]\(https?:\/\/[^\s]*#cite_note[^\s]*\)/gu, "")
         .replace(/\[([^\]\n]+)\]\(https?:\/\/[^\s]*(?:\s+"[^"\n]*")?\)/gu, "$1")
         .replace(/\[([^\]\n]+)\]\[[^\]\n]*\]/gu, "$1")
         .replace(/(?<!\w)[*_]{1,2}|[*_]{1,2}(?!\w)/gu, "")

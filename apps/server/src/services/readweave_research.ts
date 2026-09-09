@@ -247,6 +247,17 @@ export async function researchReadWeaveEvidence(
         }
         audit.missingFacts = namingRequired ? readWeaveMissingNamingFacts(sources, subject, requirements) : [];
         if (sources.length && (!namingRequired || audit.missingFacts.length === 0)) {
+            const completeReads = sources.filter(source => source.retrievalMode === "page-reader"
+                && !readWeaveMissingNamingFacts([ source ], subject, requirements).length);
+            if (namingRequired && requirements.includes("origin") && index === 0
+                && completeReads.length
+                && completeReads.every(source => source.sourceCategory === "secondary")
+                && ledger.remainingCny >= 0.0072) {
+                // A fallback encyclopedia is useful, but not a reason to stop
+                // before one bounded search for the subject's direct account.
+                onStatus("已找到二手资料，再补查一次名称的直接来源");
+                continue;
+            }
             audit.stopReason = "sufficient";
             break;
         }
