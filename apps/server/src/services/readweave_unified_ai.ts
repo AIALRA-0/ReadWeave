@@ -41,6 +41,7 @@ import {
     READWEAVE_FORMAT_VERSION,
     readWeaveFormatIssues,
     repairReadWeaveOptionalQualifiers,
+    repairReadWeaveConventionalTerms,
     repairReadWeaveFormat
 } from "./readweave_format.js";
 import {
@@ -3000,6 +3001,32 @@ export async function generateUnifiedReadWeaveAnswer(
             return result.value.decisions;
         }, signal) : { body, rounds:0, warnings:[] as string[] };
     body = qualifierRepair.body;
+    let terminologyRounds = 0;
+    if (namingRequirements.includes("origin")
+        && budget.modelRequests < 3 && budget.remainingCny >= 0.005) {
+        try {
+            const terminology = await repairReadWeaveConventionalTerms(
+                body, originalQuestion, async targets => {
+                    const result = await requestJson<{ terms:unknown }>(
+                        "仅给附带出现的通行技术缩写补中文名称和英文全称，不输出替换正文。"
+                    + "只允许有稳定通行含义且上下文能明确消歧的普通术语；不猜项目、产品、机构的名称来历，"
+                    + "不把单词拆成缩写，不确定或有歧义就不返回该项。属于常识注释，不假称外部来源给出了全称。"
+                    + "返回 JSON terms，每项 token、chineseName、englishName、confidence:high、"
+                    + "basis:established-usage、contextReason（为什么当前语境是这个含义）",
+                        JSON.stringify({ question:originalQuestion,targets }),500,15000,undefined,
+                        signal,"附带术语局部注释",budget,recordUsage);
+                    return result.value.terms;
+                },signal);
+            body = terminology.body;
+            terminologyRounds = terminology.rounds;
+            if (terminology.knowledgeTerms.length)
+                report("checking", "通行用法注释（模型常识，非来源原文）："
+                    + terminology.knowledgeTerms.join("、"));
+        } catch {
+            signal?.throwIfAborted();
+            // Preserve the sourced body; the formatter still reports missing annotations.
+        }
+    }
     const repaired = await repairReadWeaveFormat(body, async (fragment, failures) => {
         if (budget.modelRequests >= 3) throw new Error("本题局部修改次数已达上限");
         if (budget.remainingCny < 0.005) throw new Error("剩余额度保留给已生成答案，未追加格式调用");
@@ -3011,7 +3038,8 @@ export async function generateUnifiedReadWeaveAnswer(
         return result.value.replacement;
     }, signal, Math.max(0, 3 - budget.modelRequests));
     body = repaired.body;
-    const repairRounds = namingRepair.rounds + qualifierRepair.rounds + repaired.rounds;
+    const repairRounds = namingRepair.rounds + qualifierRepair.rounds
+        + terminologyRounds + repaired.rounds;
     const independentVerification = "not-run" as const;
     const verificationStateIssues: string[] = [];
 

@@ -5,16 +5,60 @@ import {
     formatReadWeaveFullNameOpening,
     formatReadWeaveMarkdown,
     repairReadWeaveFormat,
-    repairReadWeaveOptionalQualifiers
+    repairReadWeaveOptionalQualifiers,
+    repairReadWeaveConventionalTerms
 } from "./readweave_format.js";
 
 describe("versioned formatting contract", () => {
+    it("annotates one incidental initialism without accepting replacement prose", async () => {
+        const body = "这段涉及 ABC 与其他对象，保留 12 个条件";
+        const resolve = vi.fn(async()=>[ {
+            token:"ABC",chineseName:"示例连接",englishName:"Alpha Beta Connection",
+            confidence:"high",basis:"established-usage",contextReason:"当前上下文指这种通行连接",
+            replacement:"禁止替换整篇" } ]);
+        const result = await repairReadWeaveConventionalTerms(body,"名称来历是什么？",resolve);
+        expect(result.body).toBe(body.replace("ABC","ABC 示例连接（Alpha Beta Connection）"));
+        expect(result.knowledgeTerms).toEqual([ "ABC" ]);
+        expect(resolve).toHaveBeenCalledTimes(1);
+    });
+    it.each([
+        { confidence:"low" },{ basis:"source-quote" },
+        { englishName:"Invented Different Expansion" },
+        { chineseName:"示例：增加事实" },{ contextReason:"" }
+    ])("rejects unsupported annotation payloads %o", async bad => {
+        const body = "使用 ABC 与其他对象";
+        const result = await repairReadWeaveConventionalTerms(body,"名称来历？",async()=>[ {
+            token:"ABC",chineseName:"示例连接",englishName:"Alpha Beta Connection",confidence:"high",
+            basis:"established-usage",contextReason:"当前上下文指这种通行连接",...bad
+        } ]);
+        expect(result.body).toBe(body);
+        expect(result.knowledgeTerms).toEqual([]);
+    });
+    it.each([ "`ABC`","《ABC Book》","ABC 示例连接（Alpha Beta Connection）","ABC 与 ABC" ])(
+        "does not annotate protected or ambiguous occurrences: %s", async body => {
+            const resolve = vi.fn();
+            expect((await repairReadWeaveConventionalTerms(body,"来源？",resolve)).body).toBe(body);
+            expect(resolve).not.toHaveBeenCalled();
+        }
+    );
+    it("leaves the question's own acronym to the sourced naming path", async () => {
+        const resolve = vi.fn();
+        const result = await repairReadWeaveConventionalTerms(
+            "ABC 是对象","ABC 的名称来历？",resolve);
+        expect(result.rounds).toBe(0);
+        expect(resolve).not.toHaveBeenCalled();
+    });
+    it("removes only the newly exposed space between Chinese text", async () => {
+        const result = await repairReadWeaveOptionalQualifiers("名称来自 ABC 喜剧","从何得名？",
+            async()=>[ { token:"ABC",omit:true,reason:"多余的来源机构简称" } ]);
+        expect(result.body).toBe("名称来自喜剧");
+    });
     it("only omits an approved unrequested qualifier, never rewrites prose", async () => {
         const body = "Lumen 得名于 ABC 喜剧《Light Story》，其余 12 个字不改";
         const approve = vi.fn(async () => [ { token:"ABC",omit:true,reason:"只是额外的来源机构标签",
             replacement:"模型企图返回新正文" } ]);
         const result = await repairReadWeaveOptionalQualifiers(body, "Lumen 从何得名？", approve);
-        expect(result.body).toBe(body.replace("ABC ", ""));
+        expect(result.body).toBe(body.replace(" ABC ", ""));
         expect(approve).toHaveBeenCalledTimes(1);
         expect(result.rounds).toBe(1);
         expect(result.body).toContain("12");

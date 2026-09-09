@@ -274,8 +274,11 @@ export async function repairReadWeaveOptionalQualifiers(
             if (decision.length !== 1 || decision[0].omit !== true
                 || typeof decision[0].reason !== "string" || decision[0].reason.trim().length < 4)
                 continue;
-            body = body.slice(0, target.start) + body.slice(target.start + target.fragment.length)
-                .replace(/^[ \t]+/u, "");
+            let before = body.slice(0, target.start);
+            const after = body.slice(target.start + target.fragment.length).replace(/^[ \t]+/u, "");
+            if (/\p{Script=Han}[ \t]+$/u.test(before) && /^\p{Script=Han}/u.test(after))
+                before = before.replace(/[ \t]+$/u, "");
+            body = before + after;
         }
         return { body, rounds:1, warnings:[] as string[] };
     } catch (error) {
@@ -283,6 +286,55 @@ export async function repairReadWeaveOptionalQualifiers(
         return { body:original, rounds:1,
             warnings:[ error instanceof Error ? error.message : "局部简称检查未应用" ] };
     }
+}
+
+/** Annotate an incidental conventional initialism, never invent a project's
+ * etymology or rewrite a sentence. Model knowledge is not a source quotation. */
+export async function repairReadWeaveConventionalTerms(
+    original: string, question: string,
+    resolve: (targets: Array<{ token:string;before:string;after:string }>) => Promise<unknown>,
+    signal?: AbortSignal
+) {
+    const targets: Array<{ token:string;start:number;before:string;after:string }> = [];
+    mapReadWeaveProse(original, prose => {
+        for (const match of prose.matchAll(/\b[A-Z]{2,6}\b/gu)) {
+            const token = match[0], start = original.indexOf(token);
+            const before = original.slice(Math.max(0,start-150),start);
+            const after = original.slice(start+token.length,start+token.length+150);
+            if (question.includes(token) || start !== original.lastIndexOf(token)
+                || before.lastIndexOf("《") > before.lastIndexOf("》")
+                || /^[ \t]*[\p{Script=Han}]{2,40}（[A-Za-z]/u.test(after)) continue;
+            targets.push({ token,start,before,after });
+        }
+        return prose;
+    });
+    if (!targets.length) return { body:original,rounds:0,knowledgeTerms:[] as string[] };
+    signal?.throwIfAborted();
+    const chosen = targets.slice(0,2);
+    const result = await resolve(chosen.map(({ token,before,after })=>({ token,before,after })));
+    signal?.throwIfAborted();
+    let body = original;
+    const knowledgeTerms: string[] = [];
+    if (Array.isArray(result)) for (const target of chosen.toSorted((a,b)=>b.start-a.start)) {
+        const matches = result.filter(item=>item?.token === target.token);
+        if (matches.length !== 1) continue;
+        const term = matches[0];
+        if (term.confidence !== "high" || term.basis !== "established-usage"
+            || typeof term.contextReason !== "string" || term.contextReason.trim().length < 6
+            || typeof term.chineseName !== "string"
+            || !/^[\p{Script=Han}]{2,24}$/u.test(term.chineseName)
+            || typeof term.englishName !== "string"
+            || !/^[A-Za-z]+(?:[ -][A-Za-z]+){1,7}$/u.test(term.englishName)) continue;
+        const initials = term.englishName.split(/[ -]/u)
+            .filter((word:string)=>!/^(?:of|the|and|for)$/iu.test(word))
+            .map((word:string)=>word[0]).join("").toUpperCase();
+        if (initials !== target.token) continue;
+        const annotation = `${target.token} ${term.chineseName}（${term.englishName}）`;
+        body = body.slice(0,target.start) + annotation
+            + body.slice(target.start+target.token.length);
+        knowledgeTerms.push(target.token);
+    }
+    return { body,rounds:1,knowledgeTerms };
 }
 
 /** Only submit a failing prose line, never the complete answer, for repair. */
