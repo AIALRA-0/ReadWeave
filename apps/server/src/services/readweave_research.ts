@@ -7,12 +7,14 @@ import type {
 import { READWEAVE_RESEARCH_ACTION_LIMIT,ReadWeaveBudget } from "./readweave_budget.js";
 import {
     READWEAVE_ORIGIN_ASSERTION,
+    normalizeReadWeaveEvidenceText,
     readWeaveExplicitExpansions,
     readWeaveResearchSubject
 } from "./readweave_evidence_quality.js";
 import { readReadWeavePageWithJina, searchReadWeaveEvidence } from "./readweave_search.js";
 
 export function readWeaveEvidenceWindow(text: string, question: string, limit = 1800): string {
+    text = normalizeReadWeaveEvidenceText(text);
     if (text.length <= limit) return text;
     const terms = question.match(/[A-Za-z][A-Za-z0-9-]{2,}|[\p{Script=Han}]{2,6}/gu) ?? [];
     const cues = readWeaveNamingRequirements(question, false).includes("origin")
@@ -27,6 +29,16 @@ export function readWeaveEvidenceWindow(text: string, question: string, limit = 
     // sentence. Keep that provenance, while preserving the same output cap.
     const start = Math.max(0, (position >= 0 ? position : firstTerm) - 800);
     return text.slice(start, start + limit);
+}
+
+/** A subject-owned-looking domain is a reading priority, not proof of ownership
+ * or truth. Never award authority from a URL substring or a search snippet. */
+function namingReadingPriority(source: ReadWeaveEvidenceSource, subject: string): number {
+    if (!source.url || !/^[A-Za-z][A-Za-z0-9-]{2,60}$/u.test(subject)) return 0;
+    const host = new URL(source.url).hostname.toLowerCase()
+        .replace(/^(?:www|docs|developer)\./u, "");
+    return host.split(".").length === 2 && host.split(".")[0] === subject.toLowerCase()
+        ? 1 : 0;
 }
 
 export function readWeaveNamingRequirements(question: string, fallback = true): Array<"expansion" | "origin"> {
@@ -169,6 +181,9 @@ export async function researchReadWeaveEvidence(
         // basic Reader does not consume the user's paid tokens (20 RPM limit).
         const candidates = sources
             .filter((s) => s.url && !readUrls.has(s.url))
+            .toSorted((a, b) => namingRequired
+                ? namingReadingPriority(b, subject) - namingReadingPriority(a, subject)
+                : 0)
             .slice(0, namingRequired ? 2 : 1);
         for (const source of candidates) {
             if (
@@ -217,6 +232,10 @@ export async function researchReadWeaveEvidence(
     const selected = sources
         .toSorted(
             (a, b) =>
+                Number(b.retrievalMode === "page-reader")
+                    - Number(a.retrievalMode === "page-reader") ||
+                (namingRequired
+                    ? namingReadingPriority(b, subject) - namingReadingPriority(a, subject) : 0) ||
                 Number(/stands for|named after|得名|全称/iu.test(b.excerpt)) -
                     Number(/stands for|named after|得名|全称/iu.test(a.excerpt)) ||
                 (b.rerankScore ?? 0) - (a.rerankScore ?? 0),

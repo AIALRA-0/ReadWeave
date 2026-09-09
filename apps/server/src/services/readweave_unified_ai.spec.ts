@@ -928,6 +928,35 @@ describe.skip("ReadWeave retired multi-stage workflow", () => {
 });
 
 describe("ReadWeave one-pass workflow", () => {
+    it("preserves the complete bounded evidence window and the supported answer", async () => {
+        const decision = " She decided to call the tool Lumen after this story.";
+        const excerpt = `${"Context ".repeat(140)}`
+            + "The author was reading [“Light’s Journey”](https://example.org/story)." + decision;
+        const quote = 'The author was reading "Light\'s Journey".' + decision;
+        const body = "Lumen 的名称来源于故事《Light's Journey》。";
+        searchMock.mockImplementation(async options => ({
+            ...await defaultSearchImplementation(options),
+            sources:[ { provider:"Official documentation",title:"Lumen name",
+                url:"https://example.org/lumen",snippet:excerpt,score:100,
+                publishedAt:"2025-01-01" } ]
+        }));
+        vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
+            const payload = JSON.parse(String(init?.body));
+            expect(payload.messages[1].content).toContain(decision.trim());
+            return Response.json({ model:"deepseek-v4-flash",
+                choices:[ { message:{ content:JSON.stringify({
+                    body, claims:[], namingEvidence:[ { bodyText:body,sourceId:"S1",quote } ]
+                }) } } ],usage:{ prompt_tokens:1000,completion_tokens:100,total_tokens:1100 } });
+        }));
+        const result = await generateUnifiedReadWeaveAnswer({
+            ...request("Lumen 的名称来源是什么？只解释得名原因"),
+            fragments:[ { id:"selected",role:"selected",text:"Lumen" } ]
+        });
+        expect(result.body).toContain("Light's Journey");
+        expect(result.audit?.validationIssues?.some(issue=>issue.includes("命名缺少直接依据"))).toBe(false);
+        expect(result.evidenceSources?.some(source=>source.sourceId==="S1")).toBe(true);
+        expect(result.usage?.modelCalls).toBe(1);
+    });
     it("sends the narrow scope and difficult cost target to the writer", async () => {
         const result = await generateUnifiedReadWeaveAnswer({
             ...request("Lumen 的名称来源是什么？只解释得名原因，不介绍语法和用途"),

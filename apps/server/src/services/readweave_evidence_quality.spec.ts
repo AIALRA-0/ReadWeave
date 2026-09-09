@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
     checkReadWeaveNamingEvidence,
     omitUnsupportedReadWeaveNaming,
+    normalizeReadWeaveEvidenceText,
     readWeaveExplicitExpansions,
     readWeaveResearchSubject,
 } from "./readweave_evidence_quality.js";
@@ -79,5 +80,50 @@ describe("naming provenance, not a semantic truth certificate", () => {
     it("rejects the user-reported reversed abbreviation syntax", () => {
         const text = "名称中的 AURORA 是 Automatic Unverified...(具体展开未在证据中给出)的缩写，但证据未提供官方全称，因此无法确认其确切含义";
         expect(checkReadWeaveNamingEvidence(text, [], []).issues).toEqual([text]);
+    });
+    it("matches visible link labels and typographic quotes", () => {
+        const decision = " She decided to call the tool Lumen after this story.";
+        const excerpt = "The author was reading [“Light’s Journey”](https://example.org/light)."
+            + decision;
+        const quote = 'The author was reading "Light\'s Journey".' + decision;
+        const body = "Lumen 的名称来源于故事《Light's Journey》。";
+        const checked = checkReadWeaveNamingEvidence(body,
+            [ { bodyText: body, sourceId: "S1", quote } ],
+            [ { sourceId: "S1", excerpt } ] as ReadWeaveEvidenceSource[]);
+        expect(checked.issues).toEqual([]);
+        expect(normalizeReadWeaveEvidenceText(excerpt)).toBe(quote);
+        expect(checkReadWeaveNamingEvidence(body,
+            [ { bodyText: body, sourceId: "S1", quote: quote.replace("story", "poem") } ],
+            [ { sourceId: "S1", excerpt } ] as ReadWeaveEvidenceSource[]).issues).toEqual([ body ]);
+    });
+    it("does not use words hidden in a link destination or flatten distinct names", () => {
+        const excerpt = "Lumen is named after [a light unit](https://example.org/Invented).";
+        const body = "Lumen 的名称源于 Invented";
+        expect(checkReadWeaveNamingEvidence(body,
+            [ { bodyText: body, sourceId: "S1", quote: excerpt } ],
+            [ { sourceId: "S1", excerpt } ] as ReadWeaveEvidenceSource[]).issues).toEqual([ body ]);
+        const accented = "Lumen is named after Söder";
+        expect(checkReadWeaveNamingEvidence("Lumen 得名于 Soder",
+            [ { bodyText:"Lumen 得名于 Soder", sourceId:"S1", quote:accented } ],
+            [ { sourceId:"S1",excerpt:accented } ] as ReadWeaveEvidenceSource[]).issues)
+            .toHaveLength(1);
+    });
+    it("rejects speculative source text even when the output hides its uncertainty", () => {
+        const excerpt = "Lumen was perhaps named after the light unit";
+        expect(checkReadWeaveNamingEvidence(body,
+            [ { bodyText: body, sourceId: "S1", quote: excerpt } ],
+            [ { sourceId: "S1", excerpt } ] as ReadWeaveEvidenceSource[]).issues).toEqual([ body ]);
+    });
+    it("does not let a supported substring approve unrelated facts in the same sentence", () => {
+        const fragment = "Lumen 的名称源于光通量单位";
+        const full = `${fragment}，由 Invented 于 1987 年提出。`;
+        expect(checkReadWeaveNamingEvidence(full,
+            [ { bodyText:fragment,sourceId:"S1",quote } ], [ source ]).issues).toEqual([ full ]);
+    });
+    it("removes an unsupported sentence atomically instead of leaving a dangling phrase", () => {
+        const text = "Lumen 用于测量。开发者先讨论了光照，然后提出了这一名称，灵感来自未知故事。";
+        const checked = checkReadWeaveNamingEvidence(text, [], []);
+        expect(checked.issues).toEqual([ "开发者先讨论了光照，然后提出了这一名称，灵感来自未知故事。" ]);
+        expect(omitUnsupportedReadWeaveNaming(text, checked.issues)).toBe("Lumen 用于测量。");
     });
 });

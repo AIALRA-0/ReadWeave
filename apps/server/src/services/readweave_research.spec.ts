@@ -77,6 +77,25 @@ describe("bounded targeted research", () => {
         expect(readWeaveMissingNamingFacts(sources as never, "Lumen", [ "origin" ]))
             .toEqual([ "命名来历" ]);
     });
+    it("prioritizes reading subject domains but does not trust URL substrings", async () => {
+        search.mockResolvedValue({ ...result("unused"), sources: [
+            { url:"https://lumen.com.attacker.example/origin",title:"Lumen",
+                snippet:"Lumen was named after a light unit",provider:"Serper",score:120 },
+            { url:"https://reference.example/lumen",title:"Lumen",
+                snippet:"Lumen was named after a light unit",provider:"Serper",score:100 },
+            { url:"https://lumen.org/about/name",title:"Lumen",
+                snippet:"The story of the name",provider:"Serper",score:90 }
+        ] });
+        read.mockResolvedValue("The author proposed Lumen as a name inspired by a light unit.");
+        const r = await researchReadWeaveEvidence(
+            { ...contract, normalizedQuestion:"Lumen 从何得名？" },
+            "", .07, true, ()=>{}, undefined, "Lumen"
+        );
+        expect(read.mock.calls[0][0]).toBe("https://lumen.org/about/name");
+        expect(r.sources[0].url).toBe("https://lumen.org/about/name");
+        expect(r.sources[0].authority).toBeUndefined();
+        expect(r.audit).toMatchObject({ queryCount:1,pageReadCount:2,stopReason:"sufficient" });
+    });
     it("does not infer an acronym from a publication title", () => {
         expect(
             readWeaveMissingNamingFacts([

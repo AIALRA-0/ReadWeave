@@ -9,6 +9,7 @@ export interface ReadWeaveNamingEvidence {
 export const READWEAVE_ORIGIN_ASSERTION = new RegExp([
     "named (?:after|for)|name (?:comes|derives)|(?:decided|chose) to (?:call|name)",
     "(?:chose|chosen).{0,60}(?:name|title)|name.{0,60}(?:chosen|inspired|taken)",
+    "name.{0,50}dates back|(?:suggested|proposed).{0,100}(?:code name|name)|earned.{0,50}nickname",
     "(?:名称|名字|词源).{0,40}(?:源于|源自|来自|来源|意为|暗示)|(?<!可)以.{0,60}(?:命名|为名)",
     "(?:命名|得名)(?:于|自)|命名.{0,30}(?:源于|来自|纪念)",
     "名称.{0,20}(?:与.{0,40}无关|不是|并非)"
@@ -20,6 +21,18 @@ const NAMING_ASSERTION = new RegExp([
 ].join("|"), "iu");
 const GUESS =
     /可能|大概|或许|似乎|暗示|猜测|推测|未.{0,12}(?:明确|给出|提供|确认)|无法确认|具体展开|perhaps|probably|might|may derive/iu;
+
+/** Compare visible quotations, not Markdown link destinations or typography.
+ * Words, accents, numbers and word order remain significant. */
+export function normalizeReadWeaveEvidenceText(text: string): string {
+    return text.normalize("NFC")
+        .replace(/\[([^\]\n]+)\]\(https?:\/\/[^\s]*(?:\s+"[^"\n]*")?\)/gu, "$1")
+        .replace(/\[([^\]\n]+)\]\[[^\]\n]*\]/gu, "$1")
+        .replace(/(?<!\w)[*_]{1,2}|[*_]{1,2}(?!\w)/gu, "")
+        .replace(/[‘’]/gu, "'")
+        .replace(/[“”]/gu, '"')
+        .replace(/\s+/gu, " ").trim();
+}
 
 /** Explicit parenthesized names, not title initials or an inferred etymology. */
 export function readWeaveExplicitExpansions(text: string): Array<{ abbreviation: string; englishName: string }> {
@@ -62,21 +75,24 @@ export function checkReadWeaveNamingEvidence(
         )
             return false;
         const source = sources.find((s) => s.sourceId === entry.sourceId);
-        const quoteWords = new Set(entry.quote.toLowerCase().match(/[a-z][a-z0-9-]*/gu) ?? []);
-        const assertedWords = entry.bodyText.toLowerCase().match(/[a-z][a-z0-9-]*/gu) ?? [];
+        const quote = normalizeReadWeaveEvidenceText(entry.quote);
+        const assertion = normalizeReadWeaveEvidenceText(entry.bodyText);
+        const namedWords = /[\p{Script=Latin}][\p{Script=Latin}\p{M}0-9-]*/gu;
+        const quoteWords = new Set(quote.toLowerCase().match(namedWords) ?? []);
+        const assertedWords = assertion.toLowerCase().match(namedWords) ?? [];
         // A quote about another named entity or another English expansion
         // cannot support this sentence merely because it is a real quote.
         const sameNamedWords = assertedWords.every(word => quoteWords.has(word));
-        const quotedNumbers = new Set(entry.quote.match(/\d+(?:\.\d+)?/gu) ?? []);
-        const sameNumbers = (entry.bodyText.match(/\d+(?:\.\d+)?/gu) ?? [])
+        const quotedNumbers = new Set(quote.match(/\d+(?:\.\d+)?/gu) ?? []);
+        const sameNumbers = (assertion.match(/\d+(?:\.\d+)?/gu) ?? [])
             .every(number => quotedNumbers.has(number));
         return (
             sameNamedWords && sameNumbers &&
-            entry.quote.length >= 12 &&
-            body.includes(entry.bodyText) &&
-            !!source?.excerpt.includes(entry.quote) &&
-            !GUESS.test(entry.bodyText) &&
-            (NAMING_ASSERTION.test(entry.quote) || readWeaveExplicitExpansions(entry.quote).length > 0)
+            quote.length >= 12 &&
+            normalizeReadWeaveEvidenceText(body).includes(assertion) &&
+            !!source && normalizeReadWeaveEvidenceText(source.excerpt).includes(quote) &&
+            !GUESS.test(assertion) && !GUESS.test(quote) &&
+            (NAMING_ASSERTION.test(quote) || readWeaveExplicitExpansions(quote).length > 0)
         );
     });
     // A writer can omit namingEvidence even when a source explicitly gives
@@ -97,15 +113,17 @@ export function checkReadWeaveNamingEvidence(
     const issues = body
         .split(/(?<=[。；;！？!?])|\n+/u)
         .map((text) => text.trim())
-        .map(text => {
-            const start = text.search(/(?:其)?(?:名称|名字|命名|得名|词源|缩写|全称)/u);
-            return start > 0 && /[，,]/u.test(text.slice(0, start)) ? text.slice(start) : text;
-        })
         .filter(
             (text) =>
                 NAMING_ASSERTION.test(text) &&
                 (!supported.some(
-                    (entry) => entry.bodyText?.includes(text) || text.includes(entry.bodyText!),
+                    (entry) => {
+                        const assertion = normalizeReadWeaveEvidenceText(entry.bodyText ?? "")
+                            .replace(/[。；;！？!?]+$/u, "");
+                        const clause = normalizeReadWeaveEvidenceText(text)
+                            .replace(/[。；;！？!?]+$/u, "");
+                        return assertion && (assertion === clause || assertion.includes(clause));
+                    }
                 ) ||
                     GUESS.test(text)),
         );
