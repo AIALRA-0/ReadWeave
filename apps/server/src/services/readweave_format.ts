@@ -311,34 +311,50 @@ export async function repairReadWeaveConventionalTerms(
         }
         return prose;
     });
-    if (!targets.length) return { body:original,rounds:0,knowledgeTerms:[] as string[] };
+    if (!targets.length) return {
+        body:original,rounds:0,knowledgeTerms:[] as string[],warnings:[] as string[]
+    };
     signal?.throwIfAborted();
     const chosen = targets.slice(0,2);
     const result = await resolve(chosen.map(({ token,before,after })=>({ token,before,after })));
     signal?.throwIfAborted();
     let body = original;
     const knowledgeTerms: string[] = [];
+    const warnings: string[] = [];
+    if (!Array.isArray(result)) warnings.push("局部术语响应缺少 terms 数组，未应用");
     if (Array.isArray(result)) for (const target of chosen.toSorted((a,b)=>b.start-a.start)) {
         const matches = result.filter(item=>item?.token === target.token);
-        if (matches.length !== 1) continue;
-        const term = matches[0];
+        if (matches.length !== 1) {
+            warnings.push(`${target.token}：局部术语响应缺项或重复，未应用`);
+            continue;
+        }
+        const term = { ...matches[0] };
+        // Trim field boundaries, but never rewrite the supplied names or infer expansions.
+        for (const key of [ "chineseName", "englishName", "contextReason" ])
+            if (typeof term[key] === "string") term[key] = term[key].trim();
         if (term.confidence !== "high" || term.basis !== "established-usage"
-            || typeof term.contextReason !== "string" || term.contextReason.trim().length < 6
+            || typeof term.contextReason !== "string" || !term.contextReason
             || typeof term.chineseName !== "string"
             || !/^[\p{Script=Han}]{2,24}$/u.test(term.chineseName)
             || typeof term.englishName !== "string"
-            || !/^[A-Za-z]+(?:[ -][A-Za-z]+){1,7}$/u.test(term.englishName)) continue;
+            || !/^[A-Za-z]+(?:[ -][A-Za-z]+){1,7}$/u.test(term.englishName)) {
+            warnings.push(`${target.token}：局部术语置信度、用法说明或名称格式不符合约定，未应用`);
+            continue;
+        }
         const initials = term.englishName.split(/[ -]/u)
             .filter((word:string)=>!/^(?:of|the|and|for)$/iu.test(word))
             .map((word:string)=>word[0]).join("").toUpperCase();
-        if (initials !== target.token) continue;
+        if (initials !== target.token) {
+            warnings.push(`${target.token}：英文名称首字母与缩写不匹配，未应用`);
+            continue;
+        }
         const annotation = `${target.token} ${term.chineseName}（${term.englishName}）`;
         const after = body.slice(target.start+target.token.length)
             .replace(/^[ \t]+(?=\p{Script=Han})/u, "");
         body = body.slice(0,target.start) + annotation + after;
         knowledgeTerms.push(target.token);
     }
-    return { body,rounds:1,knowledgeTerms };
+    return { body,rounds:1,knowledgeTerms,warnings };
 }
 
 /** Only submit a failing prose line, never the complete answer, for repair. */

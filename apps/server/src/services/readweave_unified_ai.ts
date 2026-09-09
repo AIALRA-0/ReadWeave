@@ -3016,19 +3016,25 @@ export async function generateUnifiedReadWeaveAnswer(
                         "仅给附带出现的通行技术缩写补中文名称和英文全称，不输出替换正文。"
                     + "只允许有稳定通行含义且上下文能明确消歧的普通术语；不猜项目、产品、机构的名称来历，"
                     + "不把单词拆成缩写，不确定或有歧义就不返回该项。属于常识注释，不假称外部来源给出了全称。"
-                    + "返回 JSON terms，每项 token、chineseName、englishName、confidence:high、"
-                    + "basis:established-usage、contextReason（为什么当前语境是这个含义）",
+                    + '严格返回对象 {"terms":[{"token":"给定缩写","chineseName":"仅中文名称",'
+                    + '"englishName":"仅英文全称，不带缩写或括号","confidence":"high",'
+                    + '"basis":"established-usage","contextReason":"简要说明语境如何消歧"}]}。'
+                    + '无法可靠消歧时返回 {"terms":[]}，不返回 Markdown 或其他对象结构',
                         JSON.stringify({ question:originalQuestion,targets }),500,15000,undefined,
                         signal,"附带术语局部注释",budget,recordUsage);
                     return result.value.terms;
                 },signal);
             body = terminology.body;
             terminologyRounds = terminology.rounds;
+            if (terminology.warnings.length)
+                report("checking", "局部术语响应未应用", terminology.warnings);
             if (terminology.knowledgeTerms.length)
                 report("checking", "通行用法注释（模型常识，非来源原文）："
                     + terminology.knowledgeTerms.join("、"));
-        } catch {
+        } catch (error) {
             signal?.throwIfAborted();
+            report("checking", "局部术语请求未完成，保留原文", [ error instanceof SyntaxError
+                ? "响应不是合法 JSON" : "请求失败或响应结构不符，用量已单独记录" ]);
             // Preserve the sourced body; the formatter still reports missing annotations.
         }
     }

@@ -61,6 +61,25 @@ describe("versioned formatting contract", () => {
         expect(result.rounds).toBe(0);
         expect(resolve).not.toHaveBeenCalled();
     });
+    it("accepts concise context and trimmed names without mutating payload", async () => {
+        const term = Object.freeze({ token:"ABC",chineseName:" 示例连接 ",
+            englishName:" Alpha Beta Connection ",confidence:"high",basis:"established-usage",
+            contextReason:"指连接" });
+        const result = await repairReadWeaveConventionalTerms("使用 ABC 与其他对象","来历？",
+            async()=>[ term ]);
+        expect(result.body).toBe("使用 ABC 示例连接（Alpha Beta Connection）与其他对象");
+        expect(result.warnings).toEqual([]);
+        expect(term.chineseName).toBe(" 示例连接 ");
+    });
+    it.each([ undefined, [], [ { token:"ABC" } ] ])(
+        "records rejected response shape without changing text: %j", async payload => {
+            const result = await repairReadWeaveConventionalTerms("使用 ABC 与其他对象","来历？",
+                async()=>payload);
+            expect(result.body).toBe("使用 ABC 与其他对象");
+            expect(result.warnings.length).toBeGreaterThan(0);
+            expect(result.knowledgeTerms).toEqual([]);
+        }
+    );
     it("removes only the newly exposed space between Chinese text", async () => {
         const result = await repairReadWeaveOptionalQualifiers("名称来自 ABC 喜剧","从何得名？",
             async()=>[ { token:"ABC",omit:true,reason:"多余的来源机构简称" } ]);
