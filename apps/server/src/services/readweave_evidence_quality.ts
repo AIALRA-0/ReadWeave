@@ -11,6 +11,32 @@ const NAMING_ASSERTION =
 const GUESS =
     /可能|大概|或许|似乎|暗示|猜测|推测|未.{0,12}(?:明确|给出|提供|确认)|无法确认|具体展开|perhaps|probably|might|may derive/iu;
 
+/** Explicit parenthesized names, not title initials or an inferred etymology. */
+export function readWeaveExplicitExpansions(text: string): Array<{ abbreviation: string; englishName: string }> {
+    const clean = text.replace(/[*_]/gu, "");
+    const entries: Array<{ abbreviation: string; englishName: string }> = [];
+    const name = "([A-Z][A-Za-z]*(?:[ -]+(?:[A-Z][A-Za-z]*|of|and|for|the)){1,11})";
+    for (const match of clean.matchAll(new RegExp(`${name}\\s*\\(([A-Z][A-Z0-9-]{1,15})\\)`, "gu"))) {
+        entries.push({ abbreviation: match[2], englishName: match[1].replace(/^The /u, "") });
+    }
+    for (const match of clean.matchAll(new RegExp(`\\b([A-Z][A-Z0-9-]{1,15})\\s*\\(${name}\\)`, "gu"))) {
+        entries.push({ abbreviation: match[1], englishName: match[2] });
+    }
+    return entries;
+}
+
+export function readWeaveResearchSubject(question: string, selected?: string): string {
+    const quoted = question.match(/[“"]([^”"\n]{1,120})[”"]/u)?.[1];
+    if (quoted) return quoted.trim();
+    const selection = selected?.trim();
+    if (selection && selection.length <= 100 && !/[。！？；\n]/u.test(selection)
+        && question.toLowerCase().includes(selection.toLowerCase())) return selection;
+    return question.split(/[？?，,；;。\n]/u)[0]
+        .replace(/^(?:请问|请介绍|请解释|请说明|什么是|什么叫)\s*/u, "")
+        .replace(/(?:的)?(?:官方|正式|完整|中文|英文)*(?:全称|缩写|名称|名字|命名|词源|得名|是什么意思|是什么|是谁|从何而来|从何得名)[\s\S]*$/u, "")
+        .trim() || question.trim();
+}
+
 /** Exact quotes are a provenance check, not an independent factual verdict. */
 export function checkReadWeaveNamingEvidence(
     body: string,
@@ -37,9 +63,24 @@ export function checkReadWeaveNamingEvidence(
             body.includes(entry.bodyText) &&
             !!source?.excerpt.includes(entry.quote) &&
             !GUESS.test(entry.bodyText) &&
-            NAMING_ASSERTION.test(entry.quote)
+            (NAMING_ASSERTION.test(entry.quote) || readWeaveExplicitExpansions(entry.quote).length > 0)
         );
     });
+    // A writer can omit namingEvidence even when a source explicitly gives
+    // the same name pair. Recover that direct provenance, never a guessed name.
+    const pairs = sources.flatMap(source => readWeaveExplicitExpansions(source.excerpt).map(pair => ({ ...pair, source })));
+    for (const clause of body.split(/(?<=[。；;！？!?])|\n+/u).map(text => text.trim())) {
+        if (GUESS.test(clause) || !/(?:全称|缩写|stands for)/iu.test(clause)) continue;
+        for (const pair of pairs) {
+            const normalized = clause.toLowerCase().replace(/\s+/gu, " ");
+            const conflicting = pairs.some(other => other.abbreviation === pair.abbreviation && other.englishName.toLowerCase() !== pair.englishName.toLowerCase());
+            if (!conflicting && new RegExp(`\\b${pair.abbreviation}\\b`, "u").test(clause)
+                && normalized.includes(pair.englishName.toLowerCase())) {
+                supported.push({ bodyText: clause, sourceId: pair.source.sourceId, quote: pair.source.excerpt });
+                break;
+            }
+        }
+    }
     const issues = body
         .split(/(?<=[。；;！？!?])|\n+/u)
         .map((text) => text.trim())

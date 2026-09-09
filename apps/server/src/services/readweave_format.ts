@@ -51,6 +51,7 @@ export function formatReadWeaveMarkdown(value: unknown): string {
     if (typeof value !== "string") return "";
     return mapReadWeaveProse(value, (text) =>
         normalizeSimpleMathNotation(text)
+            .replace(/\b([A-Z][A-Z0-9-]{1,15})\s*的(?:官方|完整|英文|中文)*全称(?:是|为)\s*([A-Za-z][A-Za-z -]{3,100})[（(]([\p{Script=Han}][\p{Script=Han}\s]{1,50})[)）]/gu, "$1 $3（$2）")
             .replace(/。(?=[ \t]*(?:\n|$))/gu, "")
             .replace(/。/gu, "；")
             .replace(/；(?=[ \t]*(?:\n|$))/gu, "")
@@ -61,6 +62,20 @@ export function formatReadWeaveMarkdown(value: unknown): string {
             .replace(/(?<=\p{Script=Han})(?=[A-Za-z0-9])/gu, " ")
             .replace(/(?<=[A-Za-z0-9])(?=\p{Script=Han})/gu, " ")
             .replace(/\n(?:[ \t]*\n){2,}/gu, "\n\n")
+            .replace(/^[^\n]+$/gmu, line => {
+                const clauses = line.split("；").map(part => part.trim()).filter(Boolean);
+                const isMeaning = (part: string) => /^(?:其中\s*)?[A-Za-z][A-Za-z -]{0,40}\s*(?:指|表示|意为|是指)/u.test(part);
+                let count = 0;
+                while (count < clauses.length && isMeaning(clauses[count])) count++;
+                if (count < 3) return line;
+                const list = clauses.slice(0, count).map(part => {
+                    const meaning = part.match(/^(?:其中\s*)?([A-Za-z][A-Za-z -]{0,40}?)\s*(?:指|表示|意为|是指)\s*([\p{Script=Han}]{1,12})(?:[，,](.*))?$/u);
+                    return meaning
+                        ? `- ${meaning[2]}（${meaning[1].trim()}）${meaning[3] ? `：${meaning[3].trim()}` : ""}`
+                        : `- ${part}`;
+                }).join("\n");
+                return list + (count < clauses.length ? `\n\n${clauses.slice(count).join("；")}` : "");
+            })
             .replace(
                 /^([^\n：（）()]{1,24}：)([^\n：；。]+、[^\n：；。]+、[^\n：；。]+)$/gmu,
                 (_all, prefix: string, items: string) =>

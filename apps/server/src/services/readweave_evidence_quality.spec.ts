@@ -4,8 +4,26 @@ import { describe, expect, it } from "vitest";
 import {
     checkReadWeaveNamingEvidence,
     omitUnsupportedReadWeaveNaming,
+    readWeaveExplicitExpansions,
+    readWeaveResearchSubject,
 } from "./readweave_evidence_quality.js";
 describe("naming provenance, not a semantic truth certificate", () => {
+    it("extracts the selected entity instead of quoting an instruction as an entity", () => {
+        expect(readWeaveResearchSubject("XPT 的官方英文全称是什么？请解释这些词，不要猜测名称来历", "XPT")).toBe("XPT");
+        expect(readWeaveResearchSubject("Lumen 的名称来源是什么？")).toBe("Lumen");
+        expect(readWeaveResearchSubject("量子点是什么？", "这是一段量子点的背景材料")).toBe("量子点");
+    });
+    it("recognizes explicit name pairs without inferring a name from a paper title", () => {
+        expect(readWeaveExplicitExpansions("**Example Packet Transfer (XPT)**")).toEqual([{ abbreviation: "XPT", englishName: "Example Packet Transfer" }]);
+        expect(readWeaveExplicitExpansions("XPT: An Experimental Packet Tool")).toEqual([]);
+    });
+    it("retains a directly paired full name even if the writer omitted the provenance field", () => {
+        const text = "XPT 的官方英文全称是 Example Packet Transfer（示例分组传输）。";
+        const checked = checkReadWeaveNamingEvidence(text, [], [{sourceId:"S1", excerpt:"Example Packet Transfer (XPT) provides an example."}] as never);
+        expect(checked.issues).toEqual([]);
+        expect(checked.supported[0].sourceId).toBe("S1");
+        expect(checkReadWeaveNamingEvidence(text.replace("Example", "Invented"), [], [{sourceId:"S1",excerpt:"Example Packet Transfer (XPT)"}] as never).issues).toHaveLength(1);
+    });
     const quote = "Lumen is named after the unit of luminous flux";
     const source = { sourceId: "S1", excerpt: quote } as ReadWeaveEvidenceSource;
     const body = "名称源于光通量单位";

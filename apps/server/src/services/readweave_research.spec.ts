@@ -8,6 +8,7 @@ vi.mock("./readweave_search.js", () => ({
 import {
     readWeaveEvidenceWindow,
     readWeaveMissingNamingFacts,
+    readWeaveNamingRequirements,
     researchReadWeaveEvidence,
 } from "./readweave_research.js";
 const contract = {
@@ -29,6 +30,19 @@ const result = (snippet: string, cost = 0.0072) => ({
     searchCostCny: cost,
 });
 describe("bounded targeted research", () => {
+    it("does not turn an exclusion into an expensive origin requirement", () => {
+        expect(readWeaveNamingRequirements("XPT 的英文全称是什么？请解释这些词，不要猜测名称来历")).toEqual(["expansion"]);
+        expect(readWeaveNamingRequirements("Lumen 从何得名？")).toEqual(["origin"]);
+    });
+    it("searches the short subject and stops after a direct full-name source", async () => {
+        search.mockResolvedValue(result("Example Packet Transfer (XPT) is the formal name."));
+        const r = await researchReadWeaveEvidence({ ...contract, normalizedQuestion:"XPT 的官方英文全称是什么？请解释这些词，不要猜测名称来历" }, "XPT", .02, true, ()=>{}, undefined, "XPT");
+        expect(search).toHaveBeenCalledTimes(1);
+        expect(search.mock.calls[0][0].query).toBe('"XPT" full name official documentation');
+        expect(r.audit.stopReason).toBe("sufficient");
+        expect(r.audit.missingFacts).toEqual([]);
+        expect(r.searchCostCny).toBe(.0072);
+    });
     beforeEach(() => {
         vi.clearAllMocks();
         search.mockResolvedValue(result("Lumen is a software library"));

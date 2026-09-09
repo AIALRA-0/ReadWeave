@@ -7,6 +7,17 @@ import {
 } from "./readweave_format.js";
 
 describe("versioned formatting contract", () => {
+    it("normalizes a supplied bilingual name without inventing either name", () => {
+        expect(formatReadWeaveMarkdown("XPT 的官方英文全称是 Example Packet Transfer（示例分组传输）。"))
+            .toBe("XPT 示例分组传输（Example Packet Transfer）");
+    });
+    it("separates three explicit word meanings but leaves connected mechanisms alone", () => {
+        const input = "Example 指示例；Packet 指分组；Transfer 指传输；这是一段后续说明";
+        const formatted = formatReadWeaveMarkdown(input);
+        expect(formatted).toBe("- 示例（Example）\n- 分组（Packet）\n- 传输（Transfer）\n\n这是一段后续说明");
+        expect(formatReadWeaveMarkdown(formatted)).toBe(formatted);
+        expect(formatReadWeaveMarkdown("先读入记录；计算结果；保存摘要")).toBe("先读入记录；计算结果；保存摘要");
+    });
     const protectedCases = [
         "https://example.org/a?x=1&y=2",
         "`const x = {a: 1};`",

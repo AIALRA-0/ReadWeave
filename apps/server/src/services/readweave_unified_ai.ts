@@ -33,7 +33,7 @@ import { selectReadWeaveContext } from "./readweave_engine.js";
 import { NonRetryableReadWeaveError } from "./readweave_errors.js";
 import { checkReadWeaveNamingEvidence, omitUnsupportedReadWeaveNaming } from "./readweave_evidence_quality.js";
 import { formatReadWeaveMarkdown, READWEAVE_FORMAT_VERSION,readWeaveFormatIssues, repairReadWeaveFormat } from "./readweave_format.js";
-import { researchReadWeaveEvidence } from "./readweave_research.js";
+import { readWeaveNamingRequirements, researchReadWeaveEvidence } from "./readweave_research.js";
 import {
     getReadWeaveRuntimeConfig,
     getReadWeaveSearchRuntimeConfig,
@@ -661,9 +661,9 @@ export function sourceMatchesReadWeaveEvidenceFocus(
 
 async function _gatherExternalEvidence(
     contract: ReadWeaveQuestionContract, context: string, onStatus: (message: string) => void,
-    signal?: AbortSignal, searchBudgetCny = 0.02, namingRequired = false
+    signal?: AbortSignal, searchBudgetCny = 0.02, namingRequired = false, selectedSubject?: string
 ) {
-    return researchReadWeaveEvidence(contract, context, searchBudgetCny, namingRequired, onStatus, signal);
+    return researchReadWeaveEvidence(contract, context, searchBudgetCny, namingRequired, onStatus, signal, selectedSubject);
 }
 
 function evidenceBlock(sources: ReadWeaveEvidenceSource[], excerptMaximum = 900): string {
@@ -2681,8 +2681,9 @@ export async function generateUnifiedReadWeaveAnswer(
 ): Promise<ReadWeaveGenerateResponse> {
     if (!request || typeof request !== "object") throw new ValidationError("ReadWeave 生成请求无效");
     const originalQuestion = normalizeQuestion(request);
-    const namingRequired = request.kind === "term" || /得名|命名|词源|名称.{0,12}(?:来历|来源)|缩写.{0,12}(?:全称|展开)|acronym|etymology/iu.test(originalQuestion);
-    const budgetCny = namingRequired ? 0.10 : COST_BUDGET_CNY;
+    const namingRequirements = readWeaveNamingRequirements(originalQuestion, false);
+    const namingRequired = request.kind === "term" || namingRequirements.length > 0;
+    const budgetCny = request.kind === "term" || namingRequirements.includes("origin") ? 0.10 : COST_BUDGET_CNY;
     const budget = new ReadWeaveBudget(budgetCny);
     if (!originalQuestion) throw new ValidationError("问题或术语不能为空");
     if (!Array.isArray(request.fragments) || request.fragments.length === 0) throw new ValidationError("生成回答需要文章选区或上下文");
@@ -2840,7 +2841,7 @@ export async function generateUnifiedReadWeaveAnswer(
     const shouldGatherExternal = externalSearchDecision.required;
     if (shouldGatherExternal) {
         try {
-            external = await _gatherExternalEvidence(contract, context, message => report("gathering-context", message), signal, budgetCny - 0.03, namingRequired);
+            external = await _gatherExternalEvidence(contract, context, message => report("gathering-context", message), signal, budgetCny - 0.03, namingRequired, selectedFragment);
             budget.reserve(external.searchCostCny);
         } catch (error) {
             signal?.throwIfAborted();
@@ -2886,6 +2887,11 @@ export async function generateUnifiedReadWeaveAnswer(
     if (selectedVerifiedArtifact) termIdentity = undefined;
     // No whole-body catalog rewrites or subject substitutions after writing.
     const namingCheck = checkReadWeaveNamingEvidence(body, writer.value.namingEvidence, sources);
+    for (const supported of namingCheck.supported) {
+        if (supported.bodyText && supported.sourceId && !claims.some(claim => claim.text === supported.bodyText)) {
+            claims.push(enrichReadWeaveClaim({ claimId: `naming-${claims.length + 1}`, text: supported.bodyText, sourceIds: [supported.sourceId], confidence: "medium" }, sources, domainProfile));
+        }
+    }
     body = omitUnsupportedReadWeaveNaming(body, namingCheck.issues);
     if (namingCheck.issues.length && termIdentity?.englishName) {
         const name = termIdentity.englishName.toLocaleLowerCase().replace(/\s+/gu, " ");

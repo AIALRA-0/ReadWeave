@@ -5,6 +5,7 @@ import type {
 } from "@triliumnext/commons";
 
 import { READWEAVE_RESEARCH_ACTION_LIMIT,ReadWeaveBudget } from "./readweave_budget.js";
+import { readWeaveExplicitExpansions, readWeaveResearchSubject } from "./readweave_evidence_quality.js";
 import { readReadWeavePageWithJina, searchReadWeaveEvidence } from "./readweave_search.js";
 
 export function readWeaveEvidenceWindow(text: string, question: string, limit = 1800): string {
@@ -21,19 +22,28 @@ export function readWeaveEvidenceWindow(text: string, question: string, limit = 
     return text.slice(start, start + limit);
 }
 
-export function readWeaveMissingNamingFacts(sources: ReadWeaveEvidenceSource[], subject?: string): string[] {
+export function readWeaveNamingRequirements(question: string, fallback = true): Array<"expansion" | "origin"> {
+    const requested = question.split(/[，,；;。！？?\n]/u)
+        .filter(clause => !/^\s*(?:不要|不用|无需|不必|禁止|不得|请勿)/u.test(clause)).join(" ");
+    const requirements: Array<"expansion" | "origin"> = [];
+    if (/全称|展开|缩写|acronym|abbreviation|full name|stands for/iu.test(requested)) requirements.push("expansion");
+    if (/得名|命名|词源|名称.{0,12}(?:来历|来源)|从何而来|named after|etymology|name origin/iu.test(requested)) requirements.push("origin");
+    return requirements.length || !fallback ? requirements : ["expansion", "origin"];
+}
+
+export function readWeaveMissingNamingFacts(sources: ReadWeaveEvidenceSource[], subject?: string, requirements: Array<"expansion" | "origin"> = ["expansion", "origin"]): string[] {
     // A naming cue for a different object must not terminate this object's
     // research. Keep the subject and the assertion in the same short passage.
     const text = sources.flatMap(s => s.excerpt.split(/(?<=[.!?。！？])\s+|\n/gu))
         .filter(passage => !subject || passage.toLocaleLowerCase().includes(subject.toLocaleLowerCase()))
         .join("\n");
     return [
-        ...(/stands for|abbreviation (?:of|for)|acronym (?:of|for)|全称(?:为|是)|(?:简称|缩写)(?:为|是)|不是缩写|not an acronym/iu.test(
+        ...(!requirements.includes("expansion") || readWeaveExplicitExpansions(text).some(pair => !subject || pair.abbreviation.toLowerCase() === subject.toLowerCase()) || /stands for|abbreviation (?:of|for)|acronym (?:of|for)|全称(?:为|是)|(?:简称|缩写)(?:为|是)|不是缩写|not an acronym/iu.test(
             text,
         )
             ? []
             : ["正式展开或专名属性"]),
-        ...(/named (?:after|for)|name (?:comes|derives)|得名|命名.{0,30}(?:源于|来自|纪念)|词源/iu.test(
+        ...(!requirements.includes("origin") || /named (?:after|for)|name (?:comes|derives)|得名|命名.{0,30}(?:源于|来自|纪念)|词源/iu.test(
             text,
         )
             ? []
@@ -48,6 +58,7 @@ export async function researchReadWeaveEvidence(
     namingRequired: boolean,
     onStatus: (text: string) => void,
     signal?: AbortSignal,
+    selectedSubject?: string,
 ) {
     const ledger = new ReadWeaveBudget(searchBudgetCny);
     const sources: ReadWeaveEvidenceSource[] = [];
@@ -55,10 +66,13 @@ export async function researchReadWeaveEvidence(
     const seenUrls = new Set<string>();
     const readUrls = new Set<string>();
     const seenQueries = new Set<string>();
-    const subject =
-        contract.normalizedQuestion.match(/[“"]([^”"]+)[”"]/u)?.[1] ??
-        contract.normalizedQuestion.replace(/[？?]/gu, "");
-    const queries = [...contract.searchQueries];
+    const subject = readWeaveResearchSubject(contract.normalizedQuestion, selectedSubject);
+    const requirements = readWeaveNamingRequirements(contract.normalizedQuestion);
+    const targeted = [
+        ...(requirements.includes("expansion") ? [`"${subject}" full name official documentation`, `"${subject}" stands for acronym`] : []),
+        ...(requirements.includes("origin") ? [`"${subject}" name origin official documentation`, `"${subject}" named after etymology`] : [])
+    ];
+    const queries = namingRequired ? [...targeted] : [...contract.searchQueries];
     const audit: ReadWeaveResearchAudit = {
         budgetCny: searchBudgetCny,
         searchCostCny: 0,
@@ -69,14 +83,7 @@ export async function researchReadWeaveEvidence(
         queries: [],
         missingFacts: [],
     };
-    if (namingRequired)
-        queries.push(
-            `"${subject}" official documentation name origin`,
-            `"${subject}" stands for acronym`,
-            `"${subject}" named after etymology`,
-            `"${subject}" original paper naming`,
-            `"${subject}" 名称 来历 全称`,
-        );
+    if (namingRequired) queries.push(`"${subject}" ${requirements.includes("origin") ? "名称 来历" : "官方全称"}`);
     const started = Date.now();
     for (let index = 0; index < queries.length; index++) {
         signal?.throwIfAborted();
@@ -180,16 +187,16 @@ export async function researchReadWeaveEvidence(
                 );
             }
         }
-        audit.missingFacts = namingRequired ? readWeaveMissingNamingFacts(sources, subject) : [];
+        audit.missingFacts = namingRequired ? readWeaveMissingNamingFacts(sources, subject, requirements) : [];
         if (sources.length && (!namingRequired || audit.missingFacts.length === 0)) {
             audit.stopReason = "sufficient";
             break;
         }
-        if (namingRequired && index === contract.searchQueries.length - 1) {
+        if (namingRequired && index === targeted.length - 1) {
             for (const source of sources.slice(0, 6)) {
                 if (!source.url) continue;
                 queries.push(
-                    `site:${new URL(source.url).hostname} "${subject}" name origin acronym`,
+                    `site:${new URL(source.url).hostname} "${subject}" ${requirements.includes("origin") ? "name origin" : "full name"}`,
                 );
             }
         }

@@ -928,6 +928,25 @@ describe.skip("ReadWeave retired multi-stage workflow", () => {
 });
 
 describe("ReadWeave one-pass workflow", () => {
+    it("delivers an explicitly sourced full name with one search and no invented origin requirement", async () => {
+        searchMock.mockImplementation(async options => ({
+            ...await defaultSearchImplementation(options),
+            sources: [{provider:"Official documentation", title:"Example Packet Transfer", url:"https://example.org/xpt", snippet:"Example Packet Transfer (XPT) is the formal name used by this specification.", publishedAt:"2025-01-01", score:100}],
+            searchCostCny: .0072
+        }));
+        installModel([], "XPT 的官方英文全称是 Example Packet Transfer（示例分组传输）。\n\nExample 指示例；Packet 指分组；Transfer 指传输");
+        const result = await generateUnifiedReadWeaveAnswer({
+            ...request("XPT 的官方英文全称是什么？请解释这些词，不要猜测名称来历"),
+            fragments:[{id:"selected",role:"selected",text:"XPT"}]
+        });
+        expect(result.body).toContain("XPT 示例分组传输（Example Packet Transfer）");
+        expect(result.body).toContain("- 示例（Example）\n- 分组（Packet）\n- 传输（Transfer）");
+        expect(result.evidenceSources?.some(source=>source.sourceId==="S1")).toBe(true);
+        expect(result.audit?.research).toMatchObject({queryCount:1,stopReason:"sufficient",missingFacts:[]});
+        expect(result.usage).toMatchObject({modelCalls:1,budgetCny:.05,withinBudget:true});
+        expect(searchMock).toHaveBeenCalledTimes(1);
+        expect(result.qualityState).toBe("provisional");
+    });
     beforeEach(() => {
         searchMock.mockReset();
         searchMock.mockImplementation(defaultSearchImplementation);
