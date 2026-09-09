@@ -975,7 +975,7 @@ describe("ReadWeave one-pass workflow", () => {
             ...request("总结选区"), contentType:"key-point"
         });
         expect(result.body).toBe("- 记录保留 3 天，不上传原始文件");
-        expect(result.claims.flatMap(claim => claim.sourceIds)).toEqual([]);
+        expect(result.claims?.flatMap(claim => claim.sourceIds)).toEqual([]);
         expect(fetch).toHaveBeenCalledTimes(1);
     });
     it("keeps writing with oversized search results and reserves complete output space", async () => {
@@ -1412,7 +1412,7 @@ describe("third-party provider and prepaid answer delivery", () => {
         const result = await generateUnifiedReadWeaveAnswer(request("这是什么？"));
         expect(result.body).toBe("保留完整回答");
         expect(result.usage?.withinBudget).toBe(false);
-        expect(result.audit.unresolvedIssues?.join(" ")).toContain("费用");
+        expect(result.audit?.unresolvedIssues?.join(" ")).toContain("费用");
         expect(result.unresolvedIssues).toEqual([]);
         expect(fetch).toHaveBeenCalledTimes(1);
     });
