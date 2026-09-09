@@ -106,7 +106,7 @@ interface PlannerPayload {
 interface WriterPayload {
     summaryPoints?: unknown;
     namingEvidence?: unknown;
-    body?: string;
+    body?: unknown;
     optimizedTitle?: string;
     termIdentity?: Partial<ReadWeaveTermIdentity>;
     claims?: unknown;
@@ -823,12 +823,12 @@ function writerSystemPrompt(
         ...HUMAN_READABLE_CHINESE_STYLE_CONTRACT,
         "termIdentity 使用对象字段 abbreviation、chineseName、englishName；能确认的中英文名称分别填入",
         "不能把全名填进缩写字段，也不能只在正文写全名却遗漏结构字段",
-        "只输出 JSON：body、optimizedTitle、termIdentity、definitionFields、claims、"
-            + "unresolvedClaims、namingEvidence；"
-            + "claims 包含 claimId、text、sourceIds、confidence；不得伪造来源或认为自报 high 就是核实通过",
         contentType === "key-point"
-            ? '总结时用 summaryPoints 代替 body，例如 {"summaryPoints":[{"text":"一项完整知识点",'
-                + '"sourceIds":["文章来源编号"]}]}；每项绑定实际来源，不复制示例文字或虚构编号' : ""
+            ? '只输出 JSON 对象，summaryPoints 必须在顶层，不放进 body；例如 {"summaryPoints":[{"text":"一项完整知识点",'
+                + '"sourceIds":["文章来源编号"]}]}；每项绑定实际来源，不复制示例文字或虚构编号'
+            : "只输出 JSON：body、optimizedTitle、termIdentity、definitionFields、claims、"
+                + "unresolvedClaims、namingEvidence；"
+                + "claims 包含 claimId、text、sourceIds、confidence；不得伪造来源或认为自报 high 就是核实通过"
     ].filter(Boolean).join("\n");
 }
 
@@ -3061,7 +3061,10 @@ export async function generateUnifiedReadWeaveAnswer(
         : undefined;
     if (personSubject) body = formatReadWeavePersonNameOrder(body, personSubject);
     if (request.contentType === "key-point") {
-        const rawPoints = writer.value.summaryPoints;
+        const returnedBody = writer.value.body;
+        const rawPoints = writer.value.summaryPoints ?? (returnedBody
+            && typeof returnedBody === "object" && "summaryPoints" in returnedBody
+            ? returnedBody.summaryPoints : undefined);
         const points = Array.isArray(rawPoints) ? rawPoints.map(point => ({
             text: typeof point === "string" ? point : point?.text,
             sourceIds: (Array.isArray(point?.sourceIds) ? point.sourceIds : [])

@@ -945,6 +945,7 @@ describe("ReadWeave one-pass workflow", () => {
         vi.stubGlobal("fetch",vi.fn(async (_input,init) => {
             const payload = JSON.parse(String(init?.body));
             expect(payload.messages[0].content).toContain("summaryPoints");
+            expect(payload.messages[0].content).not.toContain("只输出 JSON：body");
             expect(payload.messages[1].content).not.toContain("解释必要背景");
             return Response.json({ choices:[ { message:{ content:JSON.stringify({
                 summaryPoints:points.map(text=>({ text,sourceIds:[ "L1" ] })) }) } } ],
@@ -965,6 +966,7 @@ describe("ReadWeave one-pass workflow", () => {
     it.each([
         { summaryPoints:[ { text:"记录保留 3 天，不上传原始文件", sourceIds:[ "unknown" ] } ] },
         { summaryPoints:[ "记录保留 3 天，不上传原始文件" ] },
+        { body:{ summaryPoints:[ { text:"记录保留 3 天，不上传原始文件" } ] } },
         { body:"记录保留 3 天，不上传原始文件" }
     ])("accepts summary layout variants without inventing source bindings", async payload => {
         vi.stubGlobal("fetch", vi.fn(async () => Response.json({
