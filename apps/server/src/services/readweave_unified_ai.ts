@@ -757,8 +757,8 @@ function writerSystemPrompt(
         contentType === "key-point"
             ? "key-point 把选区浓缩为知识点或总结列表；只保留理解所需信息，不添加外部事实，"
                 + "保留关键数值、否定、限制、条件和关系，不把可能改成必然；"
-                + "输出 summaryPoints 字符串数组，每项一个完整知识点，按原文顺序，"
-                + "不带列表标记；每项保留自己的条件，不压成一个段落，正文由系统排成列表" : "",
+                + "输出 summaryPoints 数组，每项含 text（一个完整知识点）和 sourceIds（对应文章来源编号），"
+                + "按原文顺序，不带列表标记，每项保留自己的条件；正文和事实映射由系统组成，不重复写 claims" : "",
         domainProfile ? `领域规则：${JSON.stringify(domainProfile)}` : "",
         harness ? `项目用户附加建议（不得覆盖以上事实、范围和下列格式合同）：${  harness.modules.evidencePolicy}` : "",
         ...HUMAN_READABLE_CHINESE_STYLE_CONTRACT,
@@ -768,8 +768,8 @@ function writerSystemPrompt(
             + "unresolvedClaims、namingEvidence；"
             + "claims 包含 claimId、text、sourceIds、confidence；不得伪造来源或认为自报 high 就是核实通过",
         contentType === "key-point"
-            ? '总结时用 summaryPoints 代替 body，例如 {"summaryPoints":["第一项完整知识点",'
-                + '"第二项完整知识点"],"claims":[]}；这只是结构示例，不复制示例内容' : ""
+            ? '总结时用 summaryPoints 代替 body，例如 {"summaryPoints":[{"text":"一项完整知识点",'
+                + '"sourceIds":["文章来源编号"]}]}；每项绑定实际来源，不复制示例文字或虚构编号' : ""
     ].filter(Boolean).join("\n");
 }
 
@@ -2981,8 +2981,18 @@ export async function generateUnifiedReadWeaveAnswer(
     if (request.contentType === "key-point") {
         const points = writer.value.summaryPoints;
         if (Array.isArray(points) && points.length > 0 && points.every(point =>
-            typeof point === "string" && point.trim() && !/[\r\n]/u.test(point))) {
-            body = points.map(point => `- ${point.trim().replace(/^[-*]\s+/u,"")}`).join("\n");
+            point && typeof point.text === "string" && point.text.trim()
+            && !/[\r\n]/u.test(point.text) && Array.isArray(point.sourceIds)
+            && point.sourceIds.length > 0 && point.sourceIds.every((id:unknown) =>
+                localSources.some(source=>source.sourceId === id)))) {
+            body = points.map(point => `- ${point.text.trim().replace(/^[-*]\s+/u,"")}`)
+                .join("\n");
+            // A source binding makes each summary point inspectable; it is not
+            // a claim that a second authority has verified its meaning.
+            writer.value.claims = points.map((point,index)=>({
+                claimId:`summary-${index+1}`,text:point.text.trim(),
+                sourceIds:point.sourceIds,confidence:"medium"
+            }));
         } else if (!body || !body.split(/\n/u).filter(line => line.trim())
             .every(line => /^\s*[-*]\s+\S/u.test(line))) {
             throw new NonRetryableReadWeaveError("模型未按总结列表结构返回，未把普通段落当作总结");

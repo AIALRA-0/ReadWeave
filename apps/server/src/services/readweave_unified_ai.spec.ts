@@ -936,7 +936,7 @@ describe("ReadWeave one-pass workflow", () => {
             expect(payload.messages[0].content).toContain("summaryPoints");
             expect(payload.messages[1].content).not.toContain("解释必要背景");
             return Response.json({ choices:[ { message:{ content:JSON.stringify({
-                summaryPoints:points,claims:[] }) } } ],
+                summaryPoints:points.map(text=>({ text,sourceIds:[ "L1" ] })) }) } } ],
             usage:{ prompt_tokens:1000,completion_tokens:100 } });
         }));
         const result = await generateUnifiedReadWeaveAnswer({
@@ -946,6 +946,10 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.body).toBe(points.map(point=>`- ${point}`).join("\n"));
         expect(result.usage?.modelCalls).toBe(1);
         expect(searchMock).not.toHaveBeenCalled();
+        // The existing audit normalizer uses NFKC; visible body stays unchanged.
+        expect(result.claims?.map(claim=>claim.text))
+            .toEqual(points.map(text=>text.normalize("NFKC")));
+        expect(result.audit?.validationIssues).toEqual([]);
     });
     it("records search costs even when oversized input prevents writing", async () => {
         const progress: ReadWeaveGenerationProgress[] = [];
