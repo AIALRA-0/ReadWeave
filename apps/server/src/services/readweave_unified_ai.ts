@@ -227,7 +227,10 @@ async function requestJson<T>(
     const isKimiCode = providerHost === "api.kimi.com";
     const effectiveMaxTokens = isKimiCode ? Math.max(maxTokens, 4_096) : maxTokens;
     const effectiveTimeoutMs = isKimiCode ? Math.max(timeoutMs, 30_000) : timeoutMs;
-    const reservation = readWeaveModelReservation(system, user, effectiveMaxTokens);
+    // JSON-mode providers require an explicit JSON instruction in the messages,
+    // including small repair prompts that only show an object-shaped example.
+    const jsonSystem = /json/iu.test(system) ? system : `${system}\n只返回合法 JSON 对象`;
+    const reservation = readWeaveModelReservation(jsonSystem, user, effectiveMaxTokens);
     if (budget && !budget.reserve(reservation)) {
         throw new NonRetryableReadWeaveError("剩余预算不足以预留本次调用，未发起请求：需要约 ¥"
             + reservation.toFixed(4) + "，剩余 ¥" + budget.remainingCny.toFixed(4));
@@ -258,7 +261,7 @@ async function requestJson<T>(
                         ...(isDeepSeek && /^deepseek-v4(?:-|$)/iu.test(config.model) ? { thinking: { type: "disabled" } } : {})
                     } : {}),
                     messages: [
-                        { role: "system", content: system },
+                        { role: "system", content: jsonSystem },
                         { role: "user", content: user }
                     ]
                 }),
@@ -3033,8 +3036,9 @@ export async function generateUnifiedReadWeaveAnswer(
                     + terminology.knowledgeTerms.join("、"));
         } catch (error) {
             signal?.throwIfAborted();
-            report("checking", "局部术语请求未完成，保留原文", [ error instanceof SyntaxError
-                ? "响应不是合法 JSON" : "请求失败或响应结构不符，用量已单独记录" ]);
+            report("checking", "局部术语请求未完成，保留原文", [ error instanceof Error
+                && error.message.startsWith("ReadWeave 无法生成")
+                ? error.message : "响应结构不符，用量已单独记录" ]);
             // Preserve the sourced body; the formatter still reports missing annotations.
         }
     }

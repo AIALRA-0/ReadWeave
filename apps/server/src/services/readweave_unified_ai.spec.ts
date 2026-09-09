@@ -928,6 +928,34 @@ describe.skip("ReadWeave retired multi-stage workflow", () => {
 });
 
 describe("ReadWeave one-pass workflow", () => {
+    it("enforces JSON-mode instructions for the local terminology request", async () => {
+        const body = "Lumen 得名于光通量单位，象征将 ABC 与其他对象连接";
+        const quote = "Lumen was named after a light unit to connect ABC with other objects.";
+        searchMock.mockImplementation(async options => ({
+            ...await defaultSearchImplementation(options),
+            sources:[ { provider:"Official documentation",title:"Lumen name",
+                url:"https://example.org/lumen",snippet:quote,score:100,publishedAt:"2025-01-01" } ]
+        }));
+        let calls = 0;
+        vi.stubGlobal("fetch",vi.fn(async (_input,init) => {
+            const payload = JSON.parse(String(init?.body));
+            expect(payload.response_format).toEqual({ type:"json_object" });
+            expect(payload.messages[0].content).toMatch(/json/iu);
+            const content = calls++ === 0
+                ? { body,claims:[],namingEvidence:[ { bodyText:body,sourceId:"S1",quote } ] }
+                : { terms:[ { token:"ABC",chineseName:"示例连接",englishName:"Alpha Beta Connection",
+                    confidence:"high",basis:"established-usage",contextReason:"指连接" } ] };
+            return Response.json({ model:"deepseek-v4-flash",
+                choices:[ { message:{ content:JSON.stringify(content) } } ],
+                usage:{ prompt_tokens:1000,completion_tokens:100,total_tokens:1100 } });
+        }));
+        const result = await generateUnifiedReadWeaveAnswer({ ...request("Lumen 的名称来历？"),
+            fragments:[ { id:"selected",role:"selected",text:"Lumen" } ] });
+        expect(calls).toBe(2);
+        expect(result.body).toContain("ABC 示例连接（Alpha Beta Connection）与其他对象");
+        expect(result.usage?.modelCalls).toBe(2);
+        expect(result.audit?.validationIssues).toEqual([]);
+    });
     it.each([ "empty", "malformed", "transport" ])(
         "retains attempt costs when generation fails: %s", async mode => {
             const progress: ReadWeaveGenerationProgress[] = [];
