@@ -67,11 +67,30 @@ export function checkReadWeaveNamingEvidence(
     evidence: unknown,
     sources: ReadWeaveEvidenceSource[],
 ) {
-    const entries = Array.isArray(evidence) ? (evidence as Partial<ReadWeaveNamingEvidence>[]) : [];
+    const rawEntries: Partial<ReadWeaveNamingEvidence>[] = Array.isArray(evidence) ? evidence : [];
+    const entries = rawEntries
+        .map(entry => {
+            if (typeof entry?.quote !== "string") return entry;
+            const quote = normalizeReadWeaveEvidenceText(entry.quote);
+            if (NAMING_ASSERTION.test(quote)) return entry;
+            const excerpt = normalizeReadWeaveEvidenceText(
+                sources.find(source => source.sourceId === entry.sourceId)?.excerpt ?? ""
+            );
+            const start = excerpt.indexOf(quote);
+            if (quote.length < 12 || start < 0 || start !== excerpt.lastIndexOf(quote))
+                return entry;
+            // Writers sometimes quote the inspiration but omit the immediately
+            // following naming decision. Complete that one contiguous sentence
+            // from the actual source, never search another section for a cue.
+            const next = excerpt.slice(start + quote.length)
+                .match(/^(?:[.!?](?=\s|$))?\s*([^#\n]{1,240}?(?:[.!?](?=\s|$)|$))/u)?.[0];
+            return next && NAMING_ASSERTION.test(next)
+                ? { ...entry, quote: quote + next } : entry;
+        });
     const diagnostics: string[] = [];
     const supported = entries.filter((entry) => {
         if (
-            typeof entry.bodyText !== "string" ||
+            typeof entry?.bodyText !== "string" ||
             typeof entry.sourceId !== "string" ||
             typeof entry.quote !== "string"
         )

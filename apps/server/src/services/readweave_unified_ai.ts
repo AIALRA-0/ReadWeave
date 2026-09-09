@@ -42,7 +42,9 @@ import {
     readWeaveFormatIssues,
     repairReadWeaveFormat
 } from "./readweave_format.js";
-import { readWeaveNamingRequirements, researchReadWeaveEvidence } from "./readweave_research.js";
+import {
+    readWeaveNamingRequirements, readWeaveNamingSourceGuidance, researchReadWeaveEvidence
+} from "./readweave_research.js";
 import {
     getReadWeaveRuntimeConfig,
     getReadWeaveSearchRuntimeConfig,
@@ -2617,6 +2619,8 @@ function writerInput(
             : "回答构造流已经生成，但本次没有勾选自动采用；只按原问题直接回答，不要套用未传入的构造流步骤，也不要因此省略必要的定义、机制或边界",
         "可用证据：",
         evidenceBlock(evidence),
+        readWeaveNamingSourceGuidance(evidence, contract.normalizedQuestion,
+            request.fragments?.find(fragment => fragment.role === "selected")?.text),
         "",
         request.feedback?.trim() ? `用户修正意见：\n${request.feedback.trim().slice(0, 2_000)}` : "",
         previous ? `上一版正文：\n${previous.body}\n\n必须修复的问题：\n${previous.issues.join("\n")}` : "",

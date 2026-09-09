@@ -9,6 +9,7 @@ import {
     readWeaveEvidenceWindow,
     readWeaveMissingNamingFacts,
     readWeaveNamingRequirements,
+    readWeaveNamingSourceGuidance,
     researchReadWeaveEvidence,
 } from "./readweave_research.js";
 const contract = {
@@ -102,6 +103,24 @@ describe("bounded targeted research", () => {
                 { excerpt: "Lumen: A Low-latency Universal Memory ENgine" },
             ] as never),
         ).toHaveLength(2);
+    });
+    it("directs naming writing to the relevant first-hand-looking page, not rank one", () => {
+        const source = { sourceType:"external",retrievalMode:"page-reader",title:"Name history",
+            excerpt:"Lumen is named after a light unit" };
+        const sources = [
+            { ...source,sourceId:"S1",url:"https://reference.example/lumen",originalRank:1 },
+            { ...source,sourceId:"S2",url:"https://lumen.org/about",originalRank:3 }
+        ];
+        const guide = readWeaveNamingSourceGuidance(sources as never, "Lumen 从何得名？");
+        expect(guide).toContain("首读原文：[S2]");
+        expect(guide).toContain("若发现矛盾，分别归因");
+        expect(readWeaveNamingSourceGuidance(sources as never, "怎样使用 Lumen？")).toBe("");
+        expect(readWeaveNamingSourceGuidance([
+            { ...sources[1],retrievalMode:"search-snippet" }
+        ] as never, "Lumen 从何得名？")).toBe("");
+        expect(readWeaveNamingSourceGuidance([
+            { ...sources[1],excerpt:"Other is named after Lumen" }
+        ] as never, "Unknown 从何得名？")).toBe("");
     });
     it("stops within the available budget, not after twenty arbitrary calls", async () => {
         const r = await researchReadWeaveEvidence(contract, "context", 0.015, true, () => {});

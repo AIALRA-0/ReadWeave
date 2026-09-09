@@ -109,6 +109,30 @@ describe("naming provenance, not a semantic truth certificate", () => {
             [ { sourceId:"S1",excerpt:accented } ] as ReadWeaveEvidenceSource[]).issues)
             .toHaveLength(1);
     });
+    it("completes an adjacent naming decision without a model call", async () => {
+        const quote = 'While building Lumen, the author read "Light Stories".';
+        const decision = " She decided to call the tool Lumen after the story.";
+        const body = "Lumen 的名称来自 Light Stories。";
+        const repair = vi.fn();
+        const result = await repairReadWeaveNamingEvidence(body,
+            [ { bodyText:body, sourceId:"S1", quote } ],
+            [ { sourceId:"S1", excerpt:quote + decision } ] as ReadWeaveEvidenceSource[], repair);
+        expect(result.body).toBe(body);
+        expect(result.check.issues).toEqual([]);
+        expect(result.check.supported[0].quote).toBe(quote + decision);
+        expect(repair).not.toHaveBeenCalled();
+        expect(checkReadWeaveNamingEvidence(body,
+            [ { bodyText:body, sourceId:"S1", quote:quote.slice(0, -1) } ],
+            [ { sourceId:"S1", excerpt:quote + decision } ] as ReadWeaveEvidenceSource[]
+        ).issues).toEqual([]);
+        for (const separator of [ " ## Another subject ", " Unrelated. " ]) {
+            expect(checkReadWeaveNamingEvidence(body,
+                [ { bodyText:body, sourceId:"S1", quote } ],
+                [ { sourceId:"S1", excerpt:quote + separator + decision }
+                ] as ReadWeaveEvidenceSource[]
+            ).issues).toEqual([ body ]);
+        }
+    });
     it("rejects speculative source text even when the output hides its uncertainty", () => {
         const excerpt = "Lumen was perhaps named after the light unit";
         expect(checkReadWeaveNamingEvidence(body,

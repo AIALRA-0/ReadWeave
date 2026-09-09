@@ -41,6 +41,26 @@ function namingReadingPriority(source: ReadWeaveEvidenceSource, subject: string)
         ? 1 : 0;
 }
 
+/** Give the writer a fact-focused reading order, not the search engine's rank.
+ * The preferred passage is still evidence to attribute, not certified truth. */
+export function readWeaveNamingSourceGuidance(
+    sources: ReadWeaveEvidenceSource[], question: string, selected?: string
+): string {
+    const requirements = readWeaveNamingRequirements(question, false);
+    if (!requirements.length) return "";
+    const subject = readWeaveResearchSubject(question, selected);
+    const complete = sources.filter(source => source.sourceType === "external"
+        && source.retrievalMode === "page-reader"
+        && readWeaveMissingNamingFacts([ source ], subject, requirements).length === 0)
+        .toSorted((a, b) => namingReadingPriority(b, subject) - namingReadingPriority(a, subject));
+    const first = complete[0];
+    if (!first) return "";
+    return `本题首读原文：[${first.sourceId}] ${first.title}。它已包含本题所需命名关系，先据此回答并引用；`
+        + "不要因为其他来源的搜索排名更高而混写不同版本的年代和故事。其他来源仅补本题尚缺的明确事实；"
+        + "若发现矛盾，分别归因，不拼成一个确定叙事。只问得名时，通常用一至两句说明来源和命名理由，"
+        + "不要附带无关年份、机构简称、设备简称或履历。此阅读顺序不是独立事实核验结论";
+}
+
 export function readWeaveNamingRequirements(question: string, fallback = true): Array<"expansion" | "origin"> {
     const requested = question.split(/[，,；;。！？?\n]/u)
         .filter(clause => !/^\s*(?:请)?(?:不要|不用|无需|不必|禁止|不得|请勿|别|不(?:介绍|展开|讨论|解释|涉及|包含|添加))/u
