@@ -33,12 +33,39 @@ export function readWeaveEvidenceWindow(text: string, question: string, limit = 
 
 /** A subject-owned-looking domain is a reading priority, not proof of ownership
  * or truth. Never award authority from a URL substring or a search snippet. */
-function namingReadingPriority(source: ReadWeaveEvidenceSource, subject: string): number {
+function namingReadingPriority(
+    source: Pick<ReadWeaveEvidenceSource, "url">, subject: string
+): number {
     if (!source.url || !/^[A-Za-z][A-Za-z0-9-]{2,60}$/u.test(subject)) return 0;
     const host = new URL(source.url).hostname.toLowerCase()
         .replace(/^(?:www|docs|developer)\./u, "");
     return host.split(".").length === 2 && host.split(".")[0] === subject.toLowerCase()
         ? 1 : 0;
+}
+
+/** A cited homepage/history page is a navigation lead, not authority by itself.
+ * Read at most two such links per question, before stripping Markdown links. */
+export function readWeaveNamingReferences(
+    text: string, subject: string
+): Array<{ title:string;url:string }> {
+    const references = new Map<string, { title:string;url:string;priority:number }>();
+    for (const match of text.matchAll(/\[([^\]\n]{1,160})\]\((https:\/\/[^\s)]+)\)/gu)) {
+        try {
+            const url = new URL(match[2]);
+            if (url.username || url.password || url.port
+                || !namingReadingPriority({ url:url.href }, subject)) continue;
+            const title = match[1];
+            const naming = /origin|name|etymology|history|得名|命名|来历|名称/u
+                .test((title + " " + url.pathname).toLowerCase());
+            if (!naming && url.pathname !== "/") continue;
+            url.hash = "";
+            references.set(url.href, { title,url:url.href,priority:Number(naming) });
+        } catch {
+            // Malformed or unrelated page links are not navigation targets.
+        }
+    }
+    return [ ...references.values() ].toSorted((a,b)=>b.priority-a.priority).slice(0,2)
+        .map(({ title,url })=>({ title,url }));
 }
 
 /** Give the writer a fact-focused reading order, not the search engine's rank.
@@ -123,14 +150,17 @@ export async function researchReadWeaveEvidence(
     const seenUrls = new Set<string>();
     const readUrls = new Set<string>();
     const seenQueries = new Set<string>();
+    let followedReferences = 0;
     const subject = readWeaveResearchSubject(contract.normalizedQuestion, selectedSubject);
     const requirements = readWeaveNamingRequirements(contract.normalizedQuestion);
+    const originSubject = /\s/u.test(subject) ? `"${subject}"` : subject;
     const targeted = [
         ...(requirements.includes("expansion") ? [`"${subject}" full name official documentation`, `"${subject}" stands for acronym`] : []),
         // Keep the user's fact dimension, not an assumed document type. Adding
         // "official documentation" can exclude the owner's naming/history page.
         ...(requirements.includes("origin")
-            ? [ `"${subject}" origin of name`, `"${subject}" named after etymology` ] : [])
+            ? [ `${originSubject} origin of name official primary source`,
+                `"${subject}" named after etymology` ] : [])
     ];
     const queries = namingRequired ? [...targeted] : [...contract.searchQueries];
     const audit: ReadWeaveResearchAudit = {
@@ -228,7 +258,8 @@ export async function researchReadWeaveEvidence(
         for (const source of candidates) {
             if (
                 audit.pageReadCount >= 6 ||
-                audit.queryCount + audit.pageReadCount >= READWEAVE_RESEARCH_ACTION_LIMIT
+                audit.queryCount + audit.pageReadCount >= READWEAVE_RESEARCH_ACTION_LIMIT ||
+                Date.now() - started > 60_000
             )
                 break;
             readUrls.add(source.url!);
@@ -242,6 +273,30 @@ export async function researchReadWeaveEvidence(
                 if (content) {
                     source.excerpt = readWeaveEvidenceWindow(content, query);
                     source.retrievalMode = "page-reader";
+                    const completeDirect = namingReadingPriority(source, subject) > 0
+                        && !readWeaveMissingNamingFacts([ source ], subject, requirements).length;
+                    if (namingRequired && !completeDirect && followedReferences < 2) {
+                        const link = readWeaveNamingReferences(content, subject)
+                            .find(item => !readUrls.has(item.url));
+                        if (link) {
+                            let reference = sources.find(item => item.url === link.url);
+                            if (!reference) {
+                                reference = {
+                                    sourceId:`S${sources.length+1}`,sourceType:"external",
+                                    provider:"页面引文",title:link.title,url:link.url,excerpt:"",
+                                    accessedAt:new Date().toISOString(),
+                                    sourceCategory:"search-result",
+                                    evidenceFamily:"SEARCH"
+                                };
+                                sources.push(reference);
+                                seenUrls.add(link.url);
+                            }
+                            const queued = candidates.indexOf(reference);
+                            if (queued >= 0) candidates.splice(queued,1);
+                            candidates.splice(candidates.indexOf(source)+1,0,reference);
+                            followedReferences++;
+                        }
+                    }
                 }
             } catch (error) {
                 signal?.throwIfAborted();

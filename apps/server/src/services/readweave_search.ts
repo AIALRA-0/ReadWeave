@@ -963,6 +963,12 @@ function normalizeQuery(query: string): string {
 export function buildFocusedGeneralSearchQuery(query: string): string {
     const normalized = normalizeQuery(query);
     if (!normalized) return "";
+    // The research layer already prepared this precise query. Selecting its
+    // longest English phrase as a new anchor drops the quoted subject and then
+    // duplicates the intent. Do not rewrite provider-ready naming queries.
+    if (!/\p{Script=Han}/u.test(normalized)
+        && /origin of (?:the )?name|name origin|named after|etymology/iu.test(normalized))
+        return normalized;
 
     const years = Array.from(normalized.matchAll(/\b(20[0-3]\d)\b/gu), match => match[1]);
     const withoutTemporalLead = normalized

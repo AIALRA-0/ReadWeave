@@ -9,6 +9,7 @@ import {
     readWeaveEvidenceWindow,
     readWeaveMissingNamingFacts,
     readWeaveNamingRequirements,
+    readWeaveNamingReferences,
     readWeaveNamingSourceGuidance,
     readWeaveWritingEvidence,
     researchReadWeaveEvidence,
@@ -57,7 +58,7 @@ describe("bounded targeted research", () => {
             { ...contract,normalizedQuestion:"Lumen 从何得名？" },
             "", .07, true, ()=>{}, undefined, "Lumen"
         );
-        expect(search.mock.calls[0][0].query).toBe('"Lumen" origin of name');
+        expect(search.mock.calls[0][0].query).toBe("Lumen origin of name official primary source");
         expect(search).toHaveBeenCalledTimes(1);
         expect(r.audit.stopReason).toBe("sufficient");
         expect(r.sources[0].url).toBe("https://lumen.org/name");
@@ -66,6 +67,52 @@ describe("bounded targeted research", () => {
         vi.clearAllMocks();
         search.mockResolvedValue(result("Lumen is a software library"));
         read.mockResolvedValue("");
+    });
+    it("follows a cited homepage to its naming page without another paid search", async () => {
+        search.mockResolvedValue(result("Lumen is named after a light unit"));
+        read.mockImplementation(async url => {
+            if (url === "https://example.org/lumen")
+                return "Lumen is named after a light unit [Website](https://lumen.org/)";
+            if (url === "https://lumen.org/")
+                return "[Origin of the name](https://lumen.org/about/name/)";
+            if (url === "https://lumen.org/about/name/")
+                return "Lumen is named after a light unit [History](https://lumen.org/history/)";
+            throw new Error("Must not follow a third reference");
+        });
+        const r = await researchReadWeaveEvidence(
+            { ...contract,normalizedQuestion:"Lumen 从何得名？" },
+            "", .07, true, ()=>{}, undefined, "Lumen"
+        );
+        expect(search).toHaveBeenCalledTimes(1);
+        expect(read).toHaveBeenCalledTimes(3);
+        expect(r.audit).toMatchObject({ pageReadCount:3,queryCount:1,searchCostCny:.0072 });
+        expect(readWeaveWritingEvidence(r.sources,"Lumen 从何得名？","Lumen")[0].url)
+            .toBe("https://lumen.org/about/name/");
+    });
+    it("does not navigate further after a complete subject-site source", async () => {
+        search.mockResolvedValue({ ...result("unused"),sources:[ {
+            ...result("unused").sources[0],url:"https://lumen.org/name"
+        } ] });
+        read.mockResolvedValue("Lumen is named after a light unit [Home](https://lumen.org/)");
+        const r = await researchReadWeaveEvidence(
+            { ...contract,normalizedQuestion:"Lumen 从何得名？" },
+            "", .07, true, ()=>{}, undefined, "Lumen"
+        );
+        expect(read).toHaveBeenCalledTimes(1);
+        expect(r.audit.stopReason).toBe("sufficient");
+    });
+    it("never follows unrelated, credentialed or lookalike naming links", () => {
+        const links = [
+            "https://lumen.org.attacker.test/name", "https://lumen.org@attacker.test/name",
+            "https://user:secret@lumen.org/name", "https://lumen.org:8443/name",
+            "https://other.org/name", "https://lumen.org/products", "http://lumen.org/name"
+        ].map(url=>`[Navigation](${url})`).join(" ");
+        expect(readWeaveNamingReferences(links,"Lumen")).toEqual([]);
+        const title = "Origin of the name", url = "https://lumen.org/name";
+        expect(readWeaveNamingReferences(`[Home](https://lumen.org/) [${title}](${url})`+
+            ` [${title}](${url}#part)`,"Lumen")).toEqual([
+            { title,url },{ title:"Home",url:"https://lumen.org/" }
+        ]);
     });
     it("keeps the relevant fact beyond the first page window", () => {
         const text = `${"Preface ".repeat(1000)  }Lumen was named after a light unit`;

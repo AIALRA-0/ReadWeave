@@ -109,10 +109,11 @@ describe("ReadWeave free-source search", () => {
         let calls = 0;
         try {
             await cls.init(() => searchReadWeaveEvidence({
-                query:"Lumen name origin",force:true,forcePaidFallback:true
-            }, { bypassCache:true,fetcher:async input => {
+                query:'"Lumen" origin of name',force:true,forcePaidFallback:true
+            }, { bypassCache:true,fetcher:async (input, init) => {
                 if (String(input).includes("google.serper.dev")) {
                     calls++;
+                    expect(JSON.parse(String(init?.body)).q).toBe('"Lumen" origin of name');
                     return Response.json({ organic:[ {
                         title:"Lumen",link:"https://lumen.org",snippet:"Lumen is named after light"
                     } ] });
