@@ -4,12 +4,35 @@ import {
     applyReadWeaveFormatPatches,
     formatReadWeaveFullNameOpening,
     formatReadWeaveMarkdown,
+    formatReadWeavePersonNameOrder,
+    readWeaveFormatIssues,
+    repairReadWeaveConventionalTerms,
     repairReadWeaveFormat,
-    repairReadWeaveOptionalQualifiers,
-    repairReadWeaveConventionalTerms
-} from "./readweave_format.js";
+    repairReadWeaveOptionalQualifiers} from "./readweave_format.js";
 
 describe("versioned formatting contract", () => {
+    it("puts a verified Chinese person name before its English or pinyin name", () => {
+        expect(formatReadWeavePersonNameOrder(
+            "Haoxing Ren（任浩星）是芯片设计研究者",
+            "Haoxing Ren"
+        )).toBe("任浩星（Haoxing Ren）是芯片设计研究者");
+        expect(formatReadWeavePersonNameOrder(
+            "任浩星（Haoxing Ren）是芯片设计研究者",
+            "Haoxing Ren"
+        )).toBe("任浩星（Haoxing Ren）是芯片设计研究者");
+        expect(formatReadWeavePersonNameOrder(
+            "Haoxing Ren（任浩星）是芯片设计研究者",
+            "任浩星（Haoxing Ren）"
+        )).toBe("任浩星（Haoxing Ren）是芯片设计研究者");
+        expect(formatReadWeavePersonNameOrder(
+            "`Haoxing Ren（任浩星）` 是原样代码",
+            "Haoxing Ren"
+        )).toBe("`Haoxing Ren（任浩星）` 是原样代码");
+        expect(readWeaveFormatIssues("Haoxing Ren（任浩星）是芯片设计研究者"))
+            .toContain("FMT-044：人物姓名顺序必须为中文姓名（English or Pinyin Name）");
+        expect(readWeaveFormatIssues("任浩星（Haoxing Ren）是芯片设计研究者"))
+            .not.toContain("FMT-044：人物姓名顺序必须为中文姓名（English or Pinyin Name）");
+    });
     it("annotates one incidental initialism without accepting replacement prose", async () => {
         const body = "这段涉及 ABC 与其他对象，保留 12 个条件";
         const resolve = vi.fn(async()=>[ {

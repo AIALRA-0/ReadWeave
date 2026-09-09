@@ -928,6 +928,18 @@ describe.skip("ReadWeave retired multi-stage workflow", () => {
 });
 
 describe("ReadWeave one-pass workflow", () => {
+    it("delivers a bilingual person name with Chinese outside the parentheses", async () => {
+        installModel([], "Haoxing Ren（任浩星）是芯片设计研究者", "Haoxing Ren 是谁？");
+
+        const result = await generateUnifiedReadWeaveAnswer(request("Haoxing Ren 是谁？"));
+        const writerCall = vi.mocked(fetch).mock.calls.map(([, init]) =>
+            JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> })
+            .find(payload => payload.messages[0]?.content.includes("统一证据写作者"));
+
+        expect(result.body).toBe("任浩星（Haoxing Ren）是芯片设计研究者");
+        expect(writerCall?.messages[0]?.content).toContain("任浩星（Haoxing Ren）");
+        expect(writerCall?.messages[0]?.content).toContain("禁止把顺序写反");
+    });
     it("renders structured summary points without guessing sentence boundaries", async () => {
         const points = [ "采样周期为 4 秒", "原始记录不上传，只保留 3 天汇总",
             "断网期间继续记录，恢复连接后仅同步汇总" ];

@@ -233,7 +233,15 @@ describe("ReadWeave unified QA and definition quality contract", () => {
             "Fei-Fei Li"
         );
 
-        expect(normalized).toBe("Fei-Fei Li（李飞飞）是斯坦福大学计算机科学教授；主要研究人工智能与计算机视觉");
+        expect(normalized).toBe("李飞飞（Fei-Fei Li）是斯坦福大学计算机科学教授；主要研究人工智能与计算机视觉");
+    });
+
+    it("rejects an English-first bilingual person name", () => {
+        expect(findReadWeaveQualityIssues(
+            "Haoxing Ren（任浩星）是芯片设计研究者",
+            "Haoxing Ren 是谁？",
+            { kind: "question", subject: "Haoxing Ren", knowledgeScope: "general", entityType: "person" }
+        )).toContain("中英文名称顺序颠倒，必须使用“中文名称（English Name）”格式");
     });
 
     it("restores the requested person name when a repair leaves only a leading pronoun", () => {

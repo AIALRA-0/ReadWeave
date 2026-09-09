@@ -13,6 +13,7 @@ import { ValidationError } from "@triliumnext/core";
 
 import { readWeaveModelRates, READWEAVE_PRICING_VERSION } from "./readweave_budget.js";
 import { selectReadWeaveContext } from "./readweave_engine.js";
+import { formatReadWeavePersonNameOrder } from "./readweave_format.js";
 import { getPublishedReadWeaveHarnessProfile } from "./readweave_harness.js";
 import {
     type ReadWeaveSearchSource,
@@ -406,9 +407,7 @@ function hasReversedBilingualName(body: string): boolean {
             && /\d(?:\.\d+)?\s*$/u.test(precedingText)) continue;
         if (/^[A-Z]$/u.test(englishName)
             && new RegExp(`^方案\\s*${englishName}$`, "u").test(chineseName ?? "")) continue;
-        const looksLikePersonName = /^(?:[A-Z](?:\.|[A-Za-z'’-]+))(?:\s+(?:(?:van|von|de|da|del|di|la|le|du|der|den|ten|ter)\s+)?[A-Z](?:\.|[A-Za-z'’-]+)){1,5}$/u.test(englishName);
-        const containsTechnicalOrOrganizationNoun = /\b(?:Association|Automation|Circuit|Conference|Contributor|Design|Engineering|Framework|Identifier|Institute|Integrated|Method|Network|Organization|Processing|Researcher|Standard|System|Technology|Transactions|Unit)\b/iu.test(englishName);
-        if (!looksLikePersonName || containsTechnicalOrOrganizationNoun) return true;
+        return true;
     }
     return false;
 }
@@ -1589,7 +1588,7 @@ export function buildReadWeaveSystemPrompt(kind: ReadWeaveGenerateRequest["kind"
         kind === "term" ? "定义只解释所选术语的含义、角色、机制、适用边界和必要上下文；正文不得带入无助于定义的作者履历、论文题名、期刊或会议、年份、学位、单位经历、DOI 或参考文献元数据。" : "",
         kind === "term" ? "根据真实实体类别选择定义要件，不套同一话术：人物写当前身份、专业角色、机构或领域及消歧特征；会议写实体类型、主题范围与学术角色；组织写组织性质与职责；标准写发布主体与规范范围；方法或系统写所解决问题、核心机制、输入输出及边界；标识符写标识对象、唯一性或持久性与用途。人物和会议不强行补算法机制。" : "",
         kind === "term" ? "除非区分当前义项不可缺少，正文不得主动引入第二个英文缩写、英文产品名或外围技术名称；需要对比时优先用准确中文类别表达，禁止罗列相邻产品、处理器或机构。" : "",
-        "名称格式规则覆盖答案中确有必要出现的技术术语、标准、组织、产品、英文职务、机构名、论文题目、期刊会议名及英文短语；人物姓名可以保留官方拼写，但其他英文内容必须先给准确中文，再把官方英文放入括号，例如“院长教授（Dean's Professor）”“佐治亚理工学院（Georgia Institute of Technology）”。没有可靠中文译名时才允许保留纯英文，并应尽量减少这种例外。",
+        "名称格式规则覆盖答案中确有必要出现的技术术语、标准、组织、产品、英文职务、机构名、论文题目、期刊会议名及英文短语；人物同时有中文姓名和英文或拼音姓名时，固定写成“中文姓名（English or Pinyin Name）”，例如“任浩星（Haoxing Ren）”，禁止写成“Haoxing Ren（任浩星）”；只有无法确认中文姓名时才保留官方英文拼写。其他英文内容也必须先给准确中文，再把官方英文放入括号，例如“院长教授（Dean's Professor）”“佐治亚理工学院（Georgia Institute of Technology）”。没有可靠中文译名时才允许保留纯英文，并应尽量减少这种例外。",
         "外围概念必须优先用准确中文表达：问题标题、所选对象或证据闭环没有明确要求的拉丁缩写、英文同义词和英文产品名不得主动写入正文；需要表达其事实时改用准确中文，而不是删除事实。",
         kind === "question" ? "任务涉及比较时必须明确写出方向（谁高于、低于或等于谁），有可计算数据时同时给出差值、范围或比例；分别罗列两组数值但不说方向不算完整。" : "",
         "任务若限定“根据记录”“按本文”或“仅从这些数据”，联网资料只能校准通用知识，正文不得加入与目标无关的外部方法论、研究现状或额外缺失条件。",
@@ -6193,7 +6192,10 @@ export function normalizeGeneralPersonOverview(body: string, subject: string): s
             .join("；"))
         .filter(Boolean)
         .join("\n\n");
-    normalized = normalizeReadWeaveGeneratedBody(normalized);
+    normalized = formatReadWeavePersonNameOrder(
+        normalizeReadWeaveGeneratedBody(normalized),
+        normalizedSubject
+    );
     const subjectPresent = normalizedSubject
         && normalized.toLocaleLowerCase().includes(normalizedSubject.toLocaleLowerCase());
     if (normalizedSubject && !subjectPresent) {
@@ -6201,7 +6203,7 @@ export function normalizeGeneralPersonOverview(body: string, subject: string): s
             ? normalized.match(/^([\p{Script=Han}·]{2,16})(?=\s*(?:是|为|现任|目前))/u)?.[1]
             : undefined;
         if (chineseAlias) {
-            normalized = `${normalizedSubject}（${chineseAlias}）${normalized.slice(chineseAlias.length)}`;
+            normalized = `${chineseAlias}（${normalizedSubject}）${normalized.slice(chineseAlias.length)}`;
         } else if (/^(?:她|他|其)(?=\s*(?:是|为|现任|目前))/u.test(normalized)) {
             normalized = normalized.replace(/^(?:她|他|其)/u, normalizedSubject);
         }

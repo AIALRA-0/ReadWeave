@@ -58,6 +58,28 @@ export function mapReadWeaveProse(body: string, transform: (text: string) => str
         .join("");
 }
 
+const LATIN_PERSON_NAME = /^(?:[A-Z](?:\.|[A-Za-z'’.-]+))(?:\s+(?:(?:van|von|de|da|del|di|la|le|du|der|den|ten|ter)\s+)?[A-Z](?:\.|[A-Za-z'’.-]+)){1,5}$/u;
+
+/** Keep a person's Chinese name outside the parentheses when both names exist. */
+export function formatReadWeavePersonNameOrder(body: string, subject: string): string {
+    const normalizedSubject = subject.normalize("NFKC").trim();
+    const subjectPair = normalizedSubject.match(/^(.+?)[（(]([^)）]+)[）)]$/u);
+    const subjectLatin = subjectPair
+        ? [ subjectPair[1].trim(), subjectPair[2].trim() ].find(part => LATIN_PERSON_NAME.test(part))
+        : LATIN_PERSON_NAME.test(normalizedSubject) ? normalizedSubject : undefined;
+    if (!subjectLatin) return body;
+    const escaped = subjectLatin.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    const reversed = new RegExp(
+        `(?<![\\p{Script=Latin}\\p{N}_])(${escaped})\\s*[（(]\\s*`
+        + "([\\p{Script=Han}]{2,4}(?:·[\\p{Script=Han}]{1,8})?)\\s*[）)]",
+        "giu"
+    );
+    return mapReadWeaveProse(body, text => text.replace(
+        reversed,
+        (_match, englishName: string, chineseName: string) => `${chineseName}（${englishName}）`
+    ));
+}
+
 /** Group only explicit, adjacent bilingual definitions, never infer a list from prose. */
 function groupBilingualDefinitions(body: string): string {
     const tokens = Lexer.lex(body);
@@ -218,6 +240,8 @@ export function readWeaveFormatIssues(body: string): string[] {
             issues.add("FMT-010：冒号后的三个以上并列项需要分行");
         if (/[\p{Script=Han}][A-Za-z0-9]|[A-Za-z0-9][\p{Script=Han}]/u.test(text))
             issues.add("FMT-013：中文与英文或数字之间缺少空格");
+        if (/(?<![\p{Script=Latin}\p{N}_])[A-Z][A-Za-z'’.-]+(?:\s+[A-Z][A-Za-z'’.-]+){1,5}\s*[（(]\s*[\p{Script=Han}]{2,4}(?:·[\p{Script=Han}]{1,8})?\s*[）)]/u.test(text))
+            issues.add("FMT-044：人物姓名顺序必须为中文姓名（English or Pinyin Name）");
         return text;
     });
     return [ ...issues ];
