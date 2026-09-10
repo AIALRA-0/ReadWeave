@@ -1,6 +1,6 @@
 import { Lexer } from "marked";
 
-export const READWEAVE_FORMAT_VERSION = "format-2026-09-v1";
+export const READWEAVE_FORMAT_VERSION = "format-2026-09-v2";
 
 function normalizeSimpleMathNotation(value: string): string {
     const scientific = new RegExp(
@@ -80,13 +80,14 @@ export function formatReadWeavePersonNameOrder(body: string, subject: string): s
     ));
 }
 
-/** Group only explicit, adjacent bilingual definitions, never infer a list from prose. */
+/** Mark explicit bilingual definitions; never infer a definition from prose. */
 function groupBilingualDefinitions(body: string): string {
     const tokens = Lexer.lex(body);
-    const label = /^[\p{Script=Han}][\p{Script=Han} ]{0,49}（[A-Za-z][A-Za-z -]{0,99}）：/u;
+    const label = new RegExp("^(?:[A-Z][A-Z0-9.-]* )?"
+        + "[\\p{Script=Han}][\\p{Script=Han} ]{0,49}（[A-Za-z][A-Za-z -]{0,99}）：", "u");
     let group: number[] = [];
     const flush = () => {
-        if (group.length >= 3) {
+        if (group.length >= 1) {
             for (const index of group) tokens[index].raw = `- ${tokens[index].raw}`;
         }
         group = [];
@@ -104,6 +105,57 @@ function groupBilingualDefinitions(body: string): string {
     return tokens.map(token => token.raw).join("");
 }
 
+/** Align only a later annotated copy whose statements match an earlier block exactly. */
+export function formatReadWeaveCodeCopies(body: string, sourceBlocks: string[] = []): string {
+    const tokens = Lexer.lex(body);
+    const originals = sourceBlocks.flatMap(source => Lexer.lex(source)
+        .flatMap(token => token.type === "code"
+            ? [ { lang: token.lang ?? "", lines: token.text.split("\n"), raw: token.raw } ] : []));
+    for (const token of tokens) {
+        if (token.type !== "code") continue;
+        const lang = token.lang ?? "";
+        const marker = /^(?:python|py)$/u.test(lang) ? "#"
+            : /^(?:javascript|js|typescript|ts)$/u.test(lang) ? "//" : undefined;
+        if (!marker) continue;
+        const lines = token.text.split("\n");
+        for (const original of originals.filter(item => item.lang === lang)) {
+            if (original.lines.length !== lines.length) continue;
+            const comments = lines.map((line, index) => {
+                const statement = original.lines[index].trimEnd();
+                if (!statement || !line.startsWith(statement)) return undefined;
+                const tail = line.slice(statement.length);
+                return /^\s/u.test(tail) && tail.trimStart().startsWith(marker)
+                    ? tail.trimStart() : undefined;
+            });
+            if (comments.some(comment => comment === undefined)) continue;
+            const width = (line: string) => Array.from(line.trimEnd())
+                .reduce((size, char) => size + (char === "\t" ? 4 : 1), 0);
+            const column = Math.max(...original.lines.map(width)) + 2;
+            const aligned = original.lines.map((line, index) => line.trimEnd()
+                + " ".repeat(column - width(line)) + comments[index]).join("\n");
+            token.raw = token.raw.replace(token.text, aligned);
+            if (!tokens.some(item => item.type === "code" && item.lang === lang
+                && item.text === original.lines.join("\n"))) {
+                token.raw = original.raw.trimEnd() + "\n\n" + token.raw;
+            }
+            break;
+        }
+        originals.push({ lang, lines, raw: token.raw });
+    }
+    return tokens.map(token => token.raw).join("");
+}
+
+/** Only merge plain prose for the explicit definition task, never mixed-media blocks. */
+export function formatReadWeaveDefinitionBlock(body: string): string {
+    const tokens = Lexer.lex(body).filter(token => token.type !== "space");
+    const first = tokens[0];
+    if (first?.type !== "list" || first.items.length !== 1
+        || first.items[0].tokens.some(token => ![ "text", "space" ].includes(token.type))
+        || tokens.slice(1).some(token => token.type !== "paragraph")
+        || mapReadWeaveProse(body, () => "").trim()) return body;
+    return body.split(/\n\s*\n/u).map(part => part.trim()).join("；");
+}
+
 /** FMT-003/008: never rewrite code, URLs, quotations, tables or formulae. */
 export function formatReadWeaveMarkdown(value: unknown): string {
     if (typeof value !== "string") return "";
@@ -116,7 +168,7 @@ export function formatReadWeaveMarkdown(value: unknown): string {
         String.raw`^([ \t]*(?:[-*+] )?)([A-Za-z][A-Za-z -]{0,99})[（(]`
         + String.raw`([\p{Script=Han}][\p{Script=Han} ]{0,49})[)）][：:]`, "gmu"
     );
-    return groupBilingualDefinitions(mapReadWeaveProse(value, (text) =>
+    return formatReadWeaveCodeCopies(groupBilingualDefinitions(mapReadWeaveProse(value, (text) =>
         normalizeSimpleMathNotation(text)
             .replace(fullName, "$1 $3（$2）")
             .replace(englishFirst, "$1$3（$2）：")
@@ -130,13 +182,17 @@ export function formatReadWeaveMarkdown(value: unknown): string {
             .replace(/(?<=\p{Script=Han})(?=[A-Za-z0-9])/gu, " ")
             .replace(/(?<=[A-Za-z0-9])(?=\p{Script=Han})/gu, " ")
             .replace(/\n(?:[ \t]*\n){2,}/gu, "\n\n")
+            .replace(
+                /^([\p{Script=Han}][\p{Script=Han} ]{1,19})：[ \t]*(?=\n[ \t]*\n|(?![\s\S]))/gmu,
+                "## $1"
+            )
             .replace(/^[^\n]+$/gmu, line => {
                 const clauses = line.split("；").map(part => part.trim()).filter(Boolean);
                 const meaningStart = /^(?:其中\s*)?[A-Za-z][A-Za-z -]{0,40}\s*(?:指|表示|意为|是指)/u;
                 const isMeaning = (part: string) => meaningStart.test(part);
                 let count = 0;
                 while (count < clauses.length && isMeaning(clauses[count])) count++;
-                if (count < 3) return line;
+                if (count < 2) return line;
                 const list = clauses.slice(0, count).map(part => {
                     const pattern = new RegExp(
                         String.raw`^(?:其中\s*)?([A-Za-z][A-Za-z -]{0,40}?)\s*(?:指|表示|意为|是指)\s*`
@@ -153,13 +209,12 @@ export function formatReadWeaveMarkdown(value: unknown): string {
                 return list + remainder;
             })
             .replace(
-                /^([^\n：（）()]{1,24}：)([^\n：；。]+、[^\n：；。]+、[^\n：；。]+)$/gmu,
+                /^([^\n：（）()]{1,24}：)([^\n：；。]+、[^\n：；。]+)$/gmu,
                 (_all, prefix: string, items: string) =>
-                    `${prefix}\n${
-                        items
-                            .split("、")
-                            .map((item) => `  - ${item.trim()}`)
-                            .join("\n")}`
+                    isExplicitShortEnumeration(items)
+                        ? `${prefix}\n${items.split("、")
+                            .map(item => `  - ${item.trim()}`).join("\n")}`
+                        : _all
             )
             .replace(
                 /^([^\n：]{1,24}(?:包括|包含|如下)：)\n([^\n]+(?:\n[^\n]+)+)$/gmu,
@@ -172,7 +227,7 @@ export function formatReadWeaveMarkdown(value: unknown): string {
                                 .map((row) => `  - ${row.trim()}`)
                                 .join("\n")}`
             )
-    ).trim());
+    ).trim()));
 }
 
 export interface ReadWeaveTextPatch {
@@ -180,6 +235,13 @@ export interface ReadWeaveTextPatch {
     original: string;
     replacement: string;
     rule: string;
+}
+
+/** Only short, explicit labels are safe to split without semantic rewriting. */
+function isExplicitShortEnumeration(value: string): boolean {
+    const items = value.split("、");
+    return items.length >= 2 && items.every(item => item.trim().length <= 16
+        && !/[，,；;。！？!?]|(?:是|用于|用来|使得|从而|因此|不是|不能)/u.test(item));
 }
 
 /** Render an already-sourced full name using the writer's separate Chinese
@@ -238,10 +300,10 @@ export function readWeaveFormatIssues(body: string): string[] {
         if (/\n(?:[ \t]*\n){2,}/u.test(text)) issues.add("FMT-024：存在多余空白行");
         const definitionOpening = /^\s*(?:[-*]\s+)?(?:[A-Z][A-Z0-9.-]*\s+)?[\p{Script=Han}][^：\n]{0,100}（[^（）\n]+）：/u;
         if (text.split("\n").some(line => !definitionOpening.test(line)
-            && /：[^\n：；。]+、[^\n：；。]+、[^\n：；。]+/u.test(line)))
-            issues.add("FMT-010：冒号后的三个以上并列项需要分行");
+            && isExplicitShortEnumeration(line.match(/^[^：\n]{1,24}：([^：\n]+)$/u)?.[1] ?? "")))
+            issues.add("FMT-036：冒号后的两个以上独立并列项需要分行");
         if (/[\p{Script=Han}][A-Za-z0-9]|[A-Za-z0-9][\p{Script=Han}]/u.test(text))
-            issues.add("FMT-013：中文与英文或数字之间缺少空格");
+            issues.add("FMT-047：中文与英文或数字之间缺少空格");
         if (/(?<![\p{Script=Latin}\p{N}_])[A-Z][A-Za-z'’.-]+(?:\s+[A-Z][A-Za-z'’.-]+){1,5}\s*[（(]\s*[\p{Script=Han}]{2,4}(?:·[\p{Script=Han}]{1,8})?\s*[）)]/u.test(text))
             issues.add("FMT-044：人物姓名顺序必须为中文姓名（English or Pinyin Name）");
         return text;

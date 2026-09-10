@@ -2,22 +2,24 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
     applyReadWeaveFormatPatches,
+    formatReadWeaveCodeCopies,
+    formatReadWeaveDefinitionBlock,
     formatReadWeaveFullNameOpening,
     formatReadWeaveMarkdown,
     formatReadWeavePersonNameOrder,
     readWeaveFormatIssues,
     repairReadWeaveConventionalTerms,
     repairReadWeaveFormat,
-    repairReadWeaveOptionalQualifiers} from "./readweave_format.js";
+    repairReadWeaveOptionalQualifiers } from "./readweave_format.js";
 
 describe("versioned formatting contract", () => {
     it("keeps a continuous bilingual definition while checking ordinary parallel lists", () => {
         const definition = "- 缓存（Cache）：暂存可复用数据；用于页面、文件、查询等场景；容量有限";
         expect(readWeaveFormatIssues(definition)).not.toContain(
-            "FMT-010：冒号后的三个以上并列项需要分行"
+            "FMT-036：冒号后的两个以上独立并列项需要分行"
         );
         expect(readWeaveFormatIssues("可选介质：内存、磁盘、远端存储")).toContain(
-            "FMT-010：冒号后的三个以上并列项需要分行"
+            "FMT-036：冒号后的两个以上独立并列项需要分行"
         );
     });
     it("puts a verified Chinese person name before its English or pinyin name", () => {
@@ -188,11 +190,14 @@ describe("versioned formatting contract", () => {
         expect(formatReadWeaveMarkdown(input)).toBe(expected);
         expect(formatReadWeaveMarkdown(expected)).toBe(expected);
     });
-    it("does not group isolated definitions across a heading or protected block", () => {
+    it("formats isolated definitions without moving a heading or protected block", () => {
         const body = "示例（Example）：一个实例\n\n## 中间标题\n\n分组（Packet）：一组记录"
             + "\n\n> Transfer（传输）：逐字引文。\n\n传输（Transfer）：传递过程";
-        expect(formatReadWeaveMarkdown(body)).toBe(body);
-        expect(formatReadWeaveMarkdown("Example（示例）：一个实例")).toBe("示例（Example）：一个实例");
+        expect(formatReadWeaveMarkdown(body)).toBe(
+            "- 示例（Example）：一个实例\n\n## 中间标题\n\n- 分组（Packet）：一组记录"
+            + "\n\n> Transfer（传输）：逐字引文。\n\n- 传输（Transfer）：传递过程"
+        );
+        expect(formatReadWeaveMarkdown("Example（示例）：一个实例")).toBe("- 示例（Example）：一个实例");
     });
     const protectedCases = [
         "https://example.org/a?x=1&y=2",
@@ -219,10 +224,68 @@ describe("versioned formatting contract", () => {
     it("formats a flat parallel list without changing the items", () => {
         expect(formatReadWeaveMarkdown("材料：铜、铝、银")).toBe("材料：\n  - 铜\n  - 铝\n  - 银");
     });
-    it("does not change a single definition to a list", () => {
+    it("keeps a single definition in one continuous list item under the latest contract", () => {
         expect(formatReadWeaveMarkdown("熵（Entropy）：表示状态的不确定程度")).toBe(
-            "熵（Entropy）：表示状态的不确定程度"
+            "- 熵（Entropy）：表示状态的不确定程度"
         );
+    });
+    it("separates two explicitly enumerated objects and reports current rule identifiers", () => {
+        expect(formatReadWeaveMarkdown("材料：铜、铝")).toBe("材料：\n  - 铜\n  - 铝");
+        expect(readWeaveFormatIssues("材料：铜、铝")).toContain("FMT-036：冒号后的两个以上独立并列项需要分行");
+        expect(readWeaveFormatIssues("保留2份")).toContain("FMT-047：中文与英文或数字之间缺少空格");
+        const meaning = "Input 指输入；Output 指输出";
+        expect(formatReadWeaveMarkdown(meaning)).toBe("- 输入（Input）\n- 输出（Output）");
+    });
+    it("keeps a definition continuous and does not invent steps from a causal sentence", () => {
+        const definition = "RAM 随机存取存储器（Random Access Memory）：临时存放数据；读写速度快；用于程序运行；不能代替长期存储";
+        expect(formatReadWeaveMarkdown(definition)).toBe(`- ${definition}`);
+        expect(formatReadWeaveMarkdown(`- ${definition}`)).toBe(`- ${definition}`);
+        const cause = "盒盖关紧后，水汽较难进入，物品更不容易受潮";
+        expect(formatReadWeaveMarkdown(cause)).toBe(cause);
+    });
+    it("merges only plain definition paragraphs and preserves all words", () => {
+        const body = "- 幂等性（Idempotence）：重复执行结果不变\n\n可用于重复投递\n\n不代表没有副作用";
+        expect(formatReadWeaveDefinitionBlock(body)).toBe(body.replace(/\n\n/gu, "；"));
+        for (const extra of [ "\n\n## 例子", "\n\n> 原样引文。", "\n\n$x = 2$" ]) {
+            expect(formatReadWeaveDefinitionBlock(body + extra)).toBe(body + extra);
+        }
+    });
+    it("uses headings for standalone labels, not labels with inline values", () => {
+        expect(formatReadWeaveMarkdown("原代码：\n\n```python\nx = 1\n```"))
+            .toBe("## 原代码\n\n```python\nx = 1\n```");
+        expect(formatReadWeaveMarkdown("颜色：红色")).toBe("颜色：红色");
+    });
+    it("aligns a proven comment copy while keeping the original statements unchanged", () => {
+        const original = "values = [2, 4, 6]\ntotal = sum(values)\nprint(total)";
+        const copy = "values = [2, 4, 6]  # 数值\ntotal = sum(values)  # 求和\nprint(total)  # 输出";
+        const input = `原代码：\n\n\`\`\`python\n${original}\n\`\`\`\n\n`
+            + `注释副本：\n\n\`\`\`python\n${copy}\n\`\`\``;
+        const result = formatReadWeaveMarkdown(input);
+        expect(result).toContain(original);
+        expect(result).toContain("values = [2, 4, 6]   # 数值\ntotal = sum(values)  # 求和"
+            + "\nprint(total)         # 输出");
+        expect(formatReadWeaveMarkdown(result)).toBe(result);
+        expect(formatReadWeaveMarkdown(`\`\`\`python\n${copy}\n\`\`\``))
+            .toBe(`\`\`\`python\n${copy}\n\`\`\``);
+        const restored = formatReadWeaveCodeCopies(`\`\`\`python\n${copy}\n\`\`\``,
+            [ `\`\`\`python\n${original}\n\`\`\`` ]);
+        expect(restored.startsWith(`\`\`\`python\n${original}\n\`\`\``)).toBe(true);
+        expect(formatReadWeaveCodeCopies(restored, [ `\`\`\`python\n${original}\n\`\`\`` ]))
+            .toBe(restored);
+        const changed = copy.replace("sum(values)", "len(values)");
+        expect(formatReadWeaveCodeCopies(`\`\`\`python\n${changed}\n\`\`\``,
+            [ `\`\`\`python\n${original}\n\`\`\`` ])).toBe(`\`\`\`python\n${changed}\n\`\`\``);
+    });
+    it.each([
+        "> 材料：铜、铝。",
+        "```text\n材料：铜、铝。\n```",
+        "| 字段 | 原文 |\n| --- | --- |\n| 名称 | Example（示例）：原样。 |",
+        "$$x_1 + x_2 = 12$$",
+        "![原图](https://example.org/diagram.svg)",
+        "```mermaid\nflowchart LR\nA --> B\n```"
+    ])("preserves raw objects when applying the new presentation rules: %s", source => {
+        expect(formatReadWeaveMarkdown(source)).toBe(source);
+        expect(readWeaveFormatIssues(source)).toEqual([]);
     });
     it.each([ "不会增加", "增加至 20", "减少" ])("rejects factual drift %s", (replacement) => {
         expect(() =>

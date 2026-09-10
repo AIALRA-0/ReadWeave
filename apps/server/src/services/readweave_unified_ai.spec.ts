@@ -46,6 +46,8 @@ vi.mock("./readweave_settings.js", () => ({
     getReadWeaveVerifierRuntimeConfig: () => verifierConfig.current
 }));
 
+import { READWEAVE_FORMAT_VERSION } from "./readweave_format.js";
+import { HUMAN_READABLE_CHINESE_STYLE_CONTRACT } from "./readweave_style_contract.js";
 import {
     applyKnownTermCatalog,
     calculateReadWeaveContextAnswer,
@@ -927,6 +929,40 @@ describe.skip("ReadWeave retired multi-stage workflow", () => {
 });
 
 describe("ReadWeave one-pass workflow", () => {
+    it.each([ "problem", "definition", "annotation", "key-point" ] as const)(
+        "sends the v2 contract through %s with one writer", async contentType => {
+            const plainBody = "仅保留 6 天记录，断网时不上传";
+            vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
+                const payload = JSON.parse(String(init?.body));
+                const system = payload.messages[0].content;
+                for (const rule of HUMAN_READABLE_CHINESE_STYLE_CONTRACT) {
+                    expect(system).toContain(rule);
+                }
+                expect(system).not.toContain("只有任务明确要求步骤或列表时才使用列表");
+                expect(system).toContain("相互依赖的操作仍逐步编号");
+                expect(system).toContain("逐行解释则每个可注释有效语句同行注释");
+                expect(system).toContain("变量及计算所需基础概念就近解释");
+                expect(system).toContain("格式残留不阻断安全正文交付");
+                const output = contentType === "key-point"
+                    ? { summaryPoints: [ { text: plainBody, sourceIds: [ "L1" ] } ] }
+                    : { body: plainBody, claims: [], unresolvedClaims: [] };
+                return Response.json({
+                    choices: [ { message: { content: JSON.stringify(output) } } ],
+                    usage: { prompt_tokens: 1500, completion_tokens: 80 } });
+            }));
+            const result = await generateUnifiedReadWeaveAnswer({
+                ...request("说明选区的保留条件", contentType === "definition" ? "term" : "question"),
+                contentType, activeExternalSearch: false, autoExternalSearch: false,
+                fragments: [ { id: "selected", role: "selected", text: plainBody } ]
+            });
+            expect(result.body).toContain(plainBody);
+            expect(result.usage?.modelCalls).toBe(1);
+            expect(fetch).toHaveBeenCalledTimes(1);
+            expect(result.audit?.formatVersion).toBe(READWEAVE_FORMAT_VERSION);
+            expect(result.audit?.independentVerification).toBe("not-run");
+            expect(result.unresolvedIssues).toEqual([]);
+        }
+    );
     it("delivers a bilingual person name with Chinese outside the parentheses", async () => {
         installModel([], "Haoxing Ren（任浩星）是芯片设计研究者", "Haoxing Ren 是谁？");
 
@@ -996,7 +1032,7 @@ describe("ReadWeave one-pass workflow", () => {
         expect(progress.filter(event=>event.usage)[0]?.usage).toMatchObject({ modelCalls:0,costCny:.0072 });
     });
     it("keeps a full-name answer affordable without discarding complete evidence", async () => {
-        const quote = "Example Packet Transfer (XPT) is the full name. " + "Context ".repeat(160);
+        const quote = `Example Packet Transfer (XPT) is the full name. ${  "Context ".repeat(160)}`;
         searchMock.mockResolvedValue({ ...await defaultSearchImplementation({ query:"XPT" }),
             searchCostCny:.0072,sources:Array.from({ length:8 },(_,i)=>({
                 provider:"Reference",title:`Reference ${i}`,url:`https://example.org/${i}`,
@@ -1562,9 +1598,9 @@ describe("ReadWeave natural paragraph formatting", () => {
             .toBe("代理端口为 127.0.0.1:7892，状态：可用");
     });
 
-    it("keeps a definition on one unindented line", () => {
+    it("keeps a definition in one continuous list item", () => {
         expect(formatReadWeaveBody("DOI 数字对象标识符（Digital Object Identifier）：数字对象标识符是用于唯一标识数字对象的系统。"))
-            .toBe("DOI 数字对象标识符（Digital Object Identifier）：数字对象标识符是用于唯一标识数字对象的系统");
+            .toBe("- DOI 数字对象标识符（Digital Object Identifier）：数字对象标识符是用于唯一标识数字对象的系统");
     });
 
     it("lays out three or more colon-introduced parallel items as an indented list", () => {
