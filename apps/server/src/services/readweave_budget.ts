@@ -3,7 +3,11 @@ export class ReadWeaveBudget {
     private reservedMicros = 0;
     private pendingModelRequests = new Map<number, number>();
     modelRequests = 0;
-    constructor(readonly limitCny: number) {}
+    constructor(public limitCny: number) {}
+
+    raiseLimit(limitCny: number): void {
+        if (Number.isFinite(limitCny) && limitCny > this.limitCny) this.limitCny = limitCny;
+    }
 
     get unreportedModelCostCny(): number {
         return [ ...this.pendingModelRequests.values() ].reduce((sum,cost)=>sum+cost,0);
@@ -18,6 +22,15 @@ export class ReadWeaveBudget {
         const micros = Math.ceil(costCny * 1e6);
         if (micros > Math.round(this.remainingCny * 1e6)) return false;
         this.reservedMicros += micros;
+        return true;
+    }
+
+    /** Records required work even when it exceeds the planning target.
+     * The caller can report the overrun, but must not turn a cost estimate into
+     * an empty answer or a user-facing generation gate. */
+    reserveRequired(costCny: number): boolean {
+        if (!Number.isFinite(costCny) || costCny < 0) return false;
+        this.reservedMicros += Math.ceil(costCny * 1e6);
         return true;
     }
 
@@ -56,7 +69,7 @@ export interface ReadWeaveModelRates {
 /** Official CNY tariff: weekdays 01–04 / 06–10 UTC are peak hours.
  * Omit the time for a conservative peak-rate reservation, never a cache assumption.
  * https://api-docs.deepseek.com/zh-cn/quick_start/pricing/ */
-export function readWeaveModelRates(model = "deepseek-v4-flash", at?: Date): ReadWeaveModelRates {
+export function readWeaveModelRates(model = "deepseek-flash", at?: Date): ReadWeaveModelRates {
     const weekday = at ? at.getUTCDay() >= 1 && at.getUTCDay() <= 5 : true;
     const hour = at?.getUTCHours();
     const peak = hour === undefined || weekday && (hour >= 1 && hour < 4 || hour >= 6 && hour < 10);

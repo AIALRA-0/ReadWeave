@@ -51,7 +51,10 @@ export default defineConfig(() => ({
     exclude: [
       "spec/build-checks/**",
     ],
-    hookTimeout: 20_000,
+    // Full-suite workers import the complete application concurrently. The
+    // startup hook is I/O heavy and can exceed 20 s on ARM64 and busy CI hosts
+    // even though the same suite passes in isolation.
+    hookTimeout: 60_000,
     testTimeout: 40_000,
     reporters: [
       "verbose",

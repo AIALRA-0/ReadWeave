@@ -7,6 +7,7 @@ import {
     formatReadWeaveFullNameOpening,
     formatReadWeaveMarkdown,
     formatReadWeavePersonNameOrder,
+    formatReadWeaveTermReferences,
     readWeaveFormatIssues,
     repairReadWeaveConventionalTerms,
     repairReadWeaveFormat,
@@ -68,7 +69,7 @@ describe("versioned formatting contract", () => {
         expect(result.body).toBe(body);
         expect(result.knowledgeTerms).toEqual([]);
     });
-    it.each([ "`ABC`","《ABC Book》","ABC 示例连接（Alpha Beta Connection）","ABC 与 ABC",
+    it.each([ "`ABC`","《ABC Book》","ABC 示例连接（Alpha Beta Connection）",
         "示例机构（Lumen ABC）", "示例机构 (Lumen ABC)",
         `示例机构（${"Label ".repeat(40)}ABC）` ])(
         "does not annotate protected or ambiguous occurrences: %s", async body => {
@@ -88,12 +89,43 @@ describe("versioned formatting contract", () => {
         expect(result.body).toBe("示例机构（Lumen DEF）将 ABC 示例连接（Alpha Beta Connection）与其他对象连接");
         expect(resolve).toHaveBeenCalledTimes(1);
     });
-    it("leaves the question's own acronym to the sourced naming path", async () => {
-        const resolve = vi.fn();
+    it("repairs the question's own acronym when the answer still leaves it bare", async () => {
+        const resolve = vi.fn(async () => [ {
+            token:"ABC",chineseName:"示例连接",englishName:"Alpha Beta Connection",
+            confidence:"high",basis:"established-usage",contextReason:"当前问题指通行连接"
+        } ]);
         const result = await repairReadWeaveConventionalTerms(
             "ABC 是对象","ABC 的名称来历？",resolve);
-        expect(result.rounds).toBe(0);
-        expect(resolve).not.toHaveBeenCalled();
+        expect(result.body).toBe("ABC 示例连接（Alpha Beta Connection）是对象");
+        expect(resolve).toHaveBeenCalledTimes(1);
+    });
+    it("repairs every abbreviation in one batched request and simplifies later uses", async () => {
+        const tokens = [ "ABC", "DEF", "GHI", "JKL", "MNO", "PQR", "STU", "VWX", "YZA", "BCD" ];
+        const body = `${tokens.join("、")}；再次使用 ABC`;
+        const resolve = vi.fn(async (targets: Array<{ token:string }>) => targets.map(target => ({
+            token:target.token,
+            chineseName:"示例术语",
+            englishName:target.token.split("").map(letter=>`${letter}word`).join(" "),
+            confidence:"high",basis:"established-usage",contextReason:"上下文明确"
+        })));
+        const result = await repairReadWeaveConventionalTerms(body,"这些缩写是什么意思？",resolve);
+        expect(resolve).toHaveBeenCalledTimes(1);
+        expect(resolve.mock.calls[0][0]).toHaveLength(10);
+        expect(result.body).toContain("ABC 示例术语（Aword Bword Cword）");
+        expect(result.body.endsWith("再次使用示例术语")).toBe(true);
+    });
+    it("normalizes a reversed Chinese acronym label without nested parentheses", async () => {
+        const result = await repairReadWeaveConventionalTerms("知识产权（IP）用于保护创作成果","IP 是什么？",async()=>[ {
+            token:"IP",chineseName:"知识产权",englishName:"Intellectual Property",
+            confidence:"high",basis:"established-usage",contextReason:"创作成果语境"
+        } ]);
+        expect(result.body).toBe("IP 知识产权（Intellectual Property）用于保护创作成果");
+    });
+    it("keeps one primary term definition and replaces later bare abbreviations", () => {
+        expect(formatReadWeaveTermReferences(
+            "- NPU 神经网络处理单元（Neural Processing Unit）：NPU 负责运算；NPU 不是存储器",
+            { abbreviation:"NPU",chineseName:"神经网络处理单元",englishName:"Neural Processing Unit" }
+        )).toBe("- NPU 神经网络处理单元（Neural Processing Unit）：神经网络处理单元负责运算；神经网络处理单元不是存储器");
     });
     it("accepts concise context and trimmed names without mutating payload", async () => {
         const term = Object.freeze({ token:"ABC",chineseName:" 示例连接 ",
@@ -312,13 +344,13 @@ describe("versioned formatting contract", () => {
             )
         ).toThrow();
     });
-    it("sends only a failing line and limits local repairs", async () => {
+    it("sends only failing lines and closes every bounded local repair", async () => {
         const repair = vi.fn(async (text: string) => text.replace(/。/gu, ""));
         const body = "第一行。\n\n第二行。\n\n第三行。";
         const result = await repairReadWeaveFormat(body, repair);
-        expect(repair).toHaveBeenCalledTimes(2);
+        expect(repair).toHaveBeenCalledTimes(3);
         expect(repair.mock.calls.every(([ text ]) => text !== body)).toBe(true);
-        expect(result.body).toBe("第一行\n\n第二行\n\n第三行。");
+        expect(result.body).toBe("第一行\n\n第二行\n\n第三行");
     });
     it("never calls a repair on compliant text", async () => {
         const repair = vi.fn();

@@ -11,6 +11,7 @@ test.describe.configure({ retries: 0 });
 
 interface TestEditor {
     getData: () => string;
+    setData: (value: string) => void;
     editing: {
         view: {
             getDomRoot: () => HTMLElement;
@@ -25,7 +26,7 @@ interface TestAppWindow extends Window {
     glob: {
         appContext: {
             tabManager: {
-                getActiveContext: () => { getTextEditor: () => Promise<TestEditor> };
+                getActiveContext: () => { noteId: string; getTextEditor: () => Promise<TestEditor> };
             };
         };
     };
@@ -134,22 +135,44 @@ async function createTextNote(app: App, title: string, body: string) {
         const active = manager.getActiveContext();
         return (await active?.getTextEditor())?.editing.view.getDomRoot() === element;
     }), { timeout: 15_000 }).toBe(true);
+    const noteId = await editor.evaluate(async (element, body) => {
+        const manager = (window as unknown as TestAppWindow).glob.appContext.tabManager;
+        const active = manager.getActiveContext();
+        const textEditor = await active?.getTextEditor();
+        if (!textEditor || textEditor.editing.view.getDomRoot() !== element) {
+            throw new Error("The active CKEditor changed before fixture data was seeded");
+        }
+        const escape = (value: string) => {
+            const span = document.createElement("span");
+            span.textContent = value;
+            return span.innerHTML;
+        };
+        const html = body.split(/\n{2,}/u)
+            .map(paragraph => `<p>${paragraph.split("\n").map(escape).join("<br>")}</p>`)
+            .join("");
+        textEditor.setData(html);
+        return active.noteId;
+    }, body);
     const firstBodyLine = body.split("\n", 1)[0];
-    await expect(async () => {
-        await editor.focus();
-        // Use CKEditor's real input path. A DOM fill can look correct briefly
-        // while its model is still empty, then disappear on the next render.
-        await app.page.keyboard.press("ControlOrMeta+A");
-        await app.page.keyboard.insertText(body);
-        await expect(editor).toContainText(firstBodyLine, { timeout: 2_000 });
-        const modelText = await editor.evaluate(async () => {
+    const origin = new URL(app.page.url()).origin;
+    await expect.poll(async () => {
+        return editor.evaluate(async element => {
             const manager = (window as unknown as TestAppWindow).glob.appContext.tabManager;
             const active = manager.getActiveContext();
-            const html = (await active?.getTextEditor())?.getData() ?? "";
-            return new DOMParser().parseFromString(html,"text/html").body.textContent;
+            const textEditor = await active?.getTextEditor();
+            if (!textEditor || textEditor.editing.view.getDomRoot() !== element) return "";
+            return new DOMParser().parseFromString(textEditor.getData(), "text/html").body.textContent ?? "";
         });
-        expect(modelText).toContain(firstBodyLine);
-    }).toPass({ timeout: 15_000 });
+    }, { timeout: 15_000 }).toContain(firstBodyLine);
+    await expect(editor).toContainText(firstBodyLine, { timeout: 15_000 });
+    await expect.poll(async () => {
+        const response = await app.page.request.get(`${origin}/api/notes/${encodeURIComponent(noteId)}/blob`);
+        if (!response.ok()) return "";
+        const content = ((await response.json()) as { content?: string }).content ?? "";
+        // Persistent ReadWeave anchors may wrap the same text in a span before
+        // this poll observes the blob. Verify the saved text, not HTML identity.
+        return content.replace(/<[^>]*>/gu, "");
+    }, { timeout: 15_000 }).toContain(firstBodyLine);
     return editor;
 }
 

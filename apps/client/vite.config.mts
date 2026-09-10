@@ -123,6 +123,9 @@ export default defineConfig(() => ({
     },
     test: {
         environment: "happy-dom",
+        // Dynamic locale and Mermaid imports can exceed Vitest's 5 s default
+        // when the complete suite saturates slower CI runners.
+        testTimeout: 10_000,
         css: {
             include: [ /ReadWeavePanel\.css/ ]
         },

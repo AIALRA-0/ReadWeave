@@ -288,7 +288,7 @@ const defaultOptions: DefaultOption[] = [
     { name: "readWeaveCacheHitInputCnyPerMillion", value: "", isSynced: false },
     { name: "readWeaveCacheMissInputCnyPerMillion", value: "", isSynced: false },
     { name: "readWeaveOutputCnyPerMillion", value: "", isSynced: false },
-    { name: "readWeaveModel", value: "deepseek-v4-flash", isSynced: false },
+    { name: "readWeaveModel", value: "deepseek-flash", isSynced: false },
     { name: "readWeaveVerifierApiKey", value: "", isSynced: false },
     { name: "readWeaveVerifierBaseUrl", value: "", isSynced: false },
     { name: "readWeaveVerifierModel", value: "", isSynced: false },

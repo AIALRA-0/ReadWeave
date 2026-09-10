@@ -15,6 +15,13 @@ describe("request-wide prepaid budget", () => {
     it.each([-1, NaN, Infinity])("rejects invalid costs %s", (cost) => {
         expect(new ReadWeaveBudget(0.05).reserve(cost)).toBe(false);
     });
+    it("records required work beyond the planning target without pretending it fits", () => {
+        const budget = new ReadWeaveBudget(0.05);
+        expect(budget.reserve(0.049)).toBe(true);
+        expect(budget.reserve(0.01)).toBe(false);
+        expect(budget.reserveRequired(0.01)).toBe(true);
+        expect(budget.remainingCny).toBe(0);
+    });
     it("accounts for Chinese UTF-8 input and maximum output", () => {
         expect(readWeaveModelReservation("规则", "正文", 100)).toBe(((12 + 256) * 3 + 900) / 1e6);
     });

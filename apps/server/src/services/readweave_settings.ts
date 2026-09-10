@@ -9,7 +9,7 @@ import { type ReadWeaveModelRates,readWeaveModelRates } from "./readweave_budget
 import { NonRetryableReadWeaveError } from "./readweave_errors.js";
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
-const DEFAULT_MODEL = "deepseek-v4-flash";
+const DEFAULT_MODEL = "deepseek-flash";
 const DEFAULT_PROVIDER_TYPE = "deepseek-official" as const;
 const DEFAULT_SEARCH_MODE = "always";
 const DEFAULT_SEARCH_BUDGET_CNY = 0.009;

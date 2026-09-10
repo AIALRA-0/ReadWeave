@@ -35,6 +35,7 @@ const assignmentPattern = /\b(api[_-]?key|access[_-]?token|auth[_-]?token|client
 const emailPattern = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi;
 const windowsUserPathPattern = /[A-Za-z]:[\\/]Users[\\/][^\\/\s"'<>]+/gi;
 const unixUserPathPattern = /\/(?:Users|home)\/([^/\s"'<>]+)/gi;
+const privateInfrastructurePathPattern = /\/(?:srv|opt)\/(?:aialra|readweave)(?:\/|\b)/gi;
 const allowedUnixUsers = new Set(["node", "user", "username", "example", "runner", "root"]);
 const detectedLocalUserName = path.basename(os.homedir()).toLowerCase();
 const localUserName = allowedUnixUsers.has(detectedLocalUserName) ? "" : detectedLocalUserName;
@@ -139,6 +140,11 @@ function scanContent(file, content) {
             if (!allowedUnixUsers.has(match[1].toLowerCase())) {
                 findings.push({ file, line: lineNumber, reason: "Unix 用户个人路径" });
             }
+        }
+
+        privateInfrastructurePathPattern.lastIndex = 0;
+        if (privateInfrastructurePathPattern.test(line)) {
+            findings.push({ file, line: lineNumber, reason: "真实服务器部署路径" });
         }
 
         emailPattern.lastIndex = 0;

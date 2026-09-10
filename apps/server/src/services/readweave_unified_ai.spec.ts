@@ -72,6 +72,20 @@ function request(title: string, kind: ReadWeaveGenerateRequest["kind"] = "questi
     };
 }
 
+function requestSystem(payload: Record<string, unknown>): string {
+    const messages = payload.messages as Array<{ content?: string }> | undefined;
+    return messages?.[0]?.content ?? String(payload.instructions ?? "");
+}
+
+function requestUser(payload: Record<string, unknown>): string {
+    const messages = payload.messages as Array<{ content?: string }> | undefined;
+    return messages?.[1]?.content ?? String(payload.input ?? "");
+}
+
+function requestPrompt(payload: Record<string, unknown>): string {
+    return `${requestSystem(payload)}\n${requestUser(payload)}`;
+}
+
 function installModel(
     searchQueries: string[] = [ "authoritative direct evidence" ],
     generatedBody?: string,
@@ -79,8 +93,8 @@ function installModel(
     failVerifier = false
 ) {
     vi.stubGlobal("fetch", vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
-        const payload = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
-        const prompt = payload.messages.map(message => message.content).join("\n");
+        const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        const prompt = requestPrompt(payload);
         let result: Record<string, unknown>;
         if (prompt.includes("统一问题分析器")) {
             result = {
@@ -933,8 +947,8 @@ describe("ReadWeave one-pass workflow", () => {
         "sends the v2 contract through %s with one writer", async contentType => {
             const plainBody = "仅保留 6 天记录，断网时不上传";
             vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
-                const payload = JSON.parse(String(init?.body));
-                const system = payload.messages[0].content;
+                const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+                const system = requestSystem(payload);
                 for (const rule of HUMAN_READABLE_CHINESE_STYLE_CONTRACT) {
                     expect(system).toContain(rule);
                 }
@@ -968,21 +982,21 @@ describe("ReadWeave one-pass workflow", () => {
 
         const result = await generateUnifiedReadWeaveAnswer(request("Haoxing Ren 是谁？"));
         const writerCall = vi.mocked(fetch).mock.calls.map(([ , init ]) =>
-            JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> })
-            .find(payload => payload.messages[0]?.content.includes("统一证据写作者"));
+            JSON.parse(String(init?.body)) as Record<string, unknown>)
+            .find(payload => requestSystem(payload).includes("统一证据写作者"));
 
         expect(result.body).toBe("任浩星（Haoxing Ren）是芯片设计研究者");
-        expect(writerCall?.messages[0]?.content).toContain("任浩星（Haoxing Ren）");
-        expect(writerCall?.messages[0]?.content).toContain("禁止把顺序写反");
+        expect(writerCall && requestSystem(writerCall)).toContain("任浩星（Haoxing Ren）");
+        expect(writerCall && requestSystem(writerCall)).toContain("禁止把顺序写反");
     });
     it("renders structured summary points without guessing sentence boundaries", async () => {
         const points = [ "采样周期为 4 秒", "原始记录不上传，只保留 3 天汇总",
             "断网期间继续记录，恢复连接后仅同步汇总" ];
         vi.stubGlobal("fetch",vi.fn(async (_input,init) => {
-            const payload = JSON.parse(String(init?.body));
-            expect(payload.messages[0].content).toContain("summaryPoints");
-            expect(payload.messages[0].content).not.toContain("只输出 JSON：body");
-            expect(payload.messages[1].content).not.toContain("解释必要背景");
+            const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            expect(requestSystem(payload)).toContain("summaryPoints");
+            expect(requestSystem(payload)).not.toContain("只输出 JSON：body");
+            expect(requestUser(payload)).not.toContain("解释必要背景");
             return Response.json({ choices:[ { message:{ content:JSON.stringify({
                 summaryPoints:points.map(text=>({ text,sourceIds:[ "L1" ] })) }) } } ],
             usage:{ prompt_tokens:1000,completion_tokens:100 } });
@@ -1028,7 +1042,7 @@ describe("ReadWeave one-pass workflow", () => {
         expect(fetch).toHaveBeenCalledTimes(1);
         expect(result.body).toBeTruthy();
         expect(result.usage).toMatchObject({ modelCalls:1,withinBudget:true,budgetCny:.05 });
-        expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body)).max_tokens).toBe(1600);
+        expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body)).max_output_tokens).toBe(1600);
         expect(progress.filter(event=>event.usage)[0]?.usage).toMatchObject({ modelCalls:0,costCny:.0072 });
     });
     it("keeps a full-name answer affordable without discarding complete evidence", async () => {
@@ -1041,9 +1055,9 @@ describe("ReadWeave one-pass workflow", () => {
         installModel([],"XPT 示例分组传输（Example Packet Transfer）：正式全称");
         const result = await generateUnifiedReadWeaveAnswer({ ...request("XPT 的全称是什么？"),
             fragments:[ { id:"selected",role:"selected",text:"XPT" } ] });
-        const payload = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body));
-        expect(payload.messages[1].content).toContain(quote.trim());
-        expect(payload.messages[1].content).not.toContain("[S8]");
+        const payload = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body)) as Record<string, unknown>;
+        expect(requestUser(payload)).toContain(quote.trim());
+        expect(requestUser(payload)).not.toContain("[S8]");
         expect(result.usage).toMatchObject({ modelCalls:1,withinBudget:true,budgetCny:.05 });
     });
     it("enforces JSON-mode instructions for the local terminology request", async () => {
@@ -1056,9 +1070,9 @@ describe("ReadWeave one-pass workflow", () => {
         }));
         let calls = 0;
         vi.stubGlobal("fetch",vi.fn(async (_input,init) => {
-            const payload = JSON.parse(String(init?.body));
-            expect(payload.response_format).toEqual({ type:"json_object" });
-            expect(payload.messages[0].content).toMatch(/json/iu);
+            const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            expect(payload.text).toEqual({ format:{ type:"json_object" } });
+            expect(requestSystem(payload)).toMatch(/json/iu);
             const content = calls++ === 0
                 ? { body,claims:[],namingEvidence:[ { bodyText:body,sourceId:"S1",quote } ] }
                 : { terms:[ { token:"ABC",chineseName:"示例连接",englishName:"Alpha Beta Connection",
@@ -1074,16 +1088,37 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.usage?.modelCalls).toBe(2);
         expect(result.audit?.validationIssues).toEqual([]);
     });
-    it.each([ "empty", "malformed", "transport", "truncated" ])(
+    it("repairs an empty first answer instead of exposing a quality gate", async () => {
+        const progress: ReadWeaveGenerationProgress[] = [];
+        let calls = 0;
+        vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+            model:"deepseek-v4-flash",
+            output:[ { type:"message",content:[ { type:"output_text",text:JSON.stringify(
+                calls++ === 0 ? { body:"" } : { body:"这是直接答案",claims:[],unresolvedClaims:[] }
+            ) } ] } ],
+            status:"completed",
+            usage:{ input_tokens:1000,output_tokens:100,total_tokens:1100 }
+        })));
+        const result = await generateUnifiedReadWeaveAnswer({ ...request("这是什么意思？"),
+            activeExternalSearch:false,autoExternalSearch:false
+        }, event => progress.push(event));
+        expect(result.body).toBe("这是直接答案");
+        expect(result.workflow?.generationAttempts).toBe(2);
+        expect(fetch).toHaveBeenCalledTimes(2);
+        expect(progress.filter(event => event.usage).at(-1)?.usage?.modelCalls).toBe(2);
+    });
+    it.each([ "malformed", "transport", "truncated" ])(
         "retains attempt costs when generation fails: %s", async mode => {
             const progress: ReadWeaveGenerationProgress[] = [];
             const fetch = vi.fn(async () => {
                 if (mode === "transport") throw new Error("connection reset");
                 return Response.json({ model:"deepseek-v4-flash",
-                    choices:[ { finish_reason:mode === "truncated" ? "length" : "stop",message:{
-                        content:mode === "empty" ? '{"body":""}' : mode === "truncated"
-                            ? '{"body":"虽是合法 JSON，但接口已声明截断"}' : "not json" } } ],
-                    usage:{ prompt_tokens:1000,completion_tokens:100,total_tokens:1100 } });
+                    status:mode === "truncated" ? "incomplete" : "completed",
+                    incomplete_details:mode === "truncated" ? { reason:"max_output_tokens" } : null,
+                    output:[ { type:"message",content:[ { type:"output_text",
+                        text:mode === "truncated" ? '{"body":"虽是合法 JSON，但接口已声明截断"}' : "not json"
+                    } ] } ],
+                    usage:{ input_tokens:1000,output_tokens:100,total_tokens:1100 } });
             });
             vi.stubGlobal("fetch", fetch);
             await expect(generateUnifiedReadWeaveAnswer({ ...request("这是什么意思？"),
@@ -1109,7 +1144,7 @@ describe("ReadWeave one-pass workflow", () => {
         }));
         let calls = 0;
         vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
-            const prompt = JSON.parse(String(init?.body)).messages[1].content;
+            const prompt = requestUser(JSON.parse(String(init?.body)) as Record<string, unknown>);
             const content = calls++ === 0
                 ? { body:original,claims:[],
                     namingEvidence:[ { bodyText:original,sourceId:"S1",quote } ] }
@@ -1143,8 +1178,8 @@ describe("ReadWeave one-pass workflow", () => {
                 publishedAt:"2025-01-01" } ]
         }));
         vi.stubGlobal("fetch", vi.fn(async (_input, init) => {
-            const payload = JSON.parse(String(init?.body));
-            expect(payload.messages[1].content).toContain(decision.trim());
+            const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            expect(requestUser(payload)).toContain(decision.trim());
             return Response.json({ model:"deepseek-v4-flash",
                 choices:[ { message:{ content:JSON.stringify({
                     body, claims:[], namingEvidence:[ { bodyText:body,sourceId:"S1",quote } ]
@@ -1169,8 +1204,8 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.audit?.questionContract.answerRequirements).toEqual(result.answerPlan?.steps);
         expect(result.audit?.questionContract.exclusions).toContain("不介绍语法和用途");
         expect(result.usage).toMatchObject({ targetCny: 0.05, budgetCny: 0.1 });
-        const payload = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body));
-        const writerInput = payload.messages[1].content;
+        const payload = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body)) as Record<string, unknown>;
+        const writerInput = requestUser(payload);
         expect(writerInput).toContain("不介绍语法和用途");
         expect(writerInput).not.toContain("先直接回答问题,再补足理解该答案所必需的机制");
     });
@@ -1206,8 +1241,8 @@ describe("ReadWeave one-pass workflow", () => {
     it("uses one writer call and one local check with default external evidence", async () => {
         const result = await generateUnifiedReadWeaveAnswer(request("如何工作？"));
         const calls = vi.mocked(fetch).mock.calls.map(([ , init ]) => {
-            const payload = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
-            return payload.messages.map(message => message.content).join("\n");
+            const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            return requestPrompt(payload);
         });
 
         expect(calls).toHaveLength(1);
@@ -1232,6 +1267,67 @@ describe("ReadWeave one-pass workflow", () => {
             repairRounds: 0
         });
         expect(result.usage?.modelCalls).toBe(1);
+    });
+
+    it("uses the official DeepSeek Responses request and parses its native result", async () => {
+        vi.stubGlobal("fetch", vi.fn(async (input, init) => {
+            expect(String(input)).toBe("https://api.deepseek.com/responses");
+            const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            expect(payload).toMatchObject({
+                model:"deepseek-v4-flash",
+                stream:false,
+                reasoning:{ effort:"none" },
+                text:{ format:{ type:"json_object" } }
+            });
+            expect(payload.instructions).toEqual(expect.any(String));
+            expect(payload.input).toEqual(expect.any(String));
+            expect(payload).not.toHaveProperty("messages");
+            return Response.json({
+                model:"deepseek-v4-flash",
+                status:"completed",
+                output:[ { type:"message",content:[ { type:"output_text",text:JSON.stringify({
+                    body:"这是直接答案",claims:[ {
+                        claimId:"C1",text:"这是直接答案",sourceIds:[ "L1" ],confidence:"high"
+                    } ],unresolvedClaims:[]
+                }) } ] } ],
+                usage:{
+                    input_tokens:240,input_tokens_details:{ cached_tokens:40 },
+                    output_tokens:30,output_tokens_details:{ reasoning_tokens:0 },total_tokens:270
+                }
+            });
+        }));
+        const result = await generateUnifiedReadWeaveAnswer({
+            ...request("这段话说明什么？"),activeExternalSearch:false,autoExternalSearch:false
+        });
+        expect(result.body).toBe("这是直接答案");
+        expect(result.usage).toMatchObject({
+            inputTokens:240,cacheHitInputTokens:40,cacheMissInputTokens:200,
+            outputTokens:30,totalTokens:270,modelCalls:1
+        });
+    });
+
+    it("repairs a generic evidence refusal into a direct public-knowledge answer", async () => {
+        let calls = 0;
+        vi.stubGlobal("fetch", vi.fn(async () => {
+            const first = calls++ === 0;
+            return Response.json({
+                model:"deepseek-v4-flash",status:"completed",
+                output:[ { type:"message",content:[ { type:"output_text",text:JSON.stringify({
+                    body:first
+                        ? "解析布局在当前证据中没有可确认的定义或展开，无法给出它是什么、如何运作以及解决什么问题"
+                        : "解析布局（Analytical Placement）是电子设计自动化中使用数学优化确定电路元件位置的布局方法",
+                    claims:[],unresolvedClaims:[]
+                }) } ] } ],
+                usage:{ input_tokens:500,output_tokens:80,total_tokens:580 }
+            });
+        }));
+        const result = await generateUnifiedReadWeaveAnswer({
+            ...request("解析布局是什么？"),activeExternalSearch:false,autoExternalSearch:false
+        });
+        expect(result.body).toContain("是电子设计自动化");
+        expect(result.body).not.toContain("当前证据");
+        expect(result.workflow?.generationAttempts).toBe(2);
+        expect(fetch).toHaveBeenCalledTimes(2);
     });
 
     it("reports provider, model, stage and upstream reason for exhausted credit", async () => {
@@ -1312,8 +1408,8 @@ describe("ReadWeave one-pass workflow", () => {
     it("uses an unchecked answer-plan flow instead of blocking generation", async () => {
         const enabled = { ...request("为什么缓存能提速？"), autoApplyPlan: true };
         await generateUnifiedReadWeaveAnswer(enabled);
-        const enabledPrompt = JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body)) as { messages: Array<{ content: string }> };
-        expect(enabledPrompt.messages.map(message => message.content).join("\n")).toContain("回答构造流（必须按这个顺序组织正文");
+        const enabledPrompt = JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body)) as Record<string, unknown>;
+        expect(requestPrompt(enabledPrompt)).toContain("回答构造流（必须按这个顺序组织正文");
 
         vi.mocked(fetch).mockClear();
         const disabled = { ...request("为什么缓存能提速？"), autoApplyPlan: false };
@@ -1345,8 +1441,8 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.answerPlan?.reviewStatus).toBe("approved");
         expect(result.answerPlan?.steps).toEqual([ "定义对象", "解释运行方式", "说明收益和边界" ]);
         expect(result.audit?.questionContract.normalizedQuestion).toBe("“缓存”是什么？");
-        const prompt = JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body)) as { messages: Array<{ content: string }> };
-        expect(prompt.messages.map(message => message.content).join("\n")).toContain("解释运行方式");
+        const prompt = JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body)) as Record<string, unknown>;
+        expect(requestPrompt(prompt)).toContain("解释运行方式");
     });
 
     it("turns the Creative Commons BY marker into a required bilingual definition", async () => {
@@ -1424,11 +1520,15 @@ describe("third-party provider and prepaid answer delivery", () => {
         await expect(generateUnifiedReadWeaveAnswer(request("是什么？"))).rejects.toThrow("响应不是 JSON");
         expect(fetch).toHaveBeenCalledTimes(1);
     });
-    it("detects unaffordable provider pricing before paid search or a model request", async () => {
+    it("does not turn an unusually high configured price into a generation gate", async () => {
         runtimeConfig.current.rates = { cacheHitInput:10000, cacheMissInput:10000, output:10000 };
-        await expect(generateUnifiedReadWeaveAnswer(request("是什么？"))).rejects.toThrow("不代表模型供应商账户余额不足");
-        expect(searchMock).not.toHaveBeenCalled();
-        expect(fetch).not.toHaveBeenCalled();
+        const result = await generateUnifiedReadWeaveAnswer(request("是什么？"));
+        expect(result.body).toContain("直接结论");
+        expect(result.usage?.withinBudget).toBe(false);
+        expect(searchMock).toHaveBeenCalledWith(
+            expect.objectContaining({ allowPaid:false }), expect.anything()
+        );
+        expect(fetch).toHaveBeenCalledTimes(1);
     });
     it("retains a finished answer when optional repairs have no budget", async () => {
         runtimeConfig.current.rates = { cacheHitInput:0,cacheMissInput:0,output:9 };

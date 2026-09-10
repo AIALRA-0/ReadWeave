@@ -58,6 +58,27 @@ export function mapReadWeaveProse(body: string, transform: (text: string) => str
         .join("");
 }
 
+function readWeaveProseRanges(body: string): Array<{ start: number; end: number }> {
+    const ranges: Array<{ start: number; end: number }> = [];
+    let cursor = 0;
+    for (const token of Lexer.lex(body)) {
+        const tokenStart = body.indexOf(token.raw, cursor);
+        if (tokenStart < 0) continue;
+        cursor = tokenStart + token.raw.length;
+        if ([ "code", "table", "blockquote", "html" ].includes(token.type)) continue;
+        let partCursor = 0;
+        for (const [ index, part ] of token.raw.split(INLINE_DATA).entries()) {
+            const partStart = token.raw.indexOf(part, partCursor);
+            if (partStart < 0) continue;
+            partCursor = partStart + part.length;
+            if (index % 2 === 0 && part) {
+                ranges.push({ start: tokenStart + partStart, end: tokenStart + partStart + part.length });
+            }
+        }
+    }
+    return ranges;
+}
+
 const LATIN_PERSON_NAME = /^(?:[A-Z](?:\.|[A-Za-z'’.-]+))(?:\s+(?:(?:van|von|de|da|del|di|la|le|du|der|den|ten|ter)\s+)?[A-Z](?:\.|[A-Za-z'’.-]+)){1,5}$/u;
 
 /** Keep a person's Chinese name outside the parentheses when both names exist. */
@@ -258,6 +279,40 @@ export function formatReadWeaveFullNameOpening(body: string, chineseName?: strin
     return `${match[1]} ${chineseName}（${match[2].trim()}）${body.slice(opening.length)}`;
 }
 
+/** Keep one canonical term label and use its Chinese name for later prose references. */
+export function formatReadWeaveTermReferences(
+    body: string,
+    identity?: { abbreviation?: string; chineseName?: string; englishName?: string }
+): string {
+    const abbreviation = identity?.abbreviation?.trim();
+    const chineseName = identity?.chineseName?.trim();
+    const englishName = identity?.englishName?.trim();
+    if (!abbreviation || !chineseName || !englishName) return body;
+    const escapedToken = abbreviation.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    const escapedChinese = chineseName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    const escapedEnglish = englishName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    const canonicalSource = `${escapedToken}\\s+${escapedChinese}（${escapedEnglish}）`;
+    const tokenSource = `(?<![\\p{Script=Latin}\\p{N}_.])${escapedToken}(?![\\p{Script=Latin}\\p{N}_])`;
+    const reference = new RegExp(
+        `${canonicalSource}|${tokenSource}[ \\t]*(?=[\\p{Script=Han}，；。：、！？])|${tokenSource}`,
+        "gu"
+    );
+    let keptCanonical = false;
+    return mapReadWeaveProse(body, prose => prose.replace(reference, value => {
+        if (new RegExp(`^${canonicalSource}$`, "u").test(value)) {
+            if (!keptCanonical) {
+                keptCanonical = true;
+                return value;
+            }
+            return chineseName;
+        }
+        return keptCanonical ? chineseName : value.trimEnd();
+    }).replace(
+        new RegExp(`([\\p{Script=Han}，；。：、！？])[ \\t]+(?=${escapedChinese})`, "gu"),
+        "$1"
+    ));
+}
+
 /** A stale or overlapping patch batch is rejected atomically. */
 export function applyReadWeaveFormatPatches(body: string, patches: ReadWeaveTextPatch[]): string {
     const ordered = [ ...patches ].sort((a, b) => a.start - b.start);
@@ -383,34 +438,41 @@ export async function repairReadWeaveConventionalTerms(
     resolve: (targets: Array<{ token:string;before:string;after:string }>) => Promise<unknown>,
     signal?: AbortSignal
 ) {
-    const targets: Array<{ token:string;start:number;before:string;after:string }> = [];
-    mapReadWeaveProse(original, prose => {
-        for (const match of prose.matchAll(/\b[A-Z]{2,6}\b/gu)) {
-            const token = match[0], start = original.indexOf(token);
-            const before = original.slice(Math.max(0,start-150),start);
-            const after = original.slice(start+token.length,start+token.length+150);
-            if (question.includes(token) || start !== original.lastIndexOf(token)
-                || before.lastIndexOf("《") > before.lastIndexOf("》")
-                // Parenthetical names are already a complete label. Inserting an
-                // expansion inside one changes that label and creates nested brackets.
-                || /[（(][^（）()\n]*$/u.test(original.slice(0,start))
-                || /^[ \t]*[\p{Script=Han}]{2,40}（[A-Za-z]/u.test(after)) continue;
-            targets.push({ token,start,before,after });
-        }
-        return prose;
-    });
+    const occurrences = readWeaveProseRanges(original).flatMap(range => Array.from(
+        original.slice(range.start, range.end)
+            .matchAll(/(?<![\p{Script=Latin}\p{N}_.])(?:[A-Z][A-Z0-9+/#_-]{1,15}(?:\.[A-Za-z0-9]+)?|dB|SoC|NoC|IPv[46])(?![\p{Script=Latin}\p{N}_])/gu),
+        match => ({ token: match[0], start: range.start + (match.index ?? 0), rangeStart: range.start })
+    ));
+    const firstByToken = new Map<string, { token:string;start:number;before:string;after:string }>();
+    for (const occurrence of occurrences) {
+        if (firstByToken.has(occurrence.token)) continue;
+        const before = original.slice(Math.max(0, occurrence.start - 150), occurrence.start);
+        const after = original.slice(occurrence.start + occurrence.token.length, occurrence.start + occurrence.token.length + 150);
+        if (before.lastIndexOf("《") > before.lastIndexOf("》")) continue;
+        const proseBefore = original.slice(occurrence.rangeStart, occurrence.start);
+        const openParenthesis = Math.max(proseBefore.lastIndexOf("（"), proseBefore.lastIndexOf("("))
+            > Math.max(proseBefore.lastIndexOf("）"), proseBefore.lastIndexOf(")"));
+        const reversedShortLabel = /[\p{Script=Han}]{2,40}（$/u.test(before) && after.startsWith("）");
+        if (openParenthesis && !reversedShortLabel) continue;
+        const canonical = new RegExp(
+            `^\\s+[\\p{Script=Han}][^（）()\\n]{1,120}（[^（）\\n]{1,220}[A-Za-z][^（）\\n]*）`, "u"
+        );
+        if (canonical.test(after)) continue;
+        firstByToken.set(occurrence.token, { ...occurrence, before, after });
+    }
+    const targets = [ ...firstByToken.values() ];
     if (!targets.length) return {
         body:original,rounds:0,knowledgeTerms:[] as string[],warnings:[] as string[]
     };
     signal?.throwIfAborted();
-    const chosen = targets.slice(0,2);
-    const result = await resolve(chosen.map(({ token,before,after })=>({ token,before,after })));
+    const result = await resolve(targets.map(({ token,before,after })=>({ token,before,after })));
     signal?.throwIfAborted();
     let body = original;
     const knowledgeTerms: string[] = [];
     const warnings: string[] = [];
     if (!Array.isArray(result)) warnings.push("局部术语响应缺少 terms 数组，未应用");
-    if (Array.isArray(result)) for (const target of chosen.toSorted((a,b)=>b.start-a.start)) {
+    const patches: Array<{ start:number; original:string; replacement:string }> = [];
+    if (Array.isArray(result)) for (const target of targets) {
         const matches = result.filter(item=>item?.token === target.token);
         if (matches.length !== 1) {
             warnings.push(`${target.token}：局部术语响应缺项或重复，未应用`);
@@ -437,10 +499,42 @@ export async function repairReadWeaveConventionalTerms(
             continue;
         }
         const annotation = `${target.token} ${term.chineseName}（${term.englishName}）`;
-        const after = body.slice(target.start+target.token.length)
-            .replace(/^[ \t]+(?=\p{Script=Han})/u, "");
-        body = body.slice(0,target.start) + annotation + after;
+        const tokenOccurrences = occurrences.filter(item => item.token === target.token);
+        tokenOccurrences.forEach((occurrence, index) => {
+            const before = original.slice(0, occurrence.start);
+            const after = original.slice(occurrence.start + target.token.length);
+            const reversed = before.match(/([\p{Script=Han}]{2,40})（$/u);
+            if (reversed && after.startsWith("）")) {
+                const start = occurrence.start - reversed[0].length;
+                patches.push({
+                    start,
+                    original: `${reversed[1]}（${target.token}）`,
+                    replacement: annotation
+                });
+                return;
+            }
+            const proseBefore = original.slice(occurrence.rangeStart, occurrence.start);
+            if (Math.max(proseBefore.lastIndexOf("（"), proseBefore.lastIndexOf("("))
+                > Math.max(proseBefore.lastIndexOf("）"), proseBefore.lastIndexOf(")"))) return;
+            const spacing = after.match(/^[ \t]+(?=[\p{Script=Han}，；。：、！？])/u)?.[0] ?? "";
+            const leading = index > 0
+                ? before.match(/(?<=[\p{Script=Han}，；。：、！？])[ \t]+$/u)?.[0] ?? ""
+                : "";
+            patches.push({
+                start: occurrence.start - leading.length,
+                original: leading + target.token + spacing,
+                replacement: index === 0 ? annotation : term.chineseName
+            });
+        });
         knowledgeTerms.push(target.token);
+    }
+    for (const patch of patches.toSorted((a,b)=>b.start-a.start)) {
+        if (body.slice(patch.start, patch.start + patch.original.length) !== patch.original) {
+            warnings.push(`${patch.original}：局部术语位置已经变化，未应用`);
+            continue;
+        }
+        body = body.slice(0, patch.start) + patch.replacement
+            + body.slice(patch.start + patch.original.length);
     }
     return { body,rounds:1,knowledgeTerms,warnings };
 }
@@ -450,12 +544,12 @@ export async function repairReadWeaveFormat(
     original: string,
     repair: (fragment: string, issues: string[]) => Promise<string>,
     signal?: AbortSignal,
-    maxRounds = 2
+    maxRounds = 6
 ): Promise<{ body: string; rounds: number; warnings: string[] }> {
     let body = original;
     let rounds = 0;
     const warnings: string[] = [];
-    for (; rounds < Math.min(2, Math.max(0, maxRounds)); ) {
+    for (; rounds < Math.min(6, Math.max(0, maxRounds)); ) {
         let fragment: string | undefined;
         mapReadWeaveProse(body, (text) => {
             fragment ??= text

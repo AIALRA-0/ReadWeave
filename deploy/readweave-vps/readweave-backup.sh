@@ -3,8 +3,10 @@ set -eu
 
 # Store backups outside the live data directory so a failed application update
 # cannot overwrite the recovery copy.
-data_dir=${READWEAVE_DATA_DIR:-__READWEAVE_DATA_DIR__}
-backup_dir=${READWEAVE_BACKUP_DIR:-__READWEAVE_BACKUP_DIR__}
+: "${READWEAVE_DATA_DIR:?Set READWEAVE_DATA_DIR to the persistent data directory}"
+: "${READWEAVE_BACKUP_DIR:?Set READWEAVE_BACKUP_DIR to the protected backup directory}"
+data_dir=$READWEAVE_DATA_DIR
+backup_dir=$READWEAVE_BACKUP_DIR
 timestamp=$(date -u +%Y%m%dT%H%M%SZ)
 
 install -d -o 1000 -g 1000 -m 0700 "$backup_dir"

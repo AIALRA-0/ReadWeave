@@ -8,15 +8,16 @@ environment file or substitute them during release automation:
 - `READWEAVE_BIND`: loopback address and port exposed to the reverse proxy
 - `READWEAVE_DATA_DIR`: persistent Trilium data directory
 - `READWEAVE_BACKUP_DIR`: protected backup directory
+- `READWEAVE_VERIFIER_ENV_FILE`: root-only verifier environment file
+- `READWEAVE_AUTH_SNIPPET_DIR`: private Nginx authentication snippet directory
+- `READWEAVE_INSTALL_DIR`: directory containing the installed deployment scripts
 - `__READWEAVE_DOMAIN__`: HTTPS host name used to render the Nginx template
+- `__READWEAVE_AUTH_SNIPPET_DIR__`: Nginx-safe rendered value of
+  `READWEAVE_AUTH_SNIPPET_DIR`
 
-The production verifier is supplied separately by the operator in:
-
-```text
-__READWEAVE_VERIFIER_ENV_FILE__
-```
-
-It must be owned by `root:root` with mode `0600` and contain only the
+The production verifier is supplied separately through
+`READWEAVE_VERIFIER_ENV_FILE`. It must be owned by `root:root` with mode `0600`
+and contain only the
 non-empty variables `READWEAVE_VERIFIER_API_KEY`,
 `READWEAVE_VERIFIER_API_BASE_URL`, and `READWEAVE_VERIFIER_MODEL`. The
 verifier origin and model family must differ from the writer. Do not put the

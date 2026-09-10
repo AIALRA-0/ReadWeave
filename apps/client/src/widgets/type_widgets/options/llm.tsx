@@ -104,6 +104,7 @@ function ReadWeaveSettings() {
     const selectableModels = useMemo(() => Array.from(new Set([
         model,
         ...models.map(item => item.id),
+        "deepseek-flash",
         "deepseek-v4-pro",
         "deepseek-v4-flash",
         "deepseek-chat",
