@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
     applyReadWeaveFormatPatches,
+    formatReadWeaveAnswerHeadings,
+    formatReadWeaveCanonicalEntities,
     formatReadWeaveCodeCopies,
     formatReadWeaveDefinitionBlock,
     formatReadWeaveFullNameOpening,
@@ -44,6 +46,37 @@ describe("versioned formatting contract", () => {
             .toContain("FMT-044：人物姓名顺序必须为中文姓名（English or Pinyin Name）");
         expect(readWeaveFormatIssues("任浩星（Haoxing Ren）是芯片设计研究者"))
             .not.toContain("FMT-044：人物姓名顺序必须为中文姓名（English or Pinyin Name）");
+    });
+    it("closes the exact live acronym-order failures without changing compliant text", () => {
+        expect(formatReadWeaveCanonicalEntities(
+            "Nesterov 加速梯度（Nesterov Accelerated Gradient，NAG）用于优化"
+        )).toBe("NAG Nesterov 加速梯度（Nesterov Accelerated Gradient）用于优化");
+        expect(readWeaveFormatIssues(
+            "Nesterov 加速梯度（Nesterov Accelerated Gradient，NAG）用于优化"
+        )).toContain("FMT-052：缩写必须置于中文全称和英文全称之前");
+        expect(formatReadWeaveCanonicalEntities(
+            "它属于电子设计自动化（Electronic Design Automation，EDA）领域"
+        )).toBe("它属于 EDA 电子设计自动化（Electronic Design Automation）领域");
+        expect(formatReadWeaveCanonicalEntities(
+            "与超大规模集成电路（Very Large Scale Integration，VLSI）物理设计相关"
+        )).toBe("与 VLSI 超大规模集成电路（Very Large Scale Integration）物理设计相关");
+        const compliant = "GPU 图形处理器（Graphics Processing Unit）用于并行计算";
+        expect(formatReadWeaveCanonicalEntities(compliant)).toBe(compliant);
+        expect(readWeaveFormatIssues(compliant)).not.toContain(
+            "FMT-052：缩写必须置于中文全称和英文全称之前"
+        );
+    });
+    it("removes surname commentary while putting a person's Chinese name first", () => {
+        expect(formatReadWeavePersonNameOrder(
+            "David Z. Pan（潘大卫，Pan 为姓）是研究者",
+            "David Z. Pan"
+        )).toBe("潘大卫（David Z. Pan）是研究者");
+    });
+    it("normalizes every generated answer heading and labels an orphan opening", () => {
+        expect(formatReadWeaveAnswerHeadings(
+            "直接回答\n\n# 原理\n\n正文\n\n## 边界\n\n说明"
+        )).toBe("### 回答\n\n直接回答\n\n### 原理\n\n正文\n\n### 边界\n\n说明");
+        expect(formatReadWeaveAnswerHeadings("只有一个连续语义块")).toBe("只有一个连续语义块");
     });
     it("annotates one incidental initialism without accepting replacement prose", async () => {
         const body = "这段涉及 ABC 与其他对象，保留 12 个条件";

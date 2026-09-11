@@ -1,6 +1,6 @@
 import { Lexer } from "marked";
 
-export const READWEAVE_FORMAT_VERSION = "format-2026-09-v2";
+export const READWEAVE_FORMAT_VERSION = "format-2026-09-v3";
 
 function normalizeSimpleMathNotation(value: string): string {
     const scientific = new RegExp(
@@ -92,13 +92,63 @@ export function formatReadWeavePersonNameOrder(body: string, subject: string): s
     const escaped = subjectLatin.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
     const reversed = new RegExp(
         `(?<![\\p{Script=Latin}\\p{N}_])(${escaped})\\s*[（(]\\s*`
-        + "([\\p{Script=Han}]{2,4}(?:·[\\p{Script=Han}]{1,8})?)\\s*[）)]",
+        + "([\\p{Script=Han}]{2,4}(?:·[\\p{Script=Han}]{1,8})?)"
+        + "(?:\\s*[，,]\\s*[A-Za-z.'’ -]{1,40}为姓)?\\s*[）)]",
         "giu"
     );
+    const chineseFirst = new RegExp(
+        `([\\p{Script=Han}]{2,4}(?:·[\\p{Script=Han}]{1,8})?)\\s*[（(]\\s*(${escaped})`
+        + "(?:\\s*[，,]\\s*[A-Za-z.'’ -]{1,40}为姓)?\\s*[）)]",
+        "giu"
+    );
+    return mapReadWeaveProse(body, text => text
+        .replace(reversed, (_match, englishName: string, chineseName: string) =>
+            `${chineseName}（${englishName}）`)
+        .replace(chineseFirst, (_match, chineseName: string, englishName: string) =>
+            `${chineseName}（${englishName}）`));
+}
+
+const TRAILING_ACRONYM_NAME = new RegExp(
+    String.raw`((?:[A-Z][A-Za-z'’.-]*[ \t]+){0,4}[\p{Script=Han}]{2,30})[ \t]*[（(]`
+    + String.raw`([A-Za-z][A-Za-z'’.-]*(?:[ \t-]+[A-Za-z][A-Za-z'’.-]*){1,12})`
+    + String.raw`[ \t]*[，,][ \t]*([A-Z][A-Z0-9+/#_-]{1,15})[）)]`, "gu"
+);
+
+function englishInitials(value: string): string {
+    return value.split(/[ -]/u)
+        .filter(word => word && !/^(?:of|the|and|for)$/iu.test(word))
+        .map(word => word[0]).join("").toUpperCase();
+}
+
+/** Reorder names whose complete fields are already present. No model knowledge
+ * or lexical content is introduced by this operation. */
+export function formatReadWeaveCanonicalEntities(body: string): string {
     return mapReadWeaveProse(body, text => text.replace(
-        reversed,
-        (_match, englishName: string, chineseName: string) => `${chineseName}（${englishName}）`
+        TRAILING_ACRONYM_NAME,
+        (original, rawLabel: string, englishName: string, abbreviation: string) => {
+            if (englishInitials(englishName) !== abbreviation) return original;
+            const sentence = /^[A-Z]/u.test(rawLabel) ? undefined : rawLabel.match(
+                /^(.*?(?:属于|涉及|采用|使用|通过|基于|面向|以及|和|与|是|为))([\p{Script=Han}]{2,30})$/u
+            );
+            const connector = sentence?.[1] ?? "";
+            const label = sentence?.[2] ?? rawLabel;
+            if (!label || !/\p{Script=Han}/u.test(label)) return original;
+            return `${connector}${connector ? " " : ""}${abbreviation} ${label}（${englishName}）`;
+        }
     ));
+}
+
+/** Keep generated headings visually and semantically local to the side panel. */
+export function formatReadWeaveAnswerHeadings(body: string, enabled = true): string {
+    if (!enabled) return body;
+    const headings = Array.from(body.matchAll(/^ {0,3}#{1,6}[ \t]+\S.*$/gmu));
+    if (!headings.length) return body;
+    let normalized = body.replace(/^ {0,3}#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/gmu, "### $1");
+    const firstHeading = normalized.search(/^###\s+/mu);
+    if (firstHeading > 0 && normalized.slice(0, firstHeading).trim()) {
+        normalized = `### 回答\n\n${normalized}`;
+    }
+    return normalized;
 }
 
 /** Mark explicit bilingual definitions; never infer a definition from prose. */
@@ -349,6 +399,13 @@ export function applyReadWeaveFormatPatches(body: string, patches: ReadWeaveText
 
 export function readWeaveFormatIssues(body: string): string[] {
     const issues = new Set<string>();
+    if (formatReadWeaveCanonicalEntities(body) !== body)
+        issues.add("FMT-052：缩写必须置于中文全称和英文全称之前");
+    if (/^ {0,3}(?:#{1,2}|#{4,6})[ \t]+\S/gmu.test(body))
+        issues.add("FMT-023：回答小标题必须使用统一层级");
+    const firstHeading = body.search(/^ {0,3}#{1,6}[ \t]+\S/mu);
+    if (firstHeading > 0 && body.slice(0, firstHeading).trim())
+        issues.add("FMT-023：分区回答的首段缺少小标题");
     mapReadWeaveProse(body, (text) => {
         if (/。/u.test(text)) issues.add("FMT-009：普通正文仍含中文句号");
         if (/[；。][ \t]*(?:\n|$)/u.test(text)) issues.add("FMT-018：段末标点不符合规则");
@@ -359,7 +416,7 @@ export function readWeaveFormatIssues(body: string): string[] {
             issues.add("FMT-036：冒号后的两个以上独立并列项需要分行");
         if (/[\p{Script=Han}][A-Za-z0-9]|[A-Za-z0-9][\p{Script=Han}]/u.test(text))
             issues.add("FMT-047：中文与英文或数字之间缺少空格");
-        if (/(?<![\p{Script=Latin}\p{N}_])[A-Z][A-Za-z'’.-]+(?:\s+[A-Z][A-Za-z'’.-]+){1,5}\s*[（(]\s*[\p{Script=Han}]{2,4}(?:·[\p{Script=Han}]{1,8})?\s*[）)]/u.test(text))
+        if (/(?<![\p{Script=Latin}\p{N}_])[A-Z][A-Za-z'’.-]+(?:\s+[A-Z][A-Za-z'’.-]+){1,5}\s*[（(]\s*[\p{Script=Han}]{2,4}(?:·[\p{Script=Han}]{1,8})?(?:\s*[，,][^）)]{1,40})?\s*[）)]/u.test(text))
             issues.add("FMT-044：人物姓名顺序必须为中文姓名（English or Pinyin Name）");
         return text;
     });
@@ -438,6 +495,7 @@ export async function repairReadWeaveConventionalTerms(
     resolve: (targets: Array<{ token:string;before:string;after:string }>) => Promise<unknown>,
     signal?: AbortSignal
 ) {
+    original = formatReadWeaveCanonicalEntities(original);
     const occurrences = readWeaveProseRanges(original).flatMap(range => Array.from(
         original.slice(range.start, range.end)
             .matchAll(/(?<![\p{Script=Latin}\p{N}_.])(?:[A-Z][A-Z0-9+/#_-]{1,15}(?:\.[A-Za-z0-9]+)?|dB|SoC|NoC|IPv[46])(?![\p{Script=Latin}\p{N}_])/gu),

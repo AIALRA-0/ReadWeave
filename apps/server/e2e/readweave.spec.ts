@@ -237,15 +237,15 @@ test("ReadWeave saves selected answer parents and opens three independent follow
     });
     const app = new App(page, context);
     await gotoReadWeave(app, page);
-    const source = "光子是电磁辐射的量子，所选内容用于独立追问窗口的固定交互验证";
+    const source = "NPU 用于加速矩阵和张量运算，所选内容用于独立追问窗口的固定交互验证";
     const editor = await createTextNote(app, uniqueTitle("ReadWeave E2E · Follow-up windows"), source);
-    const panel = await openSelectionEditor(page, app, editor.locator("p", {hasText:source}), "光子", "Ask");
+    const panel = await openSelectionEditor(page, app, editor.locator("p", {hasText:source}), "NPU", "Ask");
     const types = panel.getByRole("group", {name:"内容类型"});
     expect(await types.getByRole("button").allTextContents()).toEqual(["问题", "定义", "注解", "总结", "笔记"]);
     await panel.getByTestId("readweave-generate").click();
     const mainAnswer = panel.locator('.readweave-readable-body[data-testid="readweave-answer"]');
     await expect(mainAnswer).toBeVisible();
-    const mainText = await mainAnswer.innerText();
+    const mainHtml = await mainAnswer.innerHTML();
     const mainQuestion = await panel.getByRole("textbox", {name:"Question", exact:true}).inputValue();
     async function selectAnswer(answer: Locator) {
         await answer.evaluate(element => {
@@ -255,22 +255,44 @@ test("ReadWeave saves selected answer parents and opens three independent follow
             if (!text) throw new Error("Missing answer text");
             const range = document.createRange(); range.setStart(text,0); range.setEnd(text,4);
             const selection = window.getSelection()!; selection.removeAllRanges(); selection.addRange(range);
-            element.dispatchEvent(new KeyboardEvent("keyup", {key:"Shift", bubbles:true}));
+            document.dispatchEvent(new Event("selectionchange"));
+            element.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 1 }));
         });
     }
-    await selectAnswer(mainAnswer);
+    const renderedFormula = mainAnswer.locator(".katex-html").first();
+    await expect(renderedFormula).toBeVisible();
+    await renderedFormula.evaluate((element) => {
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+        const text = walker.nextNode();
+        if (!text || !text.textContent) throw new Error("Missing rendered formula text");
+        const range = document.createRange();
+        range.setStart(text, 0);
+        range.setEnd(text, Math.min(2, text.textContent.length));
+        const selection = window.getSelection()!;
+        selection.removeAllRanges();
+        selection.addRange(range);
+        element.closest(".readweave-readable-body")?.dispatchEvent(
+            new KeyboardEvent("keyup", { key: "Shift", bubbles: true })
+        );
+    });
     await panel.getByRole("button", {name:"保存并追问", exact:true}).click();
     for (let level=1; level<=3; level++) {
         const floating = page.getByRole("dialog", {name:`第 ${level} 层追问`, exact:true});
         await expect(floating).toBeVisible();
         expect(await floating.evaluate(element => !!element.closest("#readweave-panel"))).toBe(false);
         await floating.getByRole("button", {name:"生成回答",exact:true}).click();
-        const answer = floating.locator(".readweave-readable-body");
+        const answer = floating.locator(
+            ".readweave-follow-up-content > .readweave-answer-container > .readweave-readable-body",
+        );
         await expect(answer).toBeVisible();
-        await expect(mainAnswer).toHaveText(mainText);
+        expect(await mainAnswer.innerHTML()).toBe(mainHtml);
         await expect(panel.getByRole("textbox", {name:"Question",exact:true})).toHaveValue(mainQuestion);
         await selectAnswer(answer);
-        if (level<3) await floating.getByRole("button", {name:"保存并追问",exact:true}).click();
+        if (level<3) {
+            const followUp = floating.getByRole("button", { name: /^(保存并追问|追问)$/u });
+            await expect(followUp).toBeVisible();
+            await followUp.click();
+        }
         else {
             await expect(floating.getByRole("button", {name:"保存并追问",exact:true})).toHaveCount(0);
             await floating.getByRole("button", {name:"保存回答",exact:true}).click();
@@ -279,6 +301,7 @@ test("ReadWeave saves selected answer parents and opens three independent follow
     }
     expect(starts).toHaveLength(4);
     expect(starts.slice(1).every(request => request.parentLinkId && request.answerSelection)).toBe(true);
+    expect((starts[1].answerSelection as { text?: string }).text).toBe("$C = A B$");
     expect(await editor.innerText()).toBe(source);
     expect(errors).toEqual([]);
 });

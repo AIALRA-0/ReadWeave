@@ -296,9 +296,11 @@ export default function ReadWeavePanel() {
     activeParentLinkId.current = parentLinkId;
     activeGenerationJobId.current = generationJobId;
     generationJobsRef.current = generationJobs;
+    const articleGenerationJobs = generationJobs.filter(job => job.articleId === articleNoteId);
     const decorationGenerationJobs = transientGenerationJob
-        ? [ transientGenerationJob, ...generationJobs ]
-        : generationJobs;
+        && transientGenerationJob.articleId === articleNoteId
+        ? [ transientGenerationJob, ...articleGenerationJobs ]
+        : articleGenerationJobs;
 
     const definitionExists = kind === "term" && entries.some(entry => entry.kind === "term");
     const currentJob = generationJobs.find(job => job.jobId === generationJobId);
@@ -334,7 +336,8 @@ export default function ReadWeavePanel() {
     const reviewSaveAllowed = true;
     const saveReady = !!selection && !selection.pending && !definitionExists && !!currentTitle && !!body.trim() && !!currentSourceExcerpt && reviewSaveAllowed;
     const generationBusy = displayedJob?.status === "queued" || displayedJob?.status === "running" || displayedJob?.status === "saving";
-    const hasActiveGenerationJobs = hasActiveReadWeaveGenerationJobs(generationJobs.filter(job => !followUpWindows.some(window => window.parent.linkId === job.parentLinkId)));
+    const hasActiveGenerationJobs = hasActiveReadWeaveGenerationJobs(articleGenerationJobs
+        .filter(job => !followUpWindows.some(window => window.parent.linkId === job.parentLinkId)));
     const editorLocked = busy || generationBusy;
     const generationDisabled = selection?.pending
         ? busy || !noteId || !selection.excerpt.trim()

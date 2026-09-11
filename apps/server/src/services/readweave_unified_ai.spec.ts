@@ -199,7 +199,7 @@ describe.skip("ReadWeave retired multi-stage workflow", () => {
             const payload = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
             return payload.messages.map(message => message.content).join("\n");
         });
-        expect(prompts.some(prompt => prompt.includes("回答构造流（必须按这个顺序组织正文"))).toBe(true);
+        expect(prompts.some(prompt => prompt.includes("回答构造流（按顺序分区"))).toBe(true);
         expect(result.body).not.toContain("。");
         if (title.includes("Moongon Jung")) expect(result.body).toContain("Moongon Jung 是");
         else if (title.includes("CXL.io")) expect(result.body).toContain("CXL.io 是一组逻辑协议");
@@ -1409,7 +1409,7 @@ describe("ReadWeave one-pass workflow", () => {
         const enabled = { ...request("为什么缓存能提速？"), autoApplyPlan: true };
         await generateUnifiedReadWeaveAnswer(enabled);
         const enabledPrompt = JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body)) as Record<string, unknown>;
-        expect(requestPrompt(enabledPrompt)).toContain("回答构造流（必须按这个顺序组织正文");
+        expect(requestPrompt(enabledPrompt)).toContain("回答构造流（按顺序分区");
 
         vi.mocked(fetch).mockClear();
         const disabled = { ...request("为什么缓存能提速？"), autoApplyPlan: false };

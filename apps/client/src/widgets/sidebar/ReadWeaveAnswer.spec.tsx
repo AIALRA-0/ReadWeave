@@ -61,6 +61,32 @@ describe("selectable Markdown answers", () => {
         range.setEnd(text, 3);
         expect(readWeaveAnswerSelection(root, body, range, 1)?.text).toBe("&amp;");
     });
+    it("maps a rendered inline formula back to one complete Markdown formula", () => {
+        const body = "前文 $Ax=b$ 后文";
+        const root = document.createElement("div");
+        root.innerHTML = '<p>前文 <span class="katex"><span class="katex-mathml"><math><annotation encoding="application/x-tex">Ax=b</annotation></math></span><span class="katex-html" aria-hidden="true"><span>Ax=b</span></span></span> 后文</p>';
+        const visual = root.querySelector<HTMLElement>(".katex-html span")!.firstChild!;
+        const range = document.createRange();
+        range.setStart(visual, 1);
+        range.setEnd(visual, 3);
+        expect(readWeaveAnswerSelection(root, body, range, 2)).toEqual({
+            parentRevision: 2,
+            startOffset: 3,
+            endOffset: 9,
+            text: "$Ax=b$",
+        });
+    });
+    it("keeps mixed prose and rendered math in source order without duplicate MathML text", () => {
+        const body = "甲 $x^2$ 乙 $x^2$ 丙";
+        const root = document.createElement("div");
+        root.innerHTML = '<p>甲 <span class="katex"><span class="katex-mathml"><math><annotation encoding="application/x-tex">x^2</annotation></math></span><span class="katex-html" aria-hidden="true"><span>x2</span></span></span> 乙 <span class="katex"><span class="katex-mathml"><math><annotation encoding="application/x-tex">x^2</annotation></math></span><span class="katex-html" aria-hidden="true"><span>x2</span></span></span> 丙</p>';
+        const firstText = root.querySelector("p")!.firstChild!;
+        const secondFormula = root.querySelectorAll<HTMLElement>(".katex-html span")[1].firstChild!;
+        const range = document.createRange();
+        range.setStart(firstText, 0);
+        range.setEnd(secondFormula, 1);
+        expect(readWeaveAnswerSelection(root, body, range, 4)?.text).toBe("甲 $x^2$ 乙 $x^2$");
+    });
     it("offers save-and-follow-up after a keyboard selection", async () => {
         const follow = vi.fn();
         await act(() =>

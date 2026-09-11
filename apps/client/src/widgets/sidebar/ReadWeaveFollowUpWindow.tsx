@@ -216,7 +216,9 @@ export function ReadWeaveFollowUpWindow({
                 </button>
             </header>
             <div class="readweave-follow-up-content">
-                <blockquote>{selection.text}</blockquote>
+                <blockquote>
+                    <ReadWeaveAnswer body={selection.text} />
+                </blockquote>
                 <label>
                     问题
                     <textarea
@@ -229,7 +231,8 @@ export function ReadWeaveFollowUpWindow({
                 <button
                     type="button"
                     class="btn btn-secondary"
-                    disabled={busy || active || !title.trim()}
+                    disabled={busy || active || !title.trim()
+                        || parent.depth >= READWEAVE_MAX_FOLLOW_UP_DEPTH}
                     onClick={() => void generate()}
                 >
                     生成回答

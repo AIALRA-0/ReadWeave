@@ -351,6 +351,24 @@
     margin-top: 0.82em;
 }
 
+.readweave-readable-body :is(h1, h2, h3, h4, h5, h6) {
+    margin: 0.85em 0 0.35em;
+    color: var(--main-text-color);
+    font-size: 1rem;
+    font-weight: 700;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+.readweave-readable-body :is(h4, h5, h6) {
+    font-size: 0.92rem;
+    font-weight: 650;
+}
+
+.readweave-readable-body > :is(h1, h2, h3, h4, h5, h6):first-child {
+    margin-top: 0;
+}
+
 .readweave-evidence-sources {
     margin-top: 0.55rem;
     padding-top: 0.45rem;

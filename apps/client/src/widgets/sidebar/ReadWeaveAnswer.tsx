@@ -5,6 +5,85 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 
 const markdown = new Marked({ breaks: true, gfm: true });
 
+interface ReadWeaveRenderedUnit {
+    node: Node;
+    start: number;
+    end: number;
+    positions?: number[];
+}
+
+function decodedSource(body: string) {
+    const decoder = document.createElement("textarea");
+    const positions: number[] = [];
+    let decoded = "";
+    for (let offset = 0; offset < body.length; ) {
+        const entity = body.slice(offset).match(/^&(?:#x[\da-f]+|#\d+|[a-z]+);/iu)?.[0];
+        decoder.innerHTML = entity ?? "";
+        const value = entity ? decoder.value : body[offset];
+        for (let index = 0; index < value.length; index++) positions.push(offset);
+        decoded += value;
+        offset += entity?.length ?? 1;
+    }
+    positions.push(body.length);
+    return { decoded, positions };
+}
+
+function renderedUnits(root: HTMLElement, body: string): ReadWeaveRenderedUnit[] {
+    const { decoded, positions } = decodedSource(body);
+    const units: ReadWeaveRenderedUnit[] = [];
+    let decodedCursor = 0;
+    let sourceCursor = 0;
+    const decodedOffset = (sourceOffset: number) => {
+        const found = positions.findIndex(position => position >= sourceOffset);
+        return found < 0 ? decoded.length : found;
+    };
+    const visit = (node: Node) => {
+        if (node instanceof Element && node.classList.contains("katex")) {
+            const formula = node.querySelector("annotation[encoding='application/x-tex']")
+                ?.textContent ?? "";
+            const candidates = [ `$$${formula}$$`, `$${formula}$` ]
+                .map(source => ({ source, index: body.indexOf(source, sourceCursor) }))
+                .filter(candidate => candidate.index >= 0)
+                .sort((left, right) => left.index - right.index);
+            const candidate = candidates[0];
+            if (candidate) {
+                units.push({
+                    node,
+                    start: candidate.index,
+                    end: candidate.index + candidate.source.length,
+                });
+                sourceCursor = candidate.index + candidate.source.length;
+                decodedCursor = decodedOffset(sourceCursor);
+            }
+            return;
+        }
+        if (node.nodeType === Node.TEXT_NODE) {
+            if ((node.parentElement?.closest("[aria-hidden='true']"))) return;
+            const renderedText = node.textContent ?? "";
+            if (!renderedText) return;
+            let text = renderedText;
+            let index = decoded.indexOf(text, decodedCursor);
+            while (index < 0 && text.endsWith("\n")) {
+                text = text.slice(0, -1);
+                index = decoded.indexOf(text, decodedCursor);
+            }
+            if (index < 0) return;
+            units.push({
+                node,
+                start: positions[index],
+                end: positions[index + text.length],
+                positions: positions.slice(index, index + text.length + 1),
+            });
+            decodedCursor = index + text.length;
+            sourceCursor = positions[decodedCursor];
+            return;
+        }
+        for (const child of node.childNodes) visit(child);
+    };
+    visit(root);
+    return units;
+}
+
 /** Map rendered text nodes back to the exact Markdown source, in order. */
 export function readWeaveAnswerSelection(
     root: HTMLElement,
@@ -18,33 +97,22 @@ export function readWeaveAnswerSelection(
         !root.contains(range.endContainer)
     )
         return;
-    const decoder = document.createElement("textarea");
-    const positions: number[] = [];
-    let decoded = "";
-    for (let offset = 0; offset < body.length; ) {
-        const entity = body.slice(offset).match(/^&(?:#x[\da-f]+|#\d+|[a-z]+);/iu)?.[0];
-        decoder.innerHTML = entity ?? "";
-        const text = entity ? decoder.value : body[offset];
-        for (let index = 0; index < text.length; index++) positions.push(offset);
-        decoded += text;
-        offset += entity?.length ?? 1;
-    }
-    positions.push(body.length);
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-    let cursor = 0;
-    let start: number | undefined;
-    let end: number | undefined;
-    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-        const text = node.textContent ?? "";
-        const index = decoded.indexOf(text, cursor);
-        if (index < 0) {
-            if (node === range.startContainer || node === range.endContainer) return;
-            continue;
+    const selected = renderedUnits(root, body).filter(unit => {
+        try {
+            return range.intersectsNode(unit.node);
+        } catch {
+            return false;
         }
-        if (node === range.startContainer) start = positions[index + range.startOffset];
-        if (node === range.endContainer) end = positions[index + range.endOffset];
-        cursor = index + text.length;
-    }
+    });
+    if (!selected.length) return;
+    const first = selected[0];
+    const last = selected.at(-1)!;
+    const start = first.node === range.startContainer && first.positions
+        ? first.positions[Math.min(range.startOffset, first.positions.length - 1)]
+        : first.start;
+    const end = last.node === range.endContainer && last.positions
+        ? last.positions[Math.min(range.endOffset, last.positions.length - 1)]
+        : last.end;
     if (start === undefined || end === undefined || start >= end) return;
     return { parentRevision, startOffset: start, endOffset: end, text: body.slice(start, end) };
 }

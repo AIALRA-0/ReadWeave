@@ -34,6 +34,12 @@ describe("ReadWeave generation monitor disclosure", () => {
         expect(css).toMatch(/(?:overflow-x:\s*auto|overflow:\s*auto\s+hidden)/u);
     });
 
+    it("keeps every answer heading close to body size without affecting article headings", () => {
+        expect(css).toMatch(/\.readweave-readable-body\s+:is\(h1, h2, h3, h4, h5, h6\)\s*\{[^}]*font-size:\s*1rem/su);
+        expect(css).toMatch(/\.readweave-readable-body\s*\{[^}]*font-size:\s*(?:0?\.96rem)/su);
+        expect(css).not.toMatch(/(?:^|\n)\s*:is\(h1, h2, h3, h4, h5, h6\)\s*\{/u);
+    });
+
     it("keeps the external-search checkbox on one left-aligned row", () => {
         expect(css).toMatch(/\.readweave-editor\s+label\.readweave-external-search-options\s*\{[^}]*flex-wrap:\s*nowrap[^}]*justify-content:\s*flex-start/su);
         expect(css).toMatch(/\.readweave-question-optimization\s*\{[^}]*align-items:\s*center\s*!important/su);

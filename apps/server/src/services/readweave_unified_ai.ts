@@ -41,6 +41,8 @@ import {
 } from "./readweave_evidence_quality.js";
 import {
     formatReadWeaveCodeCopies,
+    formatReadWeaveCanonicalEntities,
+    formatReadWeaveAnswerHeadings,
     formatReadWeaveDefinitionBlock,
     formatReadWeaveFullNameOpening,
     formatReadWeaveMarkdown,
@@ -2584,8 +2586,6 @@ function abbreviationFormattingIssues(
             "u"
         );
         if (canonical.test(prose)) return [];
-        if (termIdentity?.abbreviation?.toLocaleLowerCase() === token.toLocaleLowerCase()
-            && termIdentity.chineseName && termIdentity.englishName) return [];
         return [ `缩写 ${token} 未使用“缩写 中文全称（English Full Name）”格式，或尚未证明该名称不可展开` ];
     });
 }
@@ -2784,7 +2784,9 @@ function writerInput(
             ? request.kind === "term"
                 ? `定义顺序指南：${answerPlan.steps.join(" → ")}；这些环节写在同一个连续列表项内，用三至五句串联，不输出标题或空行`
                 : [
-                    "回答构造流（必须按这个顺序组织正文，但不是段落模板；分区用 Markdown 标题，不用无标记标签）：",
+                    answerPlan.steps.length <= 1
+                        ? "回答构造流（短单主题使用一个连续语义块，不添加标题）："
+                        : "回答构造流（按顺序分区；每个分区都以 ### 小标题开始，不得使用 # 或 ##，不得留下无标题段落）：",
                     ...answerPlan.steps.map((step, index) => `${index + 1}. ${step}`),
                     "正文必须先直接回答问题，再按上述流补足必要信息；不要为了填满步骤添加证据不支持的内容。"
                 ].join("\n")
@@ -3193,6 +3195,7 @@ export async function generateUnifiedReadWeaveAnswer(
         ? personSubjectFromQuestion(contract.normalizedQuestion)
         : undefined;
     if (personSubject) body = formatReadWeavePersonNameOrder(body, personSubject);
+    body = formatReadWeaveCanonicalEntities(body);
     if (request.contentType === "key-point") {
         const returnedBody = writer.value.body;
         const rawPoints = writer.value.summaryPoints ?? (returnedBody
@@ -3300,7 +3303,11 @@ export async function generateUnifiedReadWeaveAnswer(
     }
     if (namingCheck.supported.length)
         body = formatReadWeaveFullNameOpening(body, termIdentity?.chineseName);
-    body = formatReadWeaveBody(body);
+    body = formatReadWeaveAnswerHeadings(
+        formatReadWeaveCanonicalEntities(formatReadWeaveBody(body)),
+        request.kind !== "term" && request.contentType !== "key-point"
+    );
+    if (personSubject) body = formatReadWeavePersonNameOrder(body, personSubject);
     let unresolvedClaims = stringList(writer.value.unresolvedClaims, 12, 500);
     let issues: string[] = [];
     const qualifierRepair = namingRequirements.includes("origin")
@@ -3361,7 +3368,7 @@ export async function generateUnifiedReadWeaveAnswer(
             JSON.stringify({ fragment, failures }), 900, 15_000, undefined, signal,
             "局部格式修改", budget, recordUsage);
         return result.value.replacement;
-    }, signal, 6);
+    }, signal, 2);
     body = repaired.body;
     const repairRounds = namingRepair.rounds + qualifierRepair.rounds
         + terminologyRounds + repaired.rounds;
@@ -3376,7 +3383,11 @@ export async function generateUnifiedReadWeaveAnswer(
 
     // Finish protected formatting after the bounded, fragment-only repair.
     // Never replace the answer using a catalog or a second whole-body writer.
-    body = formatReadWeaveBody(body);
+    body = formatReadWeaveAnswerHeadings(
+        formatReadWeaveCanonicalEntities(formatReadWeaveBody(body)),
+        request.kind !== "term" && request.contentType !== "key-point"
+    );
+    if (personSubject) body = formatReadWeavePersonNameOrder(body, personSubject);
     // Do not prune history, applications or paragraphs: they may be explicitly required.
     if (/代码|逐行|code/iu.test(originalQuestion)) {
         body = formatReadWeaveCodeCopies(body, request.fragments
@@ -3385,6 +3396,7 @@ export async function generateUnifiedReadWeaveAnswer(
     if (request.kind === "term") {
         body = enforceReadWeaveDefinitionOpening(body, termIdentity);
         body = formatReadWeaveTermReferences(body, termIdentity);
+        body = formatReadWeaveCanonicalEntities(body);
     }
     issues = Array.from(new Set([
         ...readWeaveFormatIssues(body),
