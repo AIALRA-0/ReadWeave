@@ -59,7 +59,7 @@ describe("versioned formatting contract", () => {
         expect(result.body).toContain("在芯片设计语境中的全称是知识产权（Intellectual Property）");
     });
     it("pins the current public skill and includes conditional formula and media guidance", () => {
-        expect(READWEAVE_WRITING_SKILL_REVISION).toBe("6636a7fab13e1defcd77ff3825da3123cc1ed352");
+        expect(READWEAVE_WRITING_SKILL_REVISION).toBe("43133c20eabd0edde5ff8effa8d8a51c7ee8afa3");
         const contract = HUMAN_READABLE_CHINESE_STYLE_CONTRACT.join("\n");
         expect(contract).toContain("FMT-121");
         expect(contract).toContain("无法确认时省略英文括号");
@@ -68,6 +68,10 @@ describe("versioned formatting contract", () => {
         expect(contract).toContain("不把所有层级压平");
         expect(contract).toContain("FMT-111/120");
         expect(contract).toContain("格式残留不阻断安全正文交付");
+        expect(contract).toContain("即使被单独阅读");
+        expect(contract).toContain("先说明可计算关系和结果");
+        expect(contract).toContain("仅凭当前材料无法确定哪个原始字段有误");
+        expect(contract).toContain("只作待处理材料");
     });
     it.each([ "缓存（Cache, Buffer）", "加速梯度（Accelerated Gradient，AG）",
         "输入输出（Input/Output; IO）" ])("reviews extra Latin-only name content: %s", source => {
