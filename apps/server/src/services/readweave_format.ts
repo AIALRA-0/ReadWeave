@@ -433,7 +433,12 @@ export function formatReadWeaveFullNameOpening(body: string, chineseName?: strin
     return `${match[1]} ${chineseName}（${match[2].trim()}）${body.slice(opening.length)}`;
 }
 
-/** Keep one canonical term label and use its Chinese name for later prose references. */
+/** A spelling statement refers to the token itself, not its translated concept. */
+function describesReadWeaveName(after: string): boolean {
+    return /^(?:的(?:官方|正式|完整|英文|中文)*(?:全称|缩写|简称|简写|名称|拼写)|(?:是|为)[^\n。；;！？]*?(?:缩写|简称|简写)|中的(?:字母|字符)|这个名称)/u.test(after.trimStart());
+}
+
+/** Use Chinese for ordinary later references, but retain tokens whose spelling is discussed. */
 export function formatReadWeaveTermReferences(
     body: string,
     identity?: { abbreviation?: string; chineseName?: string; englishName?: string }
@@ -452,15 +457,20 @@ export function formatReadWeaveTermReferences(
         "gu"
     );
     let keptCanonical = false;
-    return mapReadWeaveProse(body, prose => prose.replace(reference, value => {
+    const annotation = `${abbreviation} ${chineseName}（${englishName}）`;
+    return mapReadWeaveProse(body, prose => prose.replace(reference, (value, offset: number) => {
+        const after = prose.slice(offset + value.length);
+        const pairedName = after.match(/^[ \t]*[（(]([A-Za-z][A-Za-z'’ .&+/#_-]*)[）)]/u)?.[1];
+        if (pairedName && pairedName !== englishName) return value;
+        const spelling = describesReadWeaveName(after);
         if (new RegExp(`^${canonicalSource}$`, "u").test(value)) {
             if (!keptCanonical) {
                 keptCanonical = true;
                 return value;
             }
-            return chineseName;
+            return spelling ? value : chineseName;
         }
-        return keptCanonical ? chineseName : value.trimEnd();
+        return keptCanonical ? spelling ? annotation : chineseName : value.trimEnd();
     }).replace(
         new RegExp(`([\\p{Script=Han}，；。：、！？])[ \\t]+(?=${escapedChinese})`, "gu"),
         "$1"
@@ -689,6 +699,10 @@ export async function repairReadWeaveConventionalTerms(
         tokenOccurrences.forEach((occurrence, index) => {
             const before = original.slice(0, occurrence.start);
             const after = original.slice(occurrence.start + target.token.length);
+            // A contrast can use the same initialism with a different supplied
+            // expansion. Never apply the first meaning to that explicit pair.
+            const pairedName = after.match(/^[ \t]*[（(]([A-Za-z][A-Za-z'’ .&+/#_-]*)[）)]/u)?.[1];
+            if (pairedName && pairedName !== term.englishName) return;
             const reversed = before.match(/([\p{Script=Han}]{2,40})（$/u);
             if (reversed && after.startsWith("）")) {
                 const start = occurrence.start - reversed[0].length;
@@ -703,13 +717,14 @@ export async function repairReadWeaveConventionalTerms(
             if (Math.max(proseBefore.lastIndexOf("（"), proseBefore.lastIndexOf("("))
                 > Math.max(proseBefore.lastIndexOf("）"), proseBefore.lastIndexOf(")"))) return;
             const spacing = after.match(/^[ \t]+(?=[\p{Script=Han}，；。：、！？])/u)?.[0] ?? "";
-            const leading = index > 0
+            const keepToken = index === 0 || describesReadWeaveName(after);
+            const leading = !keepToken
                 ? before.match(/(?<=[\p{Script=Han}，；。：、！？])[ \t]+$/u)?.[0] ?? ""
                 : "";
             patches.push({
                 start: occurrence.start - leading.length,
                 original: leading + target.token + spacing,
-                replacement: index === 0 ? annotation : term.chineseName
+                replacement: keepToken ? annotation : term.chineseName
             });
         });
         knowledgeTerms.push(target.token);

@@ -19,6 +19,35 @@ import {
 import { HUMAN_READABLE_CHINESE_STYLE_CONTRACT, READWEAVE_WRITING_SKILL_REVISION } from "./readweave_style_contract.js";
 
 describe("versioned formatting contract", () => {
+    it("does not assign the first acronym meaning to an explicitly different expansion", async () => {
+        const identity = { abbreviation:"IP",chineseName:"知识产权",englishName:"Intellectual Property" };
+        const contrast = "这与网络协议中的 IP（Internet Protocol）无关";
+        const repaired = await repairReadWeaveConventionalTerms(`IP 用于电路复用\n\n${contrast}`,"IP 是什么？",async()=>[{
+            token:"IP",...identity,confidence:"high",basis:"established-usage",contextReason:"芯片语境"
+        }]);
+        expect(repaired.body).toContain(contrast);
+        expect(repaired.body).not.toContain("知识产权（Internet Protocol）");
+        const direct = `IP 知识产权（Intellectual Property）\n\n${contrast}`;
+        expect(formatReadWeaveTermReferences(direct,identity)).toBe(direct);
+    });
+    it.each([ "是 Intellectual Property 的缩写", "的英文全称是 Intellectual Property", "中的字母 I 表示 Intellectual" ])(
+        "preserves the abbreviation as the subject of a spelling statement: %s", async statement => {
+            const identity = { abbreviation:"IP",chineseName:"知识产权",englishName:"Intellectual Property" };
+            const label = "IP 知识产权（Intellectual Property）";
+            const body = `## IP 是什么\n\nIP ${statement}\n\nIP 用于电路复用\n\n> IP ${statement}`;
+            const repaired = await repairReadWeaveConventionalTerms(body,"IP 全称是什么？",async()=>[{
+                token:"IP",...identity,confidence:"high",basis:"established-usage",contextReason:"原文提供该名称"
+            }]);
+            expect(repaired.body).toContain(`${label}${statement}`);
+            expect(repaired.body).toContain("知识产权用于电路复用");
+            expect(repaired.body).toContain(`> IP ${statement}`);
+            const direct = `## ${label}\n\nIP ${statement}\n\nIP 用于电路复用`;
+            const referenced = formatReadWeaveTermReferences(direct,identity);
+            expect(referenced).toContain(`${label}${statement}`);
+            expect(referenced).toContain("知识产权用于电路复用");
+            expect(formatReadWeaveTermReferences(referenced,identity)).toBe(referenced);
+        }
+    );
     it("does not mistake a contextual full-name sentence for a compliant term label", async () => {
         const body = "IP 在芯片设计语境中的全称是知识产权（Intellectual Property），指可复用模块";
         const resolver = vi.fn(async () => [{ token:"IP",chineseName:"知识产权",englishName:"Intellectual Property",

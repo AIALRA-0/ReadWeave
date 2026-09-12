@@ -56,7 +56,10 @@ describe("live pinned writing skill", () => {
             formatVersion:result.audit?.formatVersion,issues:readWeaveFormatIssues(result.body)}));
         expect(result.body).toContain("IP 知识产权（Intellectual Property）");
         expect(result.body).not.toMatch(/（[^）]*[,，;；][^）]*）/u);
-        expect(result.body).not.toContain("Internet Protocol");
+        for (const line of result.body.split(/[\n。！？]/u).filter(line => line.includes("Internet Protocol")))
+            expect(line).toMatch(/(?:不是|并非|不指|区别于|不同于).*Internet Protocol|Internet Protocol.*(?:无关|不同|区别|混淆)/u);
+        expect(result.body).not.toContain("知识产权（Internet Protocol）");
+        expect(result.body).not.toMatch(/知识产权是\s*Intellectual Property\s*的缩写/u);
         expect(result.audit?.formatVersion).toBe(READWEAVE_FORMAT_VERSION);
         expect(result.usage?.costCny).toBeLessThanOrEqual(.1);
     });

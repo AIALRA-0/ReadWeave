@@ -25,6 +25,10 @@ or its Python executables. The source revision is recorded in
   Explicit Chinese-first source pairs are recognized too; a valid local source
   is no longer rejected just because it does not use English-only brackets.
   Negative statements and comparison clauses are not accepted as name pairs.
+  Later references to an abbreviation's own spelling/full name retain the token;
+  replacing the subject of "IP is an abbreviation" with its translated concept
+  would change the statement's meaning, so ordinary-reference shortening is not
+  applied there. This is a local edit and adds no model call.
 - FMT-031/034/069: retain real heading parent/child relationships. Panel CSS,
   not destructive Markdown flattening, controls compact visual size. Heading-like
   source code and quotations remain unchanged. Depth gaps are review suggestions.
