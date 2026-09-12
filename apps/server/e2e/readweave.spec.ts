@@ -1833,6 +1833,7 @@ test("ReadWeave settings store a masked server-side key and expose model selecti
     const settings = app.optionsDialogContent.locator(".note-detail-content-widget-content", { hasText: "ReadWeave model settings" });
     await expect(settings).toBeVisible();
     const fakeSecret = "test-not-a-real-api-key-6789";
+    await settings.getByTestId("readweave-provider-type").selectOption("deepseek-official");
     await settings.getByTestId("readweave-base-url").fill("https://api.deepseek.com");
     await settings.getByTestId("readweave-api-key").fill(fakeSecret);
     await settings.getByTestId("readweave-model").fill("deepseek-v4-pro");
