@@ -16,9 +16,42 @@ import {
     repairReadWeaveConventionalTerms,
     repairReadWeaveFormat,
     repairReadWeaveOptionalQualifiers } from "./readweave_format.js";
-import { HUMAN_READABLE_CHINESE_STYLE_CONTRACT } from "./readweave_style_contract.js";
+import { HUMAN_READABLE_CHINESE_STYLE_CONTRACT, READWEAVE_WRITING_SKILL_REVISION } from "./readweave_style_contract.js";
 
 describe("versioned formatting contract", () => {
+    it("does not mistake a contextual full-name sentence for a compliant term label", async () => {
+        const body = "IP 在芯片设计语境中的全称是知识产权（Intellectual Property），指可复用模块";
+        const resolver = vi.fn(async () => [{ token:"IP",chineseName:"知识产权",englishName:"Intellectual Property",
+            confidence:"high",basis:"established-usage",contextReason:"原文章明确配对该名称" }]);
+        const result = await repairReadWeaveConventionalTerms(body,"这里的 IP 全称是什么？",resolver,
+            undefined,"IP，即知识产权（Intellectual Property）");
+        expect(resolver).toHaveBeenCalledTimes(1);
+        expect(result.body).toContain("IP 知识产权（Intellectual Property）");
+        expect(result.body).toContain("在芯片设计语境中的全称是知识产权（Intellectual Property）");
+    });
+    it("pins the current public skill and includes conditional formula and media guidance", () => {
+        expect(READWEAVE_WRITING_SKILL_REVISION).toBe("6636a7fab13e1defcd77ff3825da3123cc1ed352");
+        const contract = HUMAN_READABLE_CHINESE_STYLE_CONTRACT.join("\n");
+        expect(contract).toContain("FMT-121");
+        expect(contract).toContain("无法确认时省略英文括号");
+        expect(contract).toContain("公式解释仅在问题涉及公式时展开");
+        expect(contract).toContain("附带公式只补理解所需信息");
+        expect(contract).toContain("不把所有层级压平");
+        expect(contract).toContain("FMT-111/120");
+        expect(contract).toContain("格式残留不阻断安全正文交付");
+    });
+    it.each([ "缓存（Cache, Buffer）", "加速梯度（Accelerated Gradient，AG）",
+        "输入输出（Input/Output; IO）" ])("reviews extra Latin-only name content: %s", source => {
+        const target = readWeaveNameReviewTargets(source)[0];
+        expect(target.diagnostics).toEqual([ "extra-english-name-parentheses" ]);
+        expect(target.replacement).toBeUndefined();
+        expect(formatReadWeaveNameParentheses(source)).toBe(source);
+        expect(readWeaveFormatIssues(source).some(issue => issue.startsWith("FMT-121"))).toBe(true);
+        for (const protectedSource of [ `\`${source}\``, `> ${source}`, `\`\`\`text\n${source}\n\`\`\`` ]) {
+            expect(readWeaveNameReviewTargets(protectedSource)).toEqual([]);
+            expect(readWeaveFormatIssues(protectedSource)).toEqual([]);
+        }
+    });
     it("moves a supplied non-acronym alias out of the English name in both fields", () => {
         const label = "布局消解（Layout Resolution，也称 布局解析）";
         const question = `${label}是什么？`;
@@ -170,6 +203,14 @@ describe("versioned formatting contract", () => {
             .not.toContain("FMT-044：人物姓名顺序必须为中文姓名（English or Pinyin Name）");
     });
     it("closes the exact live acronym-order failures without changing compliant text", () => {
+        const fullName = "- IP 全称是知识产权（Intellectual Property）：在芯片设计中指可复用模块";
+        const canonical = "- IP 知识产权（Intellectual Property）：在芯片设计中指可复用模块";
+        expect(formatReadWeaveCanonicalEntities(fullName)).toBe(canonical);
+        for (const declaration of [ "即", "是", "指的是", "的全称为" ]) {
+            expect(formatReadWeaveCanonicalEntities(fullName.replace("全称是", declaration))).toBe(canonical);
+        }
+        expect(formatReadWeaveCanonicalEntities(canonical)).toBe(canonical);
+        expect(formatReadWeaveCanonicalEntities(`> ${fullName}`)).toBe(`> ${fullName}`);
         expect(formatReadWeaveCanonicalEntities("合法化（legalization，LG）：消除重叠"))
             .toBe("LG 合法化（legalization）：消除重叠");
         expect(formatReadWeaveCanonicalEntities("加权平均线长（weighted-average wirelength，WA）用于求梯度"))
@@ -213,11 +254,23 @@ describe("versioned formatting contract", () => {
             "David Z. Pan"
         )).toBe("潘大卫（David Z. Pan）是研究者");
     });
-    it("normalizes every generated answer heading and labels an orphan opening", () => {
+    it("preserves semantic heading depth and labels an orphan opening at its peer level", () => {
         expect(formatReadWeaveAnswerHeadings(
             "直接回答\n\n# 原理\n\n正文\n\n## 边界\n\n说明"
-        )).toBe("### 回答\n\n直接回答\n\n### 原理\n\n正文\n\n### 边界\n\n说明");
+        )).toBe("# 回答\n\n直接回答\n\n# 原理\n\n正文\n\n## 边界\n\n说明");
         expect(formatReadWeaveAnswerHeadings("只有一个连续语义块")).toBe("只有一个连续语义块");
+    });
+    it("keeps formula section hierarchy, source headings and repeated formatting stable", () => {
+        const body = "## 公式用途\n\n解释\n\n### 符号\n\n解释\n\n### 示例\n\n"
+            + "```python\n# original comment\nvalue = 1\n```\n\n> # 原样标题\n\n## 边界\n\n说明";
+        expect(formatReadWeaveAnswerHeadings(body)).toBe(body);
+        expect(formatReadWeaveAnswerHeadings(formatReadWeaveAnswerHeadings(body))).toBe(body);
+        expect(readWeaveFormatIssues(body)).toEqual([]);
+        const codeOnly = "```markdown\n# 原样标题\n#### 原样层级\n```";
+        expect(formatReadWeaveAnswerHeadings(codeOnly)).toBe(codeOnly);
+        expect(readWeaveFormatIssues(codeOnly)).toEqual([]);
+        expect(readWeaveFormatIssues("## 父级\n\n说明\n\n#### 子级\n\n说明"))
+            .toContain("FMT-031：子标题不能跳过必要的父级层级");
     });
     it("annotates one incidental initialism without accepting replacement prose", async () => {
         const body = "这段涉及 ABC 与其他对象，保留 12 个条件";

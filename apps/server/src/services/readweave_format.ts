@@ -1,6 +1,6 @@
-import { Lexer } from "marked";
+import { Lexer, type Tokens } from "marked";
 
-export const READWEAVE_FORMAT_VERSION = "format-2026-09-v4";
+export const READWEAVE_FORMAT_VERSION = "format-2026-09-v5";
 
 function normalizeSimpleMathNotation(value: string): string {
     const scientific = new RegExp(
@@ -116,7 +116,7 @@ export interface ReadWeaveNameReviewTarget {
     after: string;
     /** This is a review target, never a claim that the English name is wrong. */
     semanticStatus: "requires-article-context";
-    diagnostics: Array<"mixed-bilingual-name-parentheses">;
+    diagnostics: Array<"mixed-bilingual-name-parentheses" | "extra-english-name-parentheses">;
     /** Present only for an explicit alias that can be moved without inference. */
     replacement?: string;
 }
@@ -139,7 +139,10 @@ export function readWeaveNameReviewTargets(
             if ((match[1] === "（") !== (match[3] === "）")) continue;
             const content = match[2].trim();
             const mixed = /\p{Script=Han}/u.test(content) && /[A-Za-z]/u.test(content);
-            if (!mixed && !ENGLISH_NAME.test(content)) continue;
+            // A Latin-only alias or trailing abbreviation is still extra name
+            // content. Review it without guessing a replacement relationship.
+            const extra = /^[A-Za-z][A-Za-z'’ .&+/#_-]{2,}[，,；;、]\s*\S/u.test(content);
+            if (!mixed && !extra && !ENGLISH_NAME.test(content)) continue;
             const alias = content.match(/^(.+?)[，,；;][ \t]*(.+)$/u);
             const movable = alias && ENGLISH_NAME.test(alias[1].trim()) && (CHINESE_ALIAS.test(alias[2]) || ENGLISH_ALIAS.test(alias[2]))
                 && !/(?:但|并非|不等同|不是|用于|因为|如果)/u.test(alias[2]);
@@ -162,7 +165,8 @@ export function readWeaveNameReviewTargets(
                 before: body.slice(Math.max(0, start - 150), start),
                 after: body.slice(end, end + 150),
                 semanticStatus: "requires-article-context",
-                diagnostics: mixed ? [ "mixed-bilingual-name-parentheses" ] : [],
+                diagnostics: mixed ? [ "mixed-bilingual-name-parentheses" ]
+                    : extra ? [ "extra-english-name-parentheses" ] : [],
                 ...(replacement === undefined ? {} : { replacement })
             });
         }
@@ -218,6 +222,10 @@ const TRAILING_ACRONYM_NAME = new RegExp(
  * or lexical content is introduced by this operation. */
 export function formatReadWeaveCanonicalEntities(body: string): string {
     return mapReadWeaveProse(body, text => text.replace(
+        /^([ \t]*(?:[-*+][ \t]+)?)([A-Z][A-Z0-9-]{1,15})[ \t]*(?:(?:的)?(?:官方|正式|完整|英文|中文)*全称(?:是|为)|即|是|指的是|表示)[ \t]*([\p{Script=Han}][\p{Script=Han} ]{1,49})（([A-Za-z][A-Za-z'’ .&+/#_-]*)）/gmu,
+        (_original, prefix: string, abbreviation: string, chineseName: string, englishName: string) =>
+            `${prefix}${abbreviation} ${chineseName.trim()}（${englishName.trim()}）`
+    ).replace(
         TRAILING_ACRONYM_NAME,
         (original, rawLabel: string, englishName: string, abbreviation: string) => {
             // All three fields are already explicitly paired by the author.
@@ -234,17 +242,17 @@ export function formatReadWeaveCanonicalEntities(body: string): string {
     ));
 }
 
-/** Keep generated headings visually and semantically local to the side panel. */
+/** The renderer controls size; Markdown depth preserves semantic ownership.
+ * Inspect actual headings, never heading-like source code or quotations. */
 export function formatReadWeaveAnswerHeadings(body: string, enabled = true): string {
     if (!enabled) return body;
-    const headings = Array.from(body.matchAll(/^ {0,3}#{1,6}[ \t]+\S.*$/gmu));
+    const tokens = Lexer.lex(body);
+    const headings = tokens.filter((token): token is Tokens.Heading => token.type === "heading");
     if (!headings.length) return body;
-    let normalized = body.replace(/^ {0,3}#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*$/gmu, "### $1");
-    const firstHeading = normalized.search(/^###\s+/mu);
-    if (firstHeading > 0 && normalized.slice(0, firstHeading).trim()) {
-        normalized = `### 回答\n\n${normalized}`;
-    }
-    return normalized;
+    const opening = tokens.slice(0, tokens.indexOf(headings[0]));
+    return opening.some(token => token.type !== "space")
+        ? `${"#".repeat(Math.min(...headings.map(token => token.depth)))} 回答\n\n${body}`
+        : body;
 }
 
 /** Mark explicit bilingual definitions; never infer a definition from prose. */
@@ -495,14 +503,17 @@ export function applyReadWeaveFormatPatches(body: string, patches: ReadWeaveText
 
 export function readWeaveFormatIssues(body: string): string[] {
     const issues = new Set<string>();
-    if (readWeaveNameReviewTargets(body).some(target => target.diagnostics.length))
+    const nameTargets = readWeaveNameReviewTargets(body);
+    if (nameTargets.some(target => target.diagnostics.includes("mixed-bilingual-name-parentheses")))
         issues.add("FMT-045/051：中文别名或说明不能混入英文名称括号，名称含义须结合文章核对");
+    if (nameTargets.some(target => target.diagnostics.includes("extra-english-name-parentheses")))
+        issues.add("FMT-121：英文名称括号不能混入缩写、别名或分隔说明，须核对已有名称而非编造展开");
     if (formatReadWeaveCanonicalEntities(body) !== body)
         issues.add("FMT-052：缩写必须置于中文全称和英文全称之前");
-    if (/^ {0,3}(?:#{1,2}|#{4,6})[ \t]+\S/gmu.test(body))
-        issues.add("FMT-023：回答小标题必须使用统一层级");
-    const firstHeading = body.search(/^ {0,3}#{1,6}[ \t]+\S/mu);
-    if (firstHeading > 0 && body.slice(0, firstHeading).trim())
+    const headings = Lexer.lex(body).filter((token): token is Tokens.Heading => token.type === "heading");
+    if (headings.some((heading, index) => index > 0 && heading.depth > headings[index - 1].depth + 1))
+        issues.add("FMT-031：子标题不能跳过必要的父级层级");
+    if (formatReadWeaveAnswerHeadings(body) !== body)
         issues.add("FMT-023：分区回答的首段缺少小标题");
     mapReadWeaveProse(body, (text) => {
         if (/。/u.test(text)) issues.add("FMT-009：普通正文仍含中文句号");
@@ -624,9 +635,10 @@ export async function repairReadWeaveConventionalTerms(
         const reversedShortLabel = /[\p{Script=Han}]{2,40}（$/u.test(before) && after.startsWith("）");
         if (openParenthesis && !reversedShortLabel) continue;
         const canonical = new RegExp(
-            `^\\s+[\\p{Script=Han}][^（）()\\n]{1,120}（[^（）\\n]{1,220}[A-Za-z][^（）\\n]*）`, "u"
+            `^\\s+([\\p{Script=Han}][\\p{Script=Han}· ]{1,79})（[A-Za-z][A-Za-z'’ .&+/#_-]*）`, "u"
         );
-        if (canonical.test(after)) {
+        const canonicalMatch = after.match(canonical);
+        if (canonicalMatch && !/(?:全称|即|指的是|语境|领域中|在.+中|是)/u.test(canonicalMatch[1])) {
             introduced.add(occurrence.token);
             continue;
         }

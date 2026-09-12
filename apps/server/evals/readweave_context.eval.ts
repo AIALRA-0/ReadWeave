@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import * as settings from "../src/services/readweave_settings.js";
+import { READWEAVE_FORMAT_VERSION, readWeaveFormatIssues } from "../src/services/readweave_format.js";
 import { generateUnifiedReadWeaveAnswer } from "../src/services/readweave_unified_ai.js";
 
 const cases = [
@@ -23,6 +24,43 @@ beforeAll(() => {
     });
 });
 afterAll(()=>vi.restoreAllMocks());
+
+describe("live pinned writing skill", () => {
+    it("retains formula section ownership and explains a reproducible calculation", async () => {
+        const article = "加权平均为 $m=(w_1x_1+w_2x_2)/(w_1+w_2)$。教学示例：x_1=2、x_2=4、w_1=1、w_2=3，结果为 3.5。权重非负且总权重大于零。";
+        const result = await generateUnifiedReadWeaveAnswer({
+            articleId:"writing-skill-evaluation", anchorId:"formula", anchorType:"range", kind:"question",
+            title:"解释加权平均公式，用二级标题区分用途和边界，用用途下面的三级标题分别解释符号与示例，展示中间运算",
+            autoApplyPlan:true, activeExternalSearch:false, autoExternalSearch:false,
+            fragments:[{id:"selected",role:"selected",text:"加权平均"},{id:"document",role:"document",text:article}]
+        });
+        console.info(JSON.stringify({case:"writing-formula",body:result.body,usage:result.usage,
+            formatVersion:result.audit?.formatVersion,issues:readWeaveFormatIssues(result.body)}));
+        expect(result.body).toMatch(/^## [^#]/mu);
+        expect(result.body).toMatch(/^### [^#]/mu);
+        expect(result.body).toContain("3.5");
+        expect(result.body).toMatch(/示例|教学/u);
+        expect(result.body).toMatch(/权重/u);
+        expect(result.audit?.formatVersion).toBe(READWEAVE_FORMAT_VERSION);
+        expect(result.usage?.costCny).toBeLessThanOrEqual(.1);
+    });
+    it("keeps a confirmed name separate from abbreviations and explanatory aliases", async () => {
+        const article = "本文讨论芯片设计中的 IP，即知识产权（Intellectual Property），指可复用的电路设计模块，不是网络协议。";
+        const result = await generateUnifiedReadWeaveAnswer({
+            articleId:"writing-skill-evaluation",anchorId:"name",anchorType:"range",kind:"question",
+            title:"这里的 IP 全称是什么？只解释名称和当前含义",autoApplyPlan:true,
+            activeExternalSearch:false,autoExternalSearch:false,
+            fragments:[{id:"selected",role:"selected",text:"IP"},{id:"document",role:"document",text:article}]
+        });
+        console.info(JSON.stringify({case:"writing-name",body:result.body,usage:result.usage,
+            formatVersion:result.audit?.formatVersion,issues:readWeaveFormatIssues(result.body)}));
+        expect(result.body).toContain("IP 知识产权（Intellectual Property）");
+        expect(result.body).not.toMatch(/（[^）]*[,，;；][^）]*）/u);
+        expect(result.body).not.toContain("Internet Protocol");
+        expect(result.audit?.formatVersion).toBe(READWEAVE_FORMAT_VERSION);
+        expect(result.usage?.costCny).toBeLessThanOrEqual(.1);
+    });
+});
 
 describe("live article-grounded meanings", () => {
     it.each(["解析布局","内核"])("actual article: %s", async subject => {

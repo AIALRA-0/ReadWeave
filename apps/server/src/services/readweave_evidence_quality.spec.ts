@@ -10,6 +10,20 @@ import {
     repairReadWeaveNamingEvidence
 } from "./readweave_evidence_quality.js";
 describe("naming provenance, not a semantic truth certificate", () => {
+    it.each([ "IP 知识产权（Intellectual Property）", "IP，即知识产权（Intellectual Property）",
+        "IP 知识产权(Intellectual Property)" ])("recognizes the Chinese-first source pair: %s", excerpt => {
+        expect(readWeaveExplicitExpansions(excerpt)).toEqual([
+            { abbreviation:"IP",englishName:"Intellectual Property" }
+        ]);
+        const checked = checkReadWeaveNamingEvidence("IP 的全称是 Intellectual Property", [],
+            [{sourceId:"L1",sourceType:"local",excerpt}] as ReadWeaveEvidenceSource[]);
+        expect(checked.issues).toEqual([]);
+        expect(checked.supported[0].sourceId).toBe("L1");
+    });
+    it.each([ "IP 并非网络协议（Internet Protocol）", "IP 与网络协议（Internet Protocol）",
+        "IP 或知识产权（Intellectual Property）" ])("does not treat a negative or comparison as a confirmed pair: %s", source => {
+        expect(readWeaveExplicitExpansions(source)).toEqual([]);
+    });
     it("extracts the selected entity instead of quoting an instruction as an entity", () => {
         expect(readWeaveResearchSubject("XPT 的官方英文全称是什么？请解释这些词，不要猜测名称来历", "XPT")).toBe("XPT");
         expect(readWeaveResearchSubject("Lumen 的名称来源是什么？")).toBe("Lumen");

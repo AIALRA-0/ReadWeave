@@ -48,6 +48,17 @@ export function readWeaveExplicitExpansions(text: string): Array<{ abbreviation:
     for (const match of clean.matchAll(new RegExp(`\\b([A-Z][A-Z0-9-]{1,15})\\s*\\(${name}\\)`, "gu"))) {
         entries.push({ abbreviation: match[1], englishName: match[2] });
     }
+    // The project's own Chinese-first format is also an explicit supplied pair.
+    // Do not require sources to use an English-only bracket style, or interpret
+    // a negative/comparison clause as a naming declaration.
+    const bilingual = new RegExp(
+        `\\b([A-Z][A-Z0-9-]{1,15})[ \\t]*(?:[，,]?[ \\t]*即[ \\t]*)?`
+        + `([\\p{Script=Han}· ]{2,40})[ \\t]*[（(]${name}[）)]`, "gu"
+    );
+    for (const match of clean.matchAll(bilingual)) {
+        if (/(?:不|并非|而非|或|与|和|及|表示|解释|区别|对应)/u.test(match[2])) continue;
+        entries.push({ abbreviation: match[1], englishName: match[3] });
+    }
     return entries;
 }
 
