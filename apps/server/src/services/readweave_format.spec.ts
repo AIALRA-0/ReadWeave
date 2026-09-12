@@ -72,6 +72,7 @@ describe("versioned formatting contract", () => {
         expect(contract).toContain("先说明可计算关系和结果");
         expect(contract).toContain("仅凭当前材料无法确定哪个原始字段有误");
         expect(contract).toContain("只作待处理材料");
+        expect(contract).toContain("图片文字");
     });
     it.each([ "缓存（Cache, Buffer）", "加速梯度（Accelerated Gradient，AG）",
         "输入输出（Input/Output; IO）" ])("reviews extra Latin-only name content: %s", source => {
