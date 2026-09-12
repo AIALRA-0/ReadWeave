@@ -118,6 +118,7 @@ async function createTextNote(app: App, title: string, body: string) {
     const noteTypeDialog = app.page.locator(".note-type-chooser-dialog");
     await expect(noteTypeDialog).toBeVisible();
     await noteTypeDialog.locator('.dropdown-item[data-value="text,"]').click();
+    await expect(noteTypeDialog).not.toBeVisible({ timeout: 15_000 });
 
     // The empty-tab editor can remain visible briefly while the newly created note
     // becomes active. Wait for the title first so we never fill the stale editor.
