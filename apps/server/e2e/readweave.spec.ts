@@ -117,6 +117,7 @@ async function createTextNote(app: App, title: string, body: string) {
     await createSuggestion.click();
     const noteTypeDialog = app.page.locator(".note-type-chooser-dialog");
     await expect(noteTypeDialog).toBeVisible();
+    await expect(noteTypeDialog.locator(".note-autocomplete")).toBeFocused({ timeout: 15_000 });
     await noteTypeDialog.locator('.dropdown-item[data-value="text,"]').click();
     await expect(noteTypeDialog).not.toBeVisible({ timeout: 15_000 });
 
