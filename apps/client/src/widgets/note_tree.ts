@@ -1397,6 +1397,10 @@ export default class NoteTreeWidget extends NoteContextAwareWidget {
                     }
 
                     const note = await froca.getNote(branchRow.noteId);
+                    // Navigation may start a lazy reload while getNote is pending. Wait
+                    // for that snapshot before inserting, or _setChildren sees a nonempty list.
+                    if (parentNode.isLoading()) await parentNode.load();
+                    if (!parentNode.getParent()) continue;
                     const frocaBranch = branchRow.branchId ? froca.getBranch(branchRow.branchId) : null;
                     const foundNode = (parentNode.getChildren() || []).find((child) => child.data.noteId === branchRow.noteId);
                     if (foundNode) {
@@ -2001,3 +2005,51 @@ function patchScrollIntoViewCrash() {
 }
 
 patchScrollIntoViewCrash();
+
+/** Share in-flight lazy loads; a forced refresh must run after the current snapshot. */
+function patchConcurrentTreeLoads() {
+    const { _FancytreeNodeClass } = $.ui.fancytree as Fancytree.FancytreeStatic & {
+        _FancytreeNodeClass: { prototype: Fancytree.FancytreeNode };
+    };
+    const originalLoad = _FancytreeNodeClass.prototype.load;
+    const pending = new WeakMap<Fancytree.FancytreeNode, {
+        active: JQueryPromise<unknown>;
+        refresh?: JQueryPromise<unknown>;
+    }>();
+    _FancytreeNodeClass.prototype.load = function (forceReload?: boolean) {
+        const node = this;
+        const existing = pending.get(node);
+        if (existing) {
+            if (!forceReload || existing.refresh) return existing.refresh ?? existing.active;
+            const refresh = $.Deferred();
+            existing.refresh = refresh.promise();
+            existing.active.always(() => {
+                // The active load removes its record before notifying its callers.
+                node.load(true)
+                    .done((...args: unknown[]) => refresh.resolveWith(node, args))
+                    .fail((...args: unknown[]) => refresh.rejectWith(node, args));
+            });
+            return existing.refresh;
+        }
+        const completion = $.Deferred();
+        const state = { active: completion.promise() };
+        pending.set(node, state);
+        try {
+            originalLoad.call(node, forceReload)
+                .done((...args: unknown[]) => {
+                    pending.delete(node);
+                    completion.resolveWith(node, args);
+                })
+                .fail((...args: unknown[]) => {
+                    pending.delete(node);
+                    completion.rejectWith(node, args);
+                });
+        } catch (error) {
+            pending.delete(node);
+            completion.rejectWith(node, [error]);
+        }
+        return state.active;
+    };
+}
+
+patchConcurrentTreeLoads();

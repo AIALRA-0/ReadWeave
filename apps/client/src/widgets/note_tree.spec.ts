@@ -53,6 +53,65 @@ describe("fancytree scrollIntoView patch", () => {
     });
 });
 
+describe("fancytree concurrent lazy loads", () => {
+    function createLazyTree() {
+        const sources: JQueryDeferred<Fancytree.NodeData[]>[] = [];
+        const $tree = $("<div>").appendTo(document.body);
+        $tree.fancytree({
+            source: [{ title: "parent", key: "parent", lazy: true }],
+            lazyLoad: (_event, data) => {
+                const source = $.Deferred<Fancytree.NodeData[]>();
+                sources.push(source);
+                data.result = source.promise();
+            }
+        });
+        const tree: Fancytree.Fancytree = $tree.fancytree("getTree");
+        return { $tree, node: tree.getNodeByKey("parent"), sources };
+    }
+
+    it("shares overlapping loads instead of initializing children twice", async () => {
+        const { $tree, node, sources } = createLazyTree();
+        try {
+            const first = node.load();
+            const second = node.load();
+            expect(second).toBe(first);
+            expect(sources).toHaveLength(1);
+            sources[0].resolve([{ title: "one child", key: "child" }]);
+            await Promise.all([first, second]);
+            expect(node.getChildren().map(child => child.key)).toEqual(["child"]);
+        } finally { $tree.remove(); }
+    });
+
+    it("coalesces forced refreshes without losing changes arriving during a load", async () => {
+        const { $tree, node, sources } = createLazyTree();
+        try {
+            const first = node.load();
+            const refreshed = node.load(true);
+            expect(node.load(true)).toBe(refreshed);
+            expect(sources).toHaveLength(1);
+            sources[0].resolve([{ title: "old", key: "old" }]);
+            await first;
+            expect(sources).toHaveLength(2);
+            sources[1].resolve([{ title: "latest", key: "latest" }]);
+            await refreshed;
+            expect(node.getChildren().map(child => child.key)).toEqual(["latest"]);
+        } finally { $tree.remove(); }
+    });
+
+    it("releases failed loads so a later explicit retry can succeed", async () => {
+        const { $tree, node, sources } = createLazyTree();
+        try {
+            const failed = Promise.resolve(node.load()).catch(() => "failed");
+            sources[0].reject(new Error("synthetic transport failure"));
+            expect(await failed).toBe("failed");
+            const retried = node.load(true);
+            sources[1].resolve([{ title: "recovered", key: "recovered" }]);
+            await retried;
+            expect(node.getChildren().map(child => child.key)).toEqual(["recovered"]);
+        } finally { $tree.remove(); }
+    });
+});
+
 describe("NoteTreeWidget", () => {
     afterEach(() => {
         vi.restoreAllMocks();
