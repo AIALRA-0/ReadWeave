@@ -31,6 +31,7 @@ import { useEffect, useRef, useState } from "preact/hooks";
 
 import { t } from "../../services/i18n.js";
 import server from "../../services/server.js";
+import { createEditableReadWeaveAnswerPlan, normalizeEditableReadWeaveAnswerPlan, splitPlanLines } from "./readweave_answer_plan.js";
 import utils from "../../services/utils.js";
 import { useActiveNoteContext, useContentElement } from "../react/hooks.js";
 import {
@@ -60,6 +61,8 @@ import {
     readWeaveGenerationStatusClass
 } from "./readweave_anchor_visuals.js";
 import { applyReadWeaveLocalReplacement } from "./readweave_local_rewrite.js";
+import { collectReadWeaveFragments as collectFragments, READWEAVE_CONTEXT_BLOCK_SELECTOR } from "./readweave_context.js";
+import { readReadWeaveGenerationPreferences, writeReadWeaveGenerationPreference, type ReadWeaveGenerationPreferences } from "./readweave_generation_preferences.js";
 import {
     createReadWeaveReviewIssueBaseline,
     defaultReadWeaveCallout,
@@ -79,7 +82,7 @@ import {
     upsertReadWeaveGenerationJob,
     visibleReadWeaveCandidates
 } from "./readweave_panel_state.js";
-import { normalizeReadWeaveQuestionDraft } from "./readweave_question_normalizer.js";
+import { confirmReadWeavePendingSelection } from "./readweave_pending_selection.js";
 import { insertOrReplaceReadWeaveQuestion, readWeaveQuestionStackFromText } from "./readweave_question_stack.js";
 import {
     activeReadWeaveQuestionTemplate,
@@ -97,7 +100,7 @@ import { ReadWeaveAnswer } from "./ReadWeaveAnswer.js";
 import { ReadWeaveFollowUpWindow } from "./ReadWeaveFollowUpWindow.js";
 import RightPanelWidget from "./RightPanelWidget.js";
 
-const BLOCK_SELECTOR = "p,h1,h2,h3,h4,h5,h6,li,blockquote,pre,table,td,th,caption,figure,figcaption,div.mermaid,div.mermaid-diagram";
+const BLOCK_SELECTOR = READWEAVE_CONTEXT_BLOCK_SELECTOR;
 const CONTENT_ROOT_SELECTOR = `[data-readweave-content-root], .note-detail-readonly-text-content, [contenteditable="true"][role="textbox"]`;
 const RANGE_ANCHOR_SELECTOR = READWEAVE_RANGE_ANCHOR_SELECTOR;
 const PARAGRAPH_ANCHOR_SELECTOR = READWEAVE_PARAGRAPH_ANCHOR_SELECTOR;
@@ -135,6 +138,7 @@ interface Draft {
     questionTitle: string;
     optimizeQuestion: boolean;
     autoApplyPlan: boolean;
+    quoteSelectedText?: boolean;
     externalSearchDisabled?: boolean;
     /** Legacy fields kept so drafts created before the single switch remain readable. */
     activeExternalSearch?: boolean;
@@ -162,7 +166,7 @@ function readExternalSearchDisabled(
 
     const active = draft?.activeExternalSearch ?? job?.activeExternalSearch;
     const automatic = draft?.autoExternalSearch ?? job?.autoExternalSearch;
-    if (active === undefined && automatic === undefined) return false;
+    if (active === undefined && automatic === undefined) return readReadWeaveGenerationPreferences().externalSearchDisabled;
     return active !== true && automatic === false;
 }
 
@@ -200,6 +204,23 @@ interface SelectionActionTarget {
     parentLinkId?: string;
 }
 
+interface ConfirmedGenerationSelection {
+    selection: AnchorSelection;
+    target: SelectionActionTarget;
+    entries: ReadWeaveResolvedEntry[];
+    form?: GenerationForm;
+    job?: ReadWeaveGenerationJob;
+}
+
+interface GenerationForm extends ReadWeaveGenerationPreferences {
+    kind: ReadWeaveObjectKind;
+    contentType: ReadWeaveContentType;
+    currentTitle: string;
+    answerPlan?: ReadWeaveAnswerPlan;
+    termIdentity: Partial<ReadWeaveTermIdentity>;
+    calloutType: ReadWeaveCalloutType;
+}
+
 export default function ReadWeavePanel() {
     const { note, noteId, noteContext } = useActiveNoteContext();
     const contentElement = useContentElement(noteContext);
@@ -213,9 +234,10 @@ export default function ReadWeavePanel() {
     const [contentType, setContentType] = useState<ReadWeaveContentType>("problem");
     const [parentLinkId, setParentLinkId] = useState<string>();
     const [questionTitle, setQuestionTitle] = useState("");
-    const [optimizeQuestion, setOptimizeQuestion] = useState(true);
-    const [autoApplyPlan, setAutoApplyPlan] = useState(true);
-    const [externalSearchDisabled, setExternalSearchDisabled] = useState(false);
+    const [optimizeQuestion, setOptimizeQuestion] = useState(() => readReadWeaveGenerationPreferences().optimizeQuestion);
+    const [autoApplyPlan, setAutoApplyPlan] = useState(() => readReadWeaveGenerationPreferences().autoApplyPlan);
+    const [externalSearchDisabled, setExternalSearchDisabled] = useState(() => readReadWeaveGenerationPreferences().externalSearchDisabled);
+    const [quoteSelectedText, setQuoteSelectedText] = useState(() => readReadWeaveGenerationPreferences().quoteSelectedText);
     const [answerPlan, setAnswerPlan] = useState<ReadWeaveAnswerPlan>();
     const [termIdentity, setTermIdentity] = useState<Partial<ReadWeaveTermIdentity>>({});
     const [termIdentityEdited, setTermIdentityEdited] = useState(false);
@@ -259,6 +281,7 @@ export default function ReadWeavePanel() {
         }
     });
     const persistedQuestionTemplatesRef = useRef<ReadWeaveQuestionTemplate[]>(questionTemplates);
+    const questionTemplateSource = useRef<ReadWeaveQuestionTemplate | undefined>(DEFAULT_READWEAVE_QUESTION_TEMPLATES[0]);
     const [templateManagerOpen, setTemplateManagerOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [questionCaret, setQuestionCaret] = useState(0);
@@ -281,11 +304,9 @@ export default function ReadWeavePanel() {
     const transientGenerationJobRef = useRef<ReadWeaveGenerationJob>();
     const generationDecorationRootRef = useRef<HTMLElement | null>(null);
     const generationDecorationSignatureRef = useRef("");
-    const generateAfterSelectionConfirmation = useRef<{
-        noteId: string;
-        excerpt: string;
-        kind: ReadWeaveObjectKind;
-    }>();
+    const generationClickInFlight = useRef(false);
+    const generationClickSequence = useRef(0);
+    const [confirmingGeneration, setConfirmingGeneration] = useState(false);
     const selectionActionRevision = useRef(0);
     const selectionIdentityRevision = useRef(0);
     const activeKind = useRef(kind);
@@ -326,7 +347,7 @@ export default function ReadWeavePanel() {
         : formatPartialTermIdentity(termIdentity) || selection?.excerpt.trim() || "";
     const nestedParent = parentLinkId ? entries.find(entry => entry.linkId === parentLinkId) : undefined;
     const suggestedTemplates = rankedReadWeaveQuestionTemplates(questionTemplates, questionTitle, questionTemplates.length);
-    const activeTemplateId = activeReadWeaveQuestionTemplate(questionTemplates, questionTitle, selection?.excerpt ?? "", questionCaret);
+    const activeTemplateId = activeReadWeaveQuestionTemplate(questionTemplates, questionTitle, selection?.excerpt ?? "", questionCaret, quoteSelectedText);
     const currentSourceExcerpt = selection
         ? resolveSourceExcerpt(selection, currentJob)
         : "";
@@ -338,8 +359,8 @@ export default function ReadWeavePanel() {
     const generationBusy = displayedJob?.status === "queued" || displayedJob?.status === "running" || displayedJob?.status === "saving";
     const hasActiveGenerationJobs = hasActiveReadWeaveGenerationJobs(articleGenerationJobs
         .filter(job => !followUpWindows.some(window => window.parent.linkId === job.parentLinkId)));
-    const editorLocked = busy || generationBusy;
-    const generationDisabled = selection?.pending
+    const editorLocked = busy || generationBusy || confirmingGeneration;
+    const generationDisabled = confirmingGeneration || (selection?.pending
         ? busy || !noteId || !selection.excerpt.trim()
         : isReadWeaveGenerationDisabled({
             busy,
@@ -348,7 +369,7 @@ export default function ReadWeavePanel() {
             hasTitle: !!currentTitle,
             jobStatus: currentJob?.status,
             selectionPending: false
-        });
+        }));
 
     function captureSelectionAction(invalidateCurrent = false, invalidateIdentity = false): SelectionActionTarget | undefined {
         if (!noteId || !selection || selection.pending) return undefined;
@@ -399,7 +420,9 @@ export default function ReadWeavePanel() {
         setGenerationJobId(job.jobId);
         setGenerationProgress(job.progress);
         setBusy(job.status === "queued" || job.status === "running");
-        setAutoApplyPlan(savedDraft?.autoApplyPlan ?? (job.answerPlan?.autoApplied !== false));
+        setOptimizeQuestion(savedDraft?.optimizeQuestion ?? readReadWeaveGenerationPreferences().optimizeQuestion);
+        setQuoteSelectedText(savedDraft?.quoteSelectedText ?? job.quoteSelectedText ?? readReadWeaveGenerationPreferences().quoteSelectedText);
+        setAutoApplyPlan(savedDraft?.autoApplyPlan ?? job.answerPlan?.autoApplied ?? readReadWeaveGenerationPreferences().autoApplyPlan);
         setExternalSearchDisabled(readExternalSearchDisabled(savedDraft, job));
         setRegenerationFeedback(job.feedback ?? "");
         if (!job.result) return;
@@ -507,6 +530,7 @@ export default function ReadWeavePanel() {
         if (revision !== entriesRequestRevision.current) return;
         if (entriesTarget.current?.noteId !== targetNoteId || entriesTarget.current.anchorId !== anchorId) return;
         setEntries(response);
+        return response;
     }
 
     async function selectAnchor(nextSelection: AnchorSelection, preferredKind?: ReadWeaveObjectKind) {
@@ -537,7 +561,19 @@ export default function ReadWeavePanel() {
                 && !job.parentLinkId);
         const confirmingPendingSelection = selection?.pending
             && normalizedAnchorText(selection.excerpt) === normalizedAnchorText(nextSelection.excerpt);
+        if (!confirmingPendingSelection) questionTemplateSource.current = matchingDraft || matchingJob ? undefined : DEFAULT_READWEAVE_QUESTION_TEMPLATES[0];
         setKind(nextKind);
+        activeKind.current = nextKind;
+        activeParentLinkId.current = undefined;
+        const confirmed: ConfirmedGenerationSelection = {
+            selection: nextSelection,
+            target: {
+                revision: selectionActionRevision.current,
+                identityRevision: selectionIdentityRevision.current,
+                noteId: noteId!, anchorId: nextSelection.anchorId, kind: nextKind
+            },
+            entries: []
+        };
         setContentType(matchingJob?.contentType ?? matchingDraft?.contentType ?? requestedContentType);
         setNewQuestionDraft(!!matchingDraft?.newQuestionDraft && nextKind === "question");
         setQuestionTitle(matchingDraft?.questionTitle !== undefined
@@ -545,11 +581,12 @@ export default function ReadWeavePanel() {
             : (nextKind === "question"
                 ? confirmingPendingSelection && questionTitle.trim()
                     ? decodeReadWeaveText(questionTitle)
-                    : decodeReadWeaveText(matchingJob?.title || defaultQuestionForExcerpt(nextSelection.excerpt))
+                    : decodeReadWeaveText(matchingJob?.title || defaultQuestionForExcerpt(nextSelection.excerpt, matchingDraft?.quoteSelectedText ?? readReadWeaveGenerationPreferences().quoteSelectedText))
                 : ""));
-        setOptimizeQuestion(matchingDraft?.optimizeQuestion ?? (confirmingPendingSelection ? optimizeQuestion : true));
-        setAutoApplyPlan(matchingDraft?.autoApplyPlan ?? (matchingJob?.answerPlan?.autoApplied !== false));
-        setExternalSearchDisabled(readExternalSearchDisabled(matchingDraft, matchingJob));
+        setOptimizeQuestion(matchingDraft?.optimizeQuestion ?? (confirmingPendingSelection ? optimizeQuestion : readReadWeaveGenerationPreferences().optimizeQuestion));
+        setQuoteSelectedText(matchingDraft?.quoteSelectedText ?? matchingJob?.quoteSelectedText ?? (confirmingPendingSelection ? quoteSelectedText : readReadWeaveGenerationPreferences().quoteSelectedText));
+        setAutoApplyPlan(matchingDraft?.autoApplyPlan ?? matchingJob?.answerPlan?.autoApplied ?? (confirmingPendingSelection ? autoApplyPlan : readReadWeaveGenerationPreferences().autoApplyPlan));
+        setExternalSearchDisabled(confirmingPendingSelection && !matchingDraft && !matchingJob ? externalSearchDisabled : readExternalSearchDisabled(matchingDraft, matchingJob));
         setAnswerPlan(matchingDraft?.answerPlan ?? matchingJob?.answerPlan ?? matchingJob?.result?.answerPlan);
         const restoredFields = recoverReadWeaveGenerationFields({
             draft: matchingDraft,
@@ -557,13 +594,27 @@ export default function ReadWeavePanel() {
             fallbackQuestionTitle: nextKind === "question"
                 ? confirmingPendingSelection && questionTitle.trim()
                     ? decodeReadWeaveText(questionTitle)
-                    : decodeReadWeaveText(matchingJob?.title || defaultQuestionForExcerpt(nextSelection.excerpt))
+                    : decodeReadWeaveText(matchingJob?.title || defaultQuestionForExcerpt(nextSelection.excerpt, matchingDraft?.quoteSelectedText ?? readReadWeaveGenerationPreferences().quoteSelectedText))
                 : "",
             fallbackTermIdentity: confirmingPendingSelection ? cleanPartialTermIdentity(termIdentity) : initialTermIdentity(nextSelection.excerpt, nextKind),
             job: matchingJob
         });
         const nextTermIdentity = restoredFields.termIdentity;
         const nextBody = restoredFields.body;
+        const defaults = readReadWeaveGenerationPreferences();
+        confirmed.job = matchingJob;
+        confirmed.form = {
+            kind: nextKind,
+            contentType: matchingJob?.contentType ?? matchingDraft?.contentType ?? requestedContentType,
+            currentTitle: nextKind === "question" ? restoredFields.questionTitle : formatPartialTermIdentity(nextTermIdentity) || nextSelection.excerpt.trim(),
+            optimizeQuestion: matchingDraft?.optimizeQuestion ?? (confirmingPendingSelection ? optimizeQuestion : defaults.optimizeQuestion),
+            quoteSelectedText: matchingDraft?.quoteSelectedText ?? matchingJob?.quoteSelectedText ?? (confirmingPendingSelection ? quoteSelectedText : defaults.quoteSelectedText),
+            autoApplyPlan: matchingDraft?.autoApplyPlan ?? matchingJob?.answerPlan?.autoApplied ?? (confirmingPendingSelection ? autoApplyPlan : defaults.autoApplyPlan),
+            externalSearchDisabled: confirmingPendingSelection && !matchingDraft && !matchingJob ? externalSearchDisabled : readExternalSearchDisabled(matchingDraft, matchingJob),
+            answerPlan: matchingDraft?.answerPlan ?? matchingJob?.answerPlan ?? matchingJob?.result?.answerPlan ?? (confirmingPendingSelection ? answerPlan : undefined),
+            termIdentity: nextTermIdentity,
+            calloutType: matchingDraft?.calloutType ?? readWeaveCalloutForContentType(requestedContentType)
+        };
         if (nextKind === "question") setQuestionTitle(restoredFields.questionTitle);
         const nextReviewIssues = matchingDraft?.reviewIssues ?? matchingJob?.result?.reviewIssues ?? [];
         setTermIdentity(nextTermIdentity);
@@ -591,24 +642,32 @@ export default function ReadWeavePanel() {
         setBodyEditing(!(matchingJob?.result?.body || matchingDraft?.generationJobId));
         setBusy(matchingJob?.status === "queued" || matchingJob?.status === "running");
         if (isReadWeaveGenerationReviewable(matchingJob?.status) && matchingJob?.unread) void markJobViewed(matchingJob);
-        try {
-            await refreshEntriesForAnchor(noteId!, nextSelection.anchorId);
-        } catch {
+        const loadEntries = async () => {
+          try {
+            confirmed.entries = await refreshEntriesForAnchor(confirmed.target.noteId, nextSelection.anchorId) ?? [];
+          } catch {
             // Loading saved entries is advisory for questions and the server
             // remains the final authority for term uniqueness. A transient
             // read failure must not strand a confirmed selection in a state
             // where its direct Generate action can never continue.
-            if (entriesTarget.current?.noteId === noteId && entriesTarget.current.anchorId === nextSelection.anchorId) {
+            if (entriesTarget.current?.noteId === confirmed.target.noteId && entriesTarget.current?.anchorId === nextSelection.anchorId) {
                 setEntries([]);
             }
-        } finally {
-            if (entriesTarget.current?.noteId === noteId && entriesTarget.current.anchorId === nextSelection.anchorId) {
+          } finally {
+            if (entriesTarget.current?.noteId === confirmed.target.noteId && entriesTarget.current?.anchorId === nextSelection.anchorId) {
                 setEntriesLoadedAnchorId(nextSelection.anchorId);
             }
-        }
+          }
+        };
+        if (nextKind === "term") await loadEntries();
+        else void loadEntries();
+        return confirmed;
     }
 
     function previewSelection(nextSelection: AnchorSelection) {
+        generationClickSequence.current++;
+        generationClickInFlight.current = false;
+        setConfirmingGeneration(false);
         entriesRequestRevision.current += 1;
         selectionActionRevision.current += 1;
         selectionIdentityRevision.current += 1;
@@ -625,10 +684,13 @@ export default function ReadWeavePanel() {
         setContentType("problem");
         setNewQuestionDraft(false);
         setParentLinkId(undefined);
-        setQuestionTitle(defaultQuestionForExcerpt(decodeReadWeaveText(nextSelection.excerpt)));
-        setOptimizeQuestion(true);
-        setAutoApplyPlan(true);
-        setExternalSearchDisabled(false);
+        const preferences = readReadWeaveGenerationPreferences();
+        questionTemplateSource.current = DEFAULT_READWEAVE_QUESTION_TEMPLATES[0];
+        setQuestionTitle(defaultQuestionForExcerpt(nextSelection.excerpt, preferences.quoteSelectedText));
+        setOptimizeQuestion(preferences.optimizeQuestion);
+        setAutoApplyPlan(preferences.autoApplyPlan);
+        setExternalSearchDisabled(preferences.externalSearchDisabled);
+        setQuoteSelectedText(preferences.quoteSelectedText);
         setAnswerPlan(undefined);
         setTermIdentity({});
         setTermIdentityEdited(false);
@@ -737,6 +799,9 @@ export default function ReadWeavePanel() {
         selectionActionRevision.current += 1;
         selectionIdentityRevision.current += 1;
         setLoadedArticleNoteId(undefined);
+        generationClickSequence.current++;
+        generationClickInFlight.current = false;
+        setConfirmingGeneration(false);
         setSelection(undefined);
         setParentLinkId(undefined);
         setEntries([]);
@@ -794,33 +859,9 @@ export default function ReadWeavePanel() {
     }, [generationJobs, selection?.anchorId, selection?.pending, kind, contentType, parentLinkId, generationJobId, newQuestionDraft]);
 
     useEffect(() => {
-        const requested = generateAfterSelectionConfirmation.current;
-        if (!requested || !noteId || !selection || selection.pending) return;
-        if (requested.noteId !== noteId
-            || requested.kind !== kind
-            || normalizedAnchorText(requested.excerpt) !== normalizedAnchorText(selection.excerpt)) {
-            generateAfterSelectionConfirmation.current = undefined;
-            return;
-        }
-        // Multiple questions may share one exact fragment, so their direct
-        // Generate action must not wait for the saved-entry lookup. Terms wait
-        // for that lookup to preserve the one-definition-per-fragment rule.
-        if (kind === "term" && entriesLoadedAnchorId !== selection.anchorId) return;
-        if (generationDisabled) {
-            // Once the confirmed selection has reached a stable disabled state
-            // (existing definition, active job, etc.), do not leave a latent
-            // request that could fire later without another user click.
-            generateAfterSelectionConfirmation.current = undefined;
-            return;
-        }
-        generateAfterSelectionConfirmation.current = undefined;
-        void generate();
-    }, [noteId, selection?.anchorId, selection?.pending, selection?.excerpt, entriesLoadedAnchorId, kind, generationDisabled]);
-
-    useEffect(() => {
         if (!noteId || !selection) return;
         const draft: Draft = {
-            kind, contentType, questionTitle, optimizeQuestion, autoApplyPlan,
+            kind, contentType, questionTitle, optimizeQuestion, autoApplyPlan, quoteSelectedText,
             externalSearchDisabled, answerPlan, termIdentity,
             termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId,
             contextDecision, generationJobId, reviewIssues, reviewIssueBaseline,
@@ -830,7 +871,7 @@ export default function ReadWeavePanel() {
         sessionStorage.setItem(draftKey(noteId, selection.anchorId, parentLinkId, isolatedDraftId), JSON.stringify(draft));
         sessionStorage.setItem(draftKey(noteId, selection.anchorId, parentLinkId), JSON.stringify(draft));
     }, [noteId, selection, kind, contentType, parentLinkId, questionTitle, optimizeQuestion,
-        autoApplyPlan, externalSearchDisabled, answerPlan, termIdentity,
+        autoApplyPlan, quoteSelectedText, externalSearchDisabled, answerPlan, termIdentity,
         termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision,
         generationJobId, currentJob?.draftId, localDraftId, reviewIssues, reviewIssueBaseline,
         newQuestionDraft]);
@@ -956,39 +997,62 @@ export default function ReadWeavePanel() {
         };
     }, [currentTitle, kind, termIdentity]);
 
-    async function generate() {
-        if (!noteId || !selection) return;
+    function currentGenerationForm(): GenerationForm {
+        return { kind, contentType, currentTitle, optimizeQuestion, autoApplyPlan, externalSearchDisabled, quoteSelectedText, answerPlan, termIdentity, calloutType };
+    }
+
+    async function generate(confirmed?: ConfirmedGenerationSelection, {
+        kind, contentType, currentTitle, optimizeQuestion, autoApplyPlan,
+        externalSearchDisabled, quoteSelectedText, answerPlan, termIdentity, calloutType
+    }: GenerationForm = confirmed?.form ?? currentGenerationForm()) {
+        const selected = confirmed?.selection ?? selection;
+        if (!noteId || !selected || selected.pending) throw new Error(t("readweave.selection_sync_failed"));
+        if (confirmed && !isSelectionActionCurrent(confirmed.target)) throw new Error(t("readweave.selection_sync_failed"));
+        if (confirmed?.job && [ "queued", "running", "saving" ].includes(confirmed.job.status)) {
+            setStatus("所选片段已有正在运行的生成任务");
+            setStatusTone("normal");
+            return;
+        }
+        if (kind === "term" && confirmed?.entries.some(entry => entry.kind === "term")) {
+            setStatus("所选片段已有定义，请打开已有定义后编辑");
+            setStatusTone("warning");
+            return;
+        }
         if (kind === "question" && !autoApplyPlan && !answerPlan) {
-            setAnswerPlan(createEditableReadWeaveAnswerPlan(currentTitle, contentType));
+            setAnswerPlan(createEditableReadWeaveAnswerPlan(currentTitle, contentType, quoteSelectedText));
             setStatus("回答流程已生成，可以编辑流程内容；再次点击“生成答案”才会调用写作模型");
             setStatusTone("normal");
             return;
         }
         const preparedPlan = kind === "question"
-            ? normalizeEditableReadWeaveAnswerPlan(answerPlan ?? createEditableReadWeaveAnswerPlan(currentTitle, contentType), true)
+            ? normalizeEditableReadWeaveAnswerPlan(answerPlan ?? createEditableReadWeaveAnswerPlan(currentTitle, contentType, quoteSelectedText), true, autoApplyPlan)
             : undefined;
         if (kind === "question" && !preparedPlan) {
             setStatus("回答流程不完整，请补齐目标、步骤和必答项");
             setStatusTone("warning");
             return;
         }
-        if (generationDisabled) return;
+        if (!confirmed && generationDisabled) {
+            setStatus("当前内容暂时无法生成，请检查选区、标题或正在运行的任务");
+            setStatusTone("warning");
+            return;
+        }
         if (currentJob && normalizedAnchorText(currentJob.title) === normalizedAnchorText(currentTitle)) {
             await regenerateDraft();
             return;
         }
-        const target = captureSelectionAction(true, true);
-        if (!target) return;
+        const target = confirmed?.target ?? captureSelectionAction(true, true);
+        if (!target) throw new Error(t("readweave.selection_sync_failed"));
         const transientJob = createTransientGenerationJob({
             articleId: noteId,
-            anchorId: selection.anchorId,
-            anchorType: selection.anchorType,
+            anchorId: selected.anchorId,
+            anchorType: selected.anchorType,
             kind,
             contentType,
             parentLinkId,
             title: currentTitle,
-            sourceExcerpt: selection.excerpt,
-            sourceLocator: selection.sourceLocator
+            sourceExcerpt: selected.excerpt,
+            sourceLocator: selected.sourceLocator
         });
         transientGenerationJobRef.current = transientJob;
         setTransientGenerationJob(transientJob);
@@ -1002,32 +1066,34 @@ export default function ReadWeavePanel() {
         setReviewIssues([]);
         setReviewIssueBaseline(undefined);
         try {
-            await persistReadWeaveAnchor(noteContext, selection);
-            if (!await readWeaveAnchorIsPresent(noteContext, selection.anchorId, selection.readonly)) {
+            await persistReadWeaveAnchor(noteContext, selected);
+            if (!isSelectionActionCurrent(target)) throw new Error(t("readweave.selection_sync_failed"));
+            if (!await readWeaveAnchorIsPresent(noteContext, selected.anchorId, selected.readonly)) {
                 throw new Error(t("readweave.anchor_lost_before_generation"));
             }
             const response = await server.post<{ job: ReadWeaveGenerationJob }>("readweave/generation-jobs", {
                 articleId: noteId,
-                anchorId: selection.anchorId,
-                anchorType: selection.anchorType,
+                anchorId: selected.anchorId,
+                anchorType: selected.anchorType,
                 kind,
                 contentType,
                 origin: readWeaveContentOriginForType(contentType),
                 calloutType,
                 parentLinkId,
-                rootSourceExcerpt: selection.excerpt,
-                sourceLocator: selection.sourceLocator,
+                rootSourceExcerpt: selected.excerpt,
+                sourceLocator: selected.sourceLocator,
                 title: currentTitle,
                 questionStack: readWeaveQuestionStackFromText(currentTitle),
                 optimizeQuestion: kind === "question" ? optimizeQuestion : undefined,
+                quoteSelectedText,
                 autoApplyPlan,
                 activeExternalSearch: false,
                 autoExternalSearch: !externalSearchDisabled,
                 answerPlan: preparedPlan,
                 termIdentity: kind === "term" ? cleanPartialTermIdentity(termIdentity) : undefined,
                 fragments: nestedParent
-                    ? nestedQuestionFragments(entries, nestedParent, selection.fragments)
-                    : selection.fragments
+                    ? nestedQuestionFragments(entries, nestedParent, selected.fragments)
+                    : selected.fragments
             });
             if (transientGenerationJobRef.current?.jobId === transientJob.jobId) {
                 transientGenerationJobRef.current = undefined;
@@ -1075,20 +1141,28 @@ export default function ReadWeavePanel() {
         }
     }
 
-    function generateFromCurrentSelection() {
-        if (!noteId || !selection || generationDisabled) return;
-        if (selection.pending) {
-            generateAfterSelectionConfirmation.current = {
-                noteId,
-                excerpt: selection.excerpt,
-                kind
-            };
-            if (!confirmPendingSelection(kind)) {
-                generateAfterSelectionConfirmation.current = undefined;
+    async function generateFromCurrentSelection() {
+        if (generationClickInFlight.current) return;
+        const clickSequence = ++generationClickSequence.current;
+        generationClickInFlight.current = true;
+        setConfirmingGeneration(true);
+        setStatus(t("readweave.generation_queued"));
+        setStatusTone("normal");
+        try {
+            const confirmed = selection?.pending ? await confirmPendingSelection(kind, selection.excerpt) : undefined;
+            if (generationClickSequence.current !== clickSequence) return;
+            await generate(confirmed);
+        } catch (error) {
+            if (generationClickSequence.current !== clickSequence) return;
+            setStatus(readableError(error, t("readweave.generate_failed_no_fallback")));
+            setStatusTone("error");
+            setBusy(false);
+        } finally {
+            if (generationClickSequence.current === clickSequence) {
+                generationClickInFlight.current = false;
+                setConfirmingGeneration(false);
             }
-            return;
         }
-        void generate();
     }
 
     async function applyLocalRewrite() {
@@ -1264,7 +1338,7 @@ export default function ReadWeavePanel() {
     async function regenerateDraft() {
         if (!generationJobId) return;
         const preparedPlan = kind === "question"
-            ? normalizeEditableReadWeaveAnswerPlan(answerPlan ?? createEditableReadWeaveAnswerPlan(currentTitle, contentType), true)
+            ? normalizeEditableReadWeaveAnswerPlan(answerPlan ?? createEditableReadWeaveAnswerPlan(currentTitle, contentType, quoteSelectedText), true, autoApplyPlan)
             : undefined;
         if (kind === "question" && !preparedPlan) {
             setStatus("回答流程不完整，请补齐目标、步骤和必答项");
@@ -1301,6 +1375,7 @@ export default function ReadWeavePanel() {
                 feedback: regenerationFeedback.trim() || undefined,
                 title: currentTitle,
                 optimizeQuestion: kind === "question" ? optimizeQuestion : undefined,
+                quoteSelectedText,
                 contentType,
                 origin: readWeaveContentOriginForType(contentType),
                 autoApplyPlan,
@@ -1390,7 +1465,7 @@ export default function ReadWeavePanel() {
         setLocalRewriteResult(undefined);
         setNewQuestionDraft(false);
         setQuestionTitle(currentKind === "question" && selection && !selection.pending
-            ? defaultQuestionForExcerpt(selection.excerpt)
+            ? defaultQuestionForExcerpt(selection.excerpt, quoteSelectedText)
             : "");
         setTermIdentity(initialTermIdentity(selection?.excerpt ?? "", currentKind));
         setTermIdentityEdited(false);
@@ -1454,13 +1529,18 @@ export default function ReadWeavePanel() {
         setStatusTone("normal");
     }
 
-    function chooseContentType(nextContentType: ReadWeaveContentType) {
+    async function chooseContentType(nextContentType: ReadWeaveContentType) {
         const nextKind = readWeaveKindForContentType(nextContentType);
         if (selection?.pending) {
             // The content type selector is the only confirmation control. A
             // pending read-only range is finalized by the same click that
             // chooses its content type.
-            if (!confirmPendingSelection(nextKind)) return;
+            try { await confirmPendingSelection(nextKind, selection.excerpt); }
+            catch (error) {
+                setStatus(readableError(error, t("readweave.selection_sync_failed")));
+                setStatusTone("error");
+                return;
+            }
         }
         if (nextContentType === contentType) return;
         selectionActionRevision.current += 1;
@@ -1518,8 +1598,13 @@ export default function ReadWeavePanel() {
         setTransientGenerationJob(undefined);
         setGenerationProgress([]);
         setBusy(false);
-        setQuestionTitle(defaultQuestionForExcerpt(decodeReadWeaveText(selection.excerpt)));
-        setOptimizeQuestion(true);
+        const preferences = readReadWeaveGenerationPreferences();
+        questionTemplateSource.current = DEFAULT_READWEAVE_QUESTION_TEMPLATES[0];
+        setQuestionTitle(defaultQuestionForExcerpt(selection.excerpt, preferences.quoteSelectedText));
+        setOptimizeQuestion(preferences.optimizeQuestion);
+        setAutoApplyPlan(preferences.autoApplyPlan);
+        setExternalSearchDisabled(preferences.externalSearchDisabled);
+        setQuoteSelectedText(preferences.quoteSelectedText);
         setTermIdentity({});
         setTermIdentityEdited(false);
         setBody("");
@@ -1561,9 +1646,28 @@ export default function ReadWeavePanel() {
         setBodyEdited(true);
     }
 
+    function changeGenerationPreference<K extends keyof ReadWeaveGenerationPreferences>(key: K, value: ReadWeaveGenerationPreferences[K]) {
+        writeReadWeaveGenerationPreference(key, value);
+        if (key === "optimizeQuestion") setOptimizeQuestion(value);
+        if (key === "autoApplyPlan") setAutoApplyPlan(value);
+        if (key === "externalSearchDisabled") setExternalSearchDisabled(value);
+        if (key === "quoteSelectedText") {
+            const template = questionTemplateSource.current;
+            if (selection && template && questionTitle === defaultQuestionForExcerpt(selection.excerpt, quoteSelectedText)) {
+                setQuestionTitle(defaultQuestionForExcerpt(selection.excerpt, value));
+                setAnswerPlan(undefined);
+            } else if (selection && template && questionTitle === renderReadWeaveQuestionTemplate(template, selection.excerpt, quoteSelectedText)) {
+                setQuestionTitle(renderReadWeaveQuestionTemplate(template, selection.excerpt, value));
+                setAnswerPlan(undefined);
+            }
+            setQuoteSelectedText(value);
+        }
+    }
+
     function applyQuestionTemplate(template: ReadWeaveQuestionTemplate) {
         if (!selection) return;
-        const replacement = renderReadWeaveQuestionTemplate(template, selection.excerpt);
+        const replacement = renderReadWeaveQuestionTemplate(template, selection.excerpt, quoteSelectedText);
+        questionTemplateSource.current = template;
         const textarea = questionTextareaRef.current;
         const next = insertOrReplaceReadWeaveQuestion(questionTitle, replacement, textarea?.selectionStart ?? questionTitle.length);
         setQuestionTitle(next);
@@ -1813,7 +1917,7 @@ export default function ReadWeavePanel() {
         <RightPanelWidget id="readweave-panel" title="ReadWeave">
             <div class="readweave-panel">
                 {followUpWindows.map(window => <ReadWeaveFollowUpWindow key={`${window.parent.linkId}:${window.selected.startOffset}:${window.selected.endOffset}`} parent={window.parent} selection={window.selected}
-                    externalSearchDisabled={externalSearchDisabled}
+                    generationPreferences={readReadWeaveGenerationPreferences()}
                     onClose={() => setFollowUpWindows(current => current.filter(item => item !== window))}
                     onOpen={openFollowUp} onJob={job => { if (job.articleId === activeArticleNoteId.current) upsertGenerationJob(job); }} />)}
                 {!selection ? (
@@ -1976,20 +2080,27 @@ export default function ReadWeavePanel() {
                                             rows={3}
                                             value={questionTitle}
                                             disabled={editorLocked}
-                                            onFocus={() => { if (selection.pending) confirmPendingSelection("question"); }}
-                                            onInput={event => { setQuestionTitle(event.currentTarget.value); setQuestionCaret(event.currentTarget.selectionStart); changeDraft(); }}
+                                            onFocus={() => { if (selection.pending) void confirmPendingSelection("question", selection.excerpt).catch(error => {
+                                                setStatus(readableError(error, t("readweave.selection_sync_failed")));
+                                                setStatusTone("error");
+                                            }); }}
+                                            onInput={event => { questionTemplateSource.current = undefined; setQuestionTitle(event.currentTarget.value); setQuestionCaret(event.currentTarget.selectionStart); changeDraft(); }}
                                             onSelect={event => setQuestionCaret(event.currentTarget.selectionStart)}
                                             onKeyDown={handleQuestionKeyDown}
                                             data-testid="readweave-question"
                                         />
                                     </label>
                                     <label class="readweave-question-optimization" title={t("readweave.optimize_question_hint")}>
-                                        <input type="checkbox" checked={optimizeQuestion} disabled={editorLocked} onChange={event => setOptimizeQuestion(event.currentTarget.checked)} data-testid="readweave-optimize-question" />
+                                        <input type="checkbox" checked={optimizeQuestion} disabled={editorLocked} onChange={event => changeGenerationPreference("optimizeQuestion", event.currentTarget.checked)} data-testid="readweave-optimize-question" />
                                         <span><strong>{t("readweave.optimize_question")}</strong></span>
                                     </label>
                                     <label class="readweave-question-optimization" title="关闭后仍会生成，但会保留你的原问题文字">
-                                        <input type="checkbox" checked={autoApplyPlan} disabled={editorLocked} onChange={event => setAutoApplyPlan(event.currentTarget.checked)} data-testid="readweave-auto-apply-plan" />
+                                        <input type="checkbox" checked={autoApplyPlan} disabled={editorLocked} onChange={event => changeGenerationPreference("autoApplyPlan", event.currentTarget.checked)} data-testid="readweave-auto-apply-plan" />
                                         <span><strong>自动采用问题和回答结构</strong></span>
+                                    </label>
+                                    <label class="readweave-question-optimization">
+                                        <input type="checkbox" checked={quoteSelectedText} disabled={editorLocked} onChange={event => changeGenerationPreference("quoteSelectedText", event.currentTarget.checked)} data-testid="readweave-quote-selected-text" />
+                                        <span><strong>为所选文字添加引号</strong></span>
                                     </label>
                                     {!autoApplyPlan && answerPlan && (
                                         <section class="readweave-answer-plan-editor" data-testid="readweave-answer-plan-editor">
@@ -2040,7 +2151,7 @@ export default function ReadWeavePanel() {
                                         checked={externalSearchDisabled}
                                         disabled={editorLocked}
                                         onChange={event =>
-                                            setExternalSearchDisabled(event.currentTarget.checked)}
+                                            changeGenerationPreference("externalSearchDisabled", event.currentTarget.checked)}
                                         data-testid="readweave-disable-external-search"
                                     />
                                     <span><strong>关闭外部搜索</strong></span>
@@ -2104,12 +2215,12 @@ export default function ReadWeavePanel() {
                                 type="button"
                                 class={`btn btn-secondary readweave-generate-${kind}`}
                                 disabled={generationDisabled}
-                                aria-busy={generationBusy}
+                                aria-busy={generationBusy || confirmingGeneration}
                                 onClick={generateFromCurrentSelection}
                                 data-testid="readweave-generate"
                             >
-                                {generationBusy && <i class="bx bx-loader-alt bx-spin" aria-hidden="true" />}
-                                {generationBusy
+                                {(generationBusy || confirmingGeneration) && <i class="bx bx-loader-alt bx-spin" aria-hidden="true" />}
+                                {generationBusy || confirmingGeneration
                                     ? t("readweave.generating")
                                     : kind === "question" && !autoApplyPlan && !answerPlan
                                         ? "生成流程计划"
@@ -2561,7 +2672,7 @@ interface AnchorInteractionOptions {
     generationJobs: ReadWeaveGenerationJob[];
     dataReady: boolean;
     activeAnchorId?: string;
-    onSelect: (selection: AnchorSelection, preferredKind?: ReadWeaveObjectKind) => void;
+    onSelect: (selection: AnchorSelection, preferredKind?: ReadWeaveObjectKind) => Promise<ConfirmedGenerationSelection>;
     onSelectionPreview: (selection: AnchorSelection) => void;
     onStatus: (status: string | undefined) => void;
     onHover: (entries: ReadWeaveResolvedEntry[], rect: DOMRect, locked: boolean, avoidRect?: DOMRect) => void;
@@ -2575,7 +2686,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
     const activeAnchorRef = useRef<string>();
     const hoveredAnchorRef = useRef<string>();
     const suppressedAnchorRef = useRef<string>();
-    const pendingSelectionActionsRef = useRef<Partial<Record<ReadWeaveObjectKind, () => void>>>({});
+    const pendingSelectionActionsRef = useRef<Partial<Record<ReadWeaveObjectKind, { excerpt: string; action: () => Promise<ConfirmedGenerationSelection> }>>>({});
 
     useEffect(() => {
         const { noteId, noteContext } = optionsRef.current;
@@ -2588,6 +2699,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
         let selectionFrame: number | undefined;
         let selectionRetryTimer: number | undefined;
         let selectionRevision = 0;
+        let selectionConfirmed = false;
         let disposed = false;
 
         function removeBubble() {
@@ -2784,8 +2896,8 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
                 removeBubble();
                 return;
             }
-            const nativeRange = trimRangeWhitespace(nativeSelection.getRangeAt(0));
-            const excerpt = decodeReadWeaveText(nativeRange.toString().replace(/\s+/g, " ")).slice(0, 10_000);
+            const nativeRange = nativeSelection.getRangeAt(0).cloneRange();
+            const excerpt = nativeRange.toString();
             const common = nativeRange.commonAncestorContainer instanceof Element ? nativeRange.commonAncestorContainer : nativeRange.commonAncestorContainer.parentElement;
             const root = common?.closest<HTMLElement>(CONTENT_ROOT_SELECTOR);
             if (!root || !excerpt) {
@@ -2862,13 +2974,21 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
                 const label = preferredKind === "question" ? t("readweave.ask_action") : t("readweave.define_action");
                 button.textContent = label;
                 button.setAttribute("aria-label", label);
-                let activated = false;
-                async function activate(buttonEvent: Event) {
-                    if (activated) return;
-                    activated = true;
-                    pendingSelectionActionsRef.current = {};
+                let activation: Promise<ConfirmedGenerationSelection> | undefined;
+                function activate(buttonEvent: Event): Promise<ConfirmedGenerationSelection> {
                     buttonEvent.preventDefault();
                     buttonEvent.stopPropagation();
+                    if (activation) return activation;
+                    selectionConfirmed = true;
+                    // Confirmation owns this selection now. An already queued
+                    // editor/selection retry must not restore its question preview
+                    // after the user explicitly chose Define.
+                    selectionRevision += 1;
+                    if (selectionFrame !== undefined) window.cancelAnimationFrame(selectionFrame);
+                    selectionFrame = undefined;
+                    window.clearTimeout(selectionRetryTimer);
+                    selectionRetryTimer = undefined;
+                    pendingSelectionActionsRef.current = {};
                     let anchorId = exactExistingAnchorId;
                     if (!anchorId) {
                         anchorId = `rwr_${utils.randomString(20)}`;
@@ -2892,16 +3012,25 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
                     // Finalize the editor state in the same event turn. Deferring the
                     // whole transition left the pending preview interactive for one
                     // frame, so fast typing could be overwritten when onSelect ran.
-                    void optionsRef.current.onSelect(finalizedSelection, preferredKind);
+                    activation = optionsRef.current.onSelect(finalizedSelection, preferredKind);
                     window.requestAnimationFrame(() => {
                         decorateAnchors(interactionRoot);
                         setActiveAnchor(interactionRoot, anchorId!);
                     });
+                    return activation;
                 }
-                button.addEventListener("mousedown", activate);
-                button.addEventListener("click", activate);
-                pendingSelectionActionsRef.current[preferredKind] = () => {
-                    void activate(new Event("readweave-confirm-selection", { cancelable: true }));
+                const handleActivation = (event: Event) => void activate(event).catch(error => optionsRef.current.onStatus(readableError(error, t("readweave.selection_sync_failed"))));
+                // Keep the toolbar in the DOM through pointerup. Removing it
+                // on mousedown retargeted mouseup to the paragraph underneath,
+                // which incorrectly began a fresh question selection.
+                button.addEventListener("mousedown", event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                });
+                button.addEventListener("click", handleActivation);
+                pendingSelectionActionsRef.current[preferredKind] = {
+                    excerpt,
+                    action: () => activate(new Event("readweave-confirm-selection", { cancelable: true }))
                 };
                 actionBubble.append(button);
             }
@@ -2928,15 +3057,20 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
 
         function onMouseUp(event: MouseEvent) {
             if (!(event.target instanceof Element) || event.target.closest(".readweave-selection-actions,.readweave-panel,.readweave-hover-preview")) return;
+            selectionConfirmed = false;
             scheduleSelectionActions();
         }
 
         function onPointerUp(event: PointerEvent) {
             if (!(event.target instanceof Element) || event.target.closest(".readweave-selection-actions,.readweave-panel,.readweave-hover-preview")) return;
+            selectionConfirmed = false;
             scheduleSelectionActions();
         }
 
         function onSelectionChange() {
+            // CKEditor can restore its model range after the native range was
+            // cleared during anchor insertion. That is not a new user choice.
+            if (selectionConfirmed) return;
             scheduleSelectionActions();
         }
 
@@ -3041,6 +3175,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
 
         function onKeyDown(event: KeyboardEvent) {
             if (event.key === "Escape") removeBubble();
+            if (event.target instanceof Element && event.target.closest(CONTENT_ROOT_SELECTOR)) selectionConfirmed = false;
         }
 
         async function attachEditorWhenReady(attempt = 0) {
@@ -3187,27 +3322,14 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
         return () => { cancelled = true; };
     }, [options.noteId, options.noteContext, options.contentElement, options.summaries, options.generationJobs, options.dataReady, options.activeAnchorId]);
 
-    return (preferredKind: ReadWeaveObjectKind): boolean => {
-        const action = pendingSelectionActionsRef.current[preferredKind];
-        if (action) {
-            action();
-            return true;
-        }
-        // The panel can render between the selection preview and the final
-        // registration of the readonly activation callback. Keep the user's
-        // single click alive for that short attachment window instead of
-        // silently doing nothing.
-        let attempts = 0;
-        const retry = () => {
-            const pendingAction = pendingSelectionActionsRef.current[preferredKind];
-            if (pendingAction) {
-                pendingAction();
-                return;
-            }
-            if (attempts++ < 12) window.setTimeout(retry, 16);
-        };
-        window.setTimeout(retry, 0);
-        return true;
+    return (preferredKind: ReadWeaveObjectKind, excerpt?: string): Promise<ConfirmedGenerationSelection> => {
+        const noteId = optionsRef.current.noteId;
+        return confirmReadWeavePendingSelection(() => {
+            if (optionsRef.current.noteId !== noteId) throw new Error(t("readweave.selection_sync_failed"));
+            const pending = pendingSelectionActionsRef.current[preferredKind];
+            if (pending && excerpt !== undefined && pending.excerpt !== excerpt) throw new Error(t("readweave.selection_sync_failed"));
+            return pending?.action;
+        });
     };
 }
 
@@ -3221,14 +3343,14 @@ function persistReconciledReadWeaveAnchor(root: HTMLElement, mode: "editable" | 
         .catch(() => undefined);
 }
 
-function defaultQuestionForExcerpt(excerpt: string): string {
+function defaultQuestionForExcerpt(excerpt: string, quoteSelectedText = true): string {
     const normalized = decodeReadWeaveText(excerpt)
         .replace(/[：:，,；;。.!！?？]+$/u, "")
         .trim();
     if (!normalized) return "";
-    return normalized.length <= 80
-        ? t("readweave.default_question_short", { excerpt: normalized })
-        : t("readweave.default_question_long");
+    if (normalized.length > 80) return t("readweave.default_question_long");
+    const question = t("readweave.default_question_short", { excerpt: normalized });
+    return quoteSelectedText ? question : question.replaceAll(`“${normalized}”`, normalized).replaceAll(`"${normalized}"`, normalized);
 }
 
 function summaryMatchesRenderedText(summary: ReadWeaveAnchorSummary, renderedText: string, anchorType: ReadWeaveAnchorType): boolean {
@@ -3782,12 +3904,12 @@ function rangeStrictlyIntersectsElement(range: Range, element: Element): boolean
         && range.compareBoundaryPoints(Range.END_TO_START, elementRange) < 0;
 }
 
-function textOf(element: Element | null | undefined, maxLength = 10_000): string {
-    return decodeReadWeaveText(element?.textContent ?? "").slice(0, maxLength);
+function textOf(element: Element | null | undefined): string {
+    return element?.textContent ?? "";
 }
 
-function textOfAnchorElements(elements: HTMLElement[], maxLength = 10_000): string {
-    return decodeReadWeaveText(elements.map(element => element.textContent ?? "").join("")).slice(0, maxLength);
+function textOfAnchorElements(elements: HTMLElement[]): string {
+    return elements.map(element => element.textContent ?? "").join("");
 }
 
 function resolveSourceExcerpt(selection: AnchorSelection, job: ReadWeaveGenerationJob | undefined): string {
@@ -3795,24 +3917,6 @@ function resolveSourceExcerpt(selection: AnchorSelection, job: ReadWeaveGenerati
         || decodeReadWeaveText(job?.sourceExcerpt ?? "")
         || decodeReadWeaveText(selection.fragments.find(fragment => fragment.role === "selected")?.text ?? "")
         || "";
-}
-
-function collectFragments(root: HTMLElement, block: HTMLElement, selectedText: string): ReadWeaveContextFragment[] {
-    const blocks = Array.from(root.querySelectorAll<HTMLElement>(BLOCK_SELECTOR));
-    const index = blocks.indexOf(block);
-    const previousHeadingIndex = blocks.slice(0, Math.max(index + 1, 0)).findLastIndex(item => /^H[1-6]$/.test(item.tagName));
-    const nextHeadingRelative = blocks.slice(index + 1).findIndex(item => /^H[1-6]$/.test(item.tagName));
-    const sectionEnd = nextHeadingRelative < 0 ? blocks.length : index + 1 + nextHeadingRelative;
-    const sectionStart = Math.max(previousHeadingIndex, 0);
-    const fragments: ReadWeaveContextFragment[] = [
-        { id: "selected", role: "selected", text: selectedText },
-        { id: "heading", role: "heading", text: textOf(blocks[previousHeadingIndex]) },
-        ...[1, 2, 3].map(distance => ({ id: `previous-${distance}`, role: "previous" as const, text: textOf(blocks[index - distance]), distance })),
-        ...[1, 2, 3].map(distance => ({ id: `next-${distance}`, role: "next" as const, text: textOf(blocks[index + distance]), distance })),
-        { id: "section", role: "section", text: blocks.slice(sectionStart, sectionEnd).map(item => textOf(item)).join("\n").slice(0, 30_000), distance: 5 },
-        { id: "document", role: "document", text: textOf(root, 80_000), distance: 20 }
-    ];
-    return fragments.filter(fragment => fragment.text);
 }
 
 function nestedQuestionFragments(
@@ -3884,55 +3988,6 @@ function readDraft(noteId: string, anchorId: string, parentLinkId?: string, draf
     }
 }
 
-function splitPlanLines(value: string): string[] {
-    return value.split(/\r?\n/gu).map(line => line.trim()).filter(Boolean).slice(0, 12);
-}
-
-function createEditableReadWeaveAnswerPlan(question: string, _contentType: ReadWeaveContentType): ReadWeaveAnswerPlan {
-    const normalized = normalizeReadWeaveQuestionDraft(question);
-    const isDefinition = /(?:是什么|什么是|定义|什么意思|含义)/u.test(normalized);
-    const steps = isDefinition
-        ? [ "先给出对象身份和一句话定义", "说明它主要处理什么", "说明它通过什么方式运作", "说明它最终解决什么问题", "补充最容易误解的边界" ]
-        : [ "先直接回答问题", "补足理解答案所必需的背景", "解释原因、机制或步骤", "说明适用范围和限制" ];
-    return {
-        version: 1,
-        reviewStatus: "draft",
-        answerType: isDefinition ? "definition" : "general",
-        normalizedQuestion: normalized,
-        objective: `直接、完整地回答“${normalized}”`,
-        answerRequirements: [ "回答问题中的核心对象或动作", "不得遗漏用户明确要求的限定条件" ],
-        exclusions: [ "不添加问题没有要求的旁支背景", "不把文章选区或常识猜测伪装成外部事实" ],
-        searchQueries: [],
-        steps,
-        summary: steps.join(" → "),
-        autoApplied: false,
-        provenance: [
-            { kind: "local", note: "根据问题措辞生成的可编辑流程" },
-            { kind: "common-sense", note: "允许模型在证据不足的非关键处补齐常识，但必须保持来源层级可追溯" }
-        ]
-    };
-}
-
-function normalizeEditableReadWeaveAnswerPlan(plan: ReadWeaveAnswerPlan, approve: boolean): ReadWeaveAnswerPlan | undefined {
-    const objective = plan.objective?.trim() ?? "";
-    const steps = plan.steps.map(step => step.trim()).filter(Boolean).slice(0, 12);
-    const answerRequirements = (plan.answerRequirements ?? []).map(item => item.trim()).filter(Boolean).slice(0, 12);
-    const exclusions = (plan.exclusions ?? []).map(item => item.trim()).filter(Boolean).slice(0, 12);
-    if (!objective || steps.length === 0 || answerRequirements.length === 0) return undefined;
-    return {
-        ...plan,
-        version: 1,
-        reviewStatus: approve ? "approved" : "draft",
-        normalizedQuestion: plan.normalizedQuestion?.trim() || undefined,
-        objective,
-        steps,
-        answerRequirements,
-        exclusions,
-        searchQueries: (plan.searchQueries ?? []).map(item => item.trim()).filter(Boolean).slice(0, 3),
-        summary: steps.join(" → "),
-        autoApplied: approve
-    };
-}
 
 async function loadReadWeaveEntries(noteId: string, anchorId: string): Promise<ReadWeaveResolvedEntry[]> {
     const response = await server.get<{ entries: ReadWeaveResolvedEntry[] }>(`readweave/articles/${encodeURIComponent(noteId)}/anchors/${encodeURIComponent(anchorId)}`);

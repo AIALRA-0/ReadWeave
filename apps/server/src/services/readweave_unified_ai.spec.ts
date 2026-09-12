@@ -943,6 +943,36 @@ describe.skip("ReadWeave retired multi-stage workflow", () => {
 });
 
 describe("ReadWeave one-pass workflow", () => {
+    it.each(["解析布局", "内核"])("passes full article scope for %s through planning, searching and writing", async selectedText => {
+        const article = "本文研究芯片物理布局，解析布局把单元位置建模为连续优化变量。内核用于计算线长和密度梯度。";
+        const tail = "文末补充：约束包括单元无重叠与芯片边界";
+        const prompts: string[] = [];
+        vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+            const prompt = requestPrompt(JSON.parse(String(init?.body)));
+            prompts.push(prompt);
+            return Response.json({ model:"deepseek-v4-flash", choices:[{ message:{content:JSON.stringify(
+                prompt.includes("统一问题分析器") ? {
+                    normalizedQuestion:`${selectedText}是什么？`, objective:"解释芯片物理布局中的当前概念",
+                    answerRequirements:["说明连续优化与线长密度计算的关系"],exclusions:["不解释页面排版或操作系统"],
+                    searchQueries:[`${selectedText} chip placement wirelength density`],requiresCurrentEvidence:true
+                } : { body:"它用于计算芯片单元布局的线长与密度梯度，从而求解连续优化问题", claims:[],unresolvedClaims:[] }
+            )}}], usage:{prompt_tokens:200,completion_tokens:100,total_tokens:300} });
+        }));
+        const result = await generateUnifiedReadWeaveAnswer({ ...request(`${selectedText}是什么？`),
+            fragments:[{id:"selected",role:"selected",text:selectedText},
+                {id:"current-block",role:"section",text:article},
+                {id:"document",role:"document",text:`${article}\n${"其他章节\n".repeat(500)}${tail}`}]
+        });
+        expect(prompts).toHaveLength(2);
+        for (const prompt of prompts) {
+            expect(prompt).toContain(article);
+            expect(prompt).toContain(tail);
+        }
+        expect(searchMock.mock.calls[0][0].query).toContain("chip placement");
+        expect(result.usage?.modelCalls).toBe(2);
+        expect(result.audit?.questionContract.objective).toContain("芯片物理布局");
+        expect(result.context.fragmentIds).toContain("document");
+    });
     it.each([ "problem", "definition", "annotation", "key-point" ] as const)(
         "sends the v2 contract through %s with one writer", async contentType => {
             const plainBody = "仅保留 6 天记录，断网时不上传";
@@ -1041,7 +1071,8 @@ describe("ReadWeave one-pass workflow", () => {
             event=>progress.push(event));
         expect(fetch).toHaveBeenCalledTimes(1);
         expect(result.body).toBeTruthy();
-        expect(result.usage).toMatchObject({ modelCalls:1,withinBudget:true,budgetCny:.05 });
+        expect(result.usage).toMatchObject({ modelCalls:1,withinBudget:true,budgetCny:.10 });
+        expect(result.usage?.costCny).toBeLessThanOrEqual(.05);
         expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body)).max_output_tokens).toBe(1600);
         expect(progress.filter(event=>event.usage)[0]?.usage).toMatchObject({ modelCalls:0,costCny:.0072 });
     });
@@ -1057,8 +1088,9 @@ describe("ReadWeave one-pass workflow", () => {
             fragments:[ { id:"selected",role:"selected",text:"XPT" } ] });
         const payload = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body)) as Record<string, unknown>;
         expect(requestUser(payload)).toContain(quote.trim());
-        expect(requestUser(payload)).not.toContain("[S8]");
-        expect(result.usage).toMatchObject({ modelCalls:1,withinBudget:true,budgetCny:.05 });
+        expect(requestUser(payload)).toContain("[S8]");
+        expect(result.usage).toMatchObject({ modelCalls:1,withinBudget:true,budgetCny:.10 });
+        expect(result.usage?.costCny).toBeLessThanOrEqual(.05);
     });
     it("enforces JSON-mode instructions for the local terminology request", async () => {
         const body = "Lumen 得名于光通量单位，象征将 ABC 与其他对象连接";
@@ -1224,8 +1256,9 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.body).toContain("- 示例（Example）\n- 分组（Packet）\n- 传输（Transfer）");
         expect(result.evidenceSources?.some(source=>source.sourceId==="S1")).toBe(true);
         expect(result.audit?.research).toMatchObject({ queryCount:1,stopReason:"sufficient",missingFacts:[] });
-        expect(result.usage).toMatchObject({ modelCalls: 1, targetCny: .01,
-            budgetCny: .05, withinBudget: true });
+        expect(result.usage).toMatchObject({ modelCalls: 1, targetCny: .05,
+            budgetCny: .10, withinBudget: true });
+        expect(result.usage?.costCny).toBeLessThanOrEqual(.01);
         expect(searchMock).toHaveBeenCalledTimes(1);
         expect(result.qualityState).toBe("provisional");
         expect(result.audit?.unresolvedIssues?.some(issue=>issue.includes("比较回答"))).toBe(false);

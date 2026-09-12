@@ -8,14 +8,136 @@ import {
     formatReadWeaveDefinitionBlock,
     formatReadWeaveFullNameOpening,
     formatReadWeaveMarkdown,
+    formatReadWeaveNameParentheses,
     formatReadWeavePersonNameOrder,
     formatReadWeaveTermReferences,
     readWeaveFormatIssues,
+    readWeaveNameReviewTargets,
     repairReadWeaveConventionalTerms,
     repairReadWeaveFormat,
     repairReadWeaveOptionalQualifiers } from "./readweave_format.js";
+import { HUMAN_READABLE_CHINESE_STYLE_CONTRACT } from "./readweave_style_contract.js";
 
 describe("versioned formatting contract", () => {
+    it("moves a supplied non-acronym alias out of the English name in both fields", () => {
+        const label = "布局消解（Layout Resolution，也称 布局解析）";
+        const question = `${label}是什么？`;
+        const definition = `- ${label}：用于分析布局；仅在 2 个条件下适用；不能改变顺序`;
+        const expectedQuestion = "布局消解（Layout Resolution）（也称 布局解析）是什么？";
+        const expectedDefinition = "- 布局消解（Layout Resolution）：也称 布局解析；用于分析布局；仅在 2 个条件下适用；不能改变顺序";
+        expect(readWeaveFormatIssues(question)).toContain(
+            "FMT-045/051：中文别名或说明不能混入英文名称括号，名称含义须结合文章核对"
+        );
+        expect(formatReadWeaveNameParentheses(question)).toBe(expectedQuestion);
+        expect(formatReadWeaveMarkdown(definition)).toBe(expectedDefinition);
+        expect(formatReadWeaveMarkdown(expectedDefinition)).toBe(expectedDefinition);
+        expect(formatReadWeaveNameParentheses(expectedQuestion)).toBe(expectedQuestion);
+        expect(readWeaveFormatIssues(expectedDefinition)).toEqual([]);
+        const target = readWeaveNameReviewTargets(question, "question")[0];
+        expect(target).toMatchObject({ field: "question", englishName: "Layout Resolution",
+            semanticStatus: "requires-article-context", diagnostics: [ "mixed-bilingual-name-parentheses" ] });
+        expect(question.slice(target.start, target.end)).toBe(target.original);
+        expect(question.slice(0, target.start) + target.replacement + question.slice(target.end)).toBe(expectedQuestion);
+    });
+    it.each([
+        [ "解析布局（analytical placement，也称 analytic placement）", "解析布局（analytical placement）（也称 analytic placement）" ],
+        [ "颜色归一化(Color Normalization, 又称色彩标准化)", "颜色归一化(Color Normalization)（又称色彩标准化）" ],
+        [ "图形处理器（Graphics Processing Unit；简称图形核心）", "图形处理器（Graphics Processing Unit）（简称图形核心）" ],
+        [ "缓存（Cache，也称暂存区、缓冲区）", "缓存（Cache）（也称暂存区、缓冲区）" ],
+        [ "缓存（Cache，又称暂存区）:保存数据", "缓存（Cache）:又称暂存区；保存数据" ]
+    ])("repairs supplied aliases with either parenthesis and separator style: %s", (source, expected) => {
+        expect(formatReadWeaveNameParentheses(source)).toBe(expected);
+        expect(formatReadWeaveNameParentheses(expected)).toBe(expected);
+    });
+    it("reports ambiguous mixed names without inventing alias relationships", () => {
+        for (const source of [ "布局消解（Layout Resolution，布局解析）", "布局消解（Layout 布局 Resolution）",
+            "布局消解（Layout Resolution，并非布局解析）", "布局消解（Layout Resolution，也称布局解析但不等同布局分析）" ]) {
+            const target = readWeaveNameReviewTargets(source)[0];
+            expect(target.diagnostics).toEqual([ "mixed-bilingual-name-parentheses" ]);
+            // Only explicit name lists, not arbitrary explanatory clauses, are movable.
+            expect(target.replacement).toBeUndefined();
+            expect(formatReadWeaveNameParentheses(source)).toBe(source);
+        }
+    });
+    it("exposes syntactically valid non-acronym names for article review without catalog replacement", () => {
+        const source = "- 布局消解（Layout Resolution）：处理布局";
+        const target = readWeaveNameReviewTargets(source, "definition")[0];
+        expect(target).toMatchObject({ field: "definition", englishName: "Layout Resolution",
+            semanticStatus: "requires-article-context", diagnostics: [] });
+        expect(target.replacement).toBeUndefined();
+        expect(formatReadWeaveMarkdown(source)).toBe(source);
+        expect(readWeaveFormatIssues(source)).toEqual([]);
+    });
+    it("keeps distinct offsets for repeated names after protected copies", () => {
+        const label = "布局消解（Layout Resolution，也称布局解析）";
+        const source = `\`${label}\`\n\n${label}是什么？\n\n- ${label}：用于布局`;
+        const targets = readWeaveNameReviewTargets(source);
+        expect(targets).toHaveLength(2);
+        expect(targets[0].start).toBeGreaterThan(label.length);
+        expect(targets[1].start).toBeGreaterThan(targets[0].end);
+        for (const target of targets) expect(source.slice(target.start, target.end)).toBe(target.original);
+        const formatted = formatReadWeaveMarkdown(source);
+        expect(formatted).toContain(`\`${label}\``);
+        expect(readWeaveNameReviewTargets(formatted).every(target => !target.diagnostics.length)).toBe(true);
+    });
+    it("repairs definitions beside nested code while preserving the code and quote bytes", () => {
+        const label = "布局消解（Layout Resolution，也称布局解析）";
+        const code = `  ~~~ts\n  const label = "${label}";\n  ~~~`;
+        const quote = `  > ${label}。`;
+        const source = `- ${label}：定义\n\n${code}\n\n${quote}\n\n- ${label}：另一个定义`;
+        const targets = readWeaveNameReviewTargets(source);
+        expect(targets).toHaveLength(2);
+        const formatted = formatReadWeaveMarkdown(source);
+        expect(formatted).toContain(code);
+        expect(formatted).toContain(quote);
+        expect(formatted).toContain("- 布局消解（Layout Resolution）：也称布局解析；定义");
+        expect(formatted).toContain("- 布局消解（Layout Resolution）：也称布局解析；另一个定义");
+        expect(formatReadWeaveMarkdown(formatted)).toBe(formatted);
+    });
+    const hybrid = "布局消解（Layout Resolution，也称 布局解析）";
+    it.each([
+        `\`${hybrid}\``, `\`\`const label = \`${hybrid}\`;\`\``,
+        `\`\`\`ts\nconst label = "${hybrid}";\n\`\`\``,
+        `- 示例\n\n  \`\`\`ts\n  const label = "${hybrid}";\n  \`\`\``,
+        `- 示例\n\n  ~~~ts\n  const label = "${hybrid}";\n  ~~~`,
+        `- 示例\n\n  > ${hybrid}。`,
+        `$\\text{${hybrid}}$`, `$$\n\\text{${hybrid}}\n\n+ x\n$$`,
+        `\\(\\text{${hybrid}}\\)`, `\\[\\text{${hybrid}}\\]`,
+        `“${hybrid}”`, `"${hybrid}"`, `'${hybrid}'`, `「${hybrid}」`,
+        `“第一段\n\n${hybrid}”`, `> ${hybrid}。`,
+        `[${hybrid}](https://example.org/name)`, `https://example.org/${hybrid}`,
+        `| 名称 |\n| --- |\n| ${hybrid} |`
+    ])("protects opaque hybrid names from detection and repair: %s", source => {
+        expect(readWeaveNameReviewTargets(source)).toEqual([]);
+        expect(formatReadWeaveNameParentheses(source)).toBe(source);
+        expect(formatReadWeaveMarkdown(source)).toBe(source);
+        expect(readWeaveFormatIssues(source)).toEqual([]);
+    });
+    it("passes the actual question and optional article context separately from answer text", async () => {
+        const question = "这里的 IP 是什么？";
+        const articleContext = "本段讨论片上集成的可复用知识产权模块";
+        const resolver = vi.fn(async (_targets, context) => {
+            expect(context).toEqual({ question, articleContext });
+            return [ { token: "IP", chineseName: "知识产权", englishName: "Intellectual Property",
+                confidence: "high", basis: "established-usage", contextReason: "文章讨论芯片模块" } ];
+        });
+        const result = await repairReadWeaveConventionalTerms("IP 用于网络传输", question, resolver,
+            undefined, articleContext);
+        expect(resolver).toHaveBeenCalledTimes(1);
+        expect(result.body).toContain("IP 知识产权（Intellectual Property）");
+        const legacy = vi.fn(async () => []);
+        await repairReadWeaveConventionalTerms("IP 用于网络传输", question, legacy);
+        expect(legacy.mock.calls[0]).toEqual([
+            [ { token: "IP", before: "", after: " 用于网络传输" } ], { question }
+        ]);
+    });
+    it("grounds meanings in the article while limiting explicit article framing", () => {
+        const contract = HUMAN_READABLE_CHINESE_STYLE_CONTRACT.join("\n");
+        expect(contract).toContain("名称、缩写展开、词义、定义和解释始终以当前文章的实际用法为依据");
+        expect(contract).toContain("不超过回答正文的 10%");
+        expect(contract).toContain("除非用户明确要求");
+        expect(contract).toContain("问题与定义中的名称都须核对");
+    });
     it("keeps a continuous bilingual definition while checking ordinary parallel lists", () => {
         const definition = "- 缓存（Cache）：暂存可复用数据；用于页面、文件、查询等场景；容量有限";
         expect(readWeaveFormatIssues(definition)).not.toContain(
@@ -48,6 +170,10 @@ describe("versioned formatting contract", () => {
             .not.toContain("FMT-044：人物姓名顺序必须为中文姓名（English or Pinyin Name）");
     });
     it("closes the exact live acronym-order failures without changing compliant text", () => {
+        expect(formatReadWeaveCanonicalEntities("合法化（legalization，LG）：消除重叠"))
+            .toBe("LG 合法化（legalization）：消除重叠");
+        expect(formatReadWeaveCanonicalEntities("加权平均线长（weighted-average wirelength，WA）用于求梯度"))
+            .toBe("WA 加权平均线长（weighted-average wirelength）用于求梯度");
         expect(formatReadWeaveCanonicalEntities(
             "Nesterov 加速梯度（Nesterov Accelerated Gradient，NAG）用于优化"
         )).toBe("NAG Nesterov 加速梯度（Nesterov Accelerated Gradient）用于优化");
@@ -65,6 +191,21 @@ describe("versioned formatting contract", () => {
         expect(readWeaveFormatIssues(compliant)).not.toContain(
             "FMT-052：缩写必须置于中文全称和英文全称之前"
         );
+    });
+    it("does not resolve a slash-separated language name and introduced initialism as one abbreviation", async () => {
+        const resolve = vi.fn();
+        const body = "CUDA 统一计算设备架构（Compute Unified Device Architecture）用于计算；用 C++/CUDA 编写";
+        const result = await repairReadWeaveConventionalTerms(body, "内核是什么？", resolve);
+        expect(resolve).not.toHaveBeenCalled();
+        expect(result.body).toBe(body);
+    });
+    it("annotates a slash-bearing initialism without treating its slash as part of the initials", async () => {
+        const result = await repairReadWeaveConventionalTerms("提供 I/O 功能", "内核是什么？", async () => [{
+            token:"I/O", chineseName:"输入输出", englishName:"Input/Output", confidence:"high",
+            basis:"established-usage", contextReason:"操作系统处理数据输入和输出"
+        }]);
+        expect(result.body).toBe("提供 I/O 输入输出（Input/Output）功能");
+        expect(result.warnings).toEqual([]);
     });
     it("removes surname commentary while putting a person's Chinese name first", () => {
         expect(formatReadWeavePersonNameOrder(

@@ -13,22 +13,8 @@ import {
 } from "./readweave_evidence_quality.js";
 import { readReadWeavePageWithJina, searchReadWeaveEvidence } from "./readweave_search.js";
 
-export function readWeaveEvidenceWindow(text: string, question: string, limit = 1800): string {
-    text = normalizeReadWeaveEvidenceText(text);
-    if (text.length <= limit) return text;
-    const terms = question.match(/[A-Za-z][A-Za-z0-9-]{2,}|[\p{Script=Han}]{2,6}/gu) ?? [];
-    const cues = readWeaveNamingRequirements(question, false).includes("origin")
-        ? READWEAVE_ORIGIN_ASSERTION
-        : /stands for|abbreviation|acronym|全称/iu;
-    const position = text.search(cues);
-    const firstTerm =
-        terms
-            .map((term) => text.toLowerCase().indexOf(term.toLowerCase()))
-            .find((index) => index >= 0) ?? 0;
-    // A naming decision may refer back to the inspiration in the preceding
-    // sentence. Keep that provenance, while preserving the same output cap.
-    const start = Math.max(0, (position >= 0 ? position : firstTerm) - 800);
-    return text.slice(start, start + limit);
+export function readWeaveEvidenceWindow(text: string, _question: string, _limit = 1800): string {
+    return normalizeReadWeaveEvidenceText(text);
 }
 
 /** A subject-owned-looking domain is a reading priority, not proof of ownership
@@ -236,7 +222,7 @@ export async function researchReadWeaveEvidence(
             result = await searchReadWeaveEvidence(
                 {
                     query,
-                    context: context.slice(0, 800),
+                    context,
                     force: true,
                     forcePaidFallback: true,
                     allowPaid: allowance >= 0.0072,
@@ -356,7 +342,7 @@ export async function researchReadWeaveEvidence(
             break;
         }
         if (namingRequired && index === targeted.length - 1) {
-            for (const source of sources.slice(0, 6)) {
+            for (const source of sources) {
                 if (!source.url) continue;
                 queries.push(
                     `site:${new URL(source.url).hostname} "${subject}" ${requirements.includes("origin") ? "name origin" : "full name"}`,
@@ -379,8 +365,7 @@ export async function researchReadWeaveEvidence(
                 Number(/stands for|named after|得名|全称/iu.test(b.excerpt)) -
                     Number(/stands for|named after|得名|全称/iu.test(a.excerpt)) ||
                 (b.rerankScore ?? 0) - (a.rerankScore ?? 0),
-        )
-        .slice(0, 8);
+        );
     return {
         sources: selected,
         queries: audit.queries,

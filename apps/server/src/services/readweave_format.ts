@@ -1,6 +1,6 @@
 import { Lexer } from "marked";
 
-export const READWEAVE_FORMAT_VERSION = "format-2026-09-v3";
+export const READWEAVE_FORMAT_VERSION = "format-2026-09-v4";
 
 function normalizeSimpleMathNotation(value: string): string {
     const scientific = new RegExp(
@@ -40,43 +40,143 @@ function normalizeSimpleMathNotation(value: string): string {
 // These are opaque data, not Chinese prose. Block code, tables and quotations
 // are handled by the Markdown lexer; this pattern protects inline data.
 const INLINE_DATA = new RegExp([
-    "(`+[^`\\n]*`+|",
+    "((?<!`)(?<ticks>`+)(?!`)[\\s\\S]*?(?<!`)\\k<ticks>(?!`)|",
     String.raw`\$\$[\s\S]*?\$\$|\$(?!\$)[^$\n]+?\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]|`,
     String.raw`!?\[[^\]\n]*\]\([^\n]*?\)|https?:\/\/[^\s<>，；。]+|`,
-    String.raw`(?:[A-Za-z]:[\\/]|(?:\.{0,2})\/)[^\s，；。]+|[“「『][^”」』\n]*[”」』])`
+    String.raw`(?:[A-Za-z]:[\\/]|(?<![\p{L}\p{N}+])(?:\.{0,2})\/)[^\s，；。]+|[“「『][^”」』]*[”」』]|`,
+    String.raw`"(?:\\.|[^"\\])*"|(?<![\p{L}\p{N}])'(?:\\.|[^'\\])*'(?![\p{L}\p{N}]))`
 ].join(""), "gu");
 
 export function mapReadWeaveProse(body: string, transform: (text: string) => string): string {
-    return Lexer.lex(body)
-        .map((token) => {
-            if ([ "code", "table", "blockquote", "html" ].includes(token.type)) return token.raw;
-            return token.raw
-                .split(INLINE_DATA)
-                .map((part, index) => (index % 2 ? part : transform(part)))
-                .join("");
-        })
-        .join("");
+    let cursor = 0;
+    let result = "";
+    for (const range of readWeaveProseRanges(body)) {
+        result += body.slice(cursor, range.start) + transform(body.slice(range.start, range.end));
+        cursor = range.end;
+    }
+    return result + body.slice(cursor);
 }
 
 function readWeaveProseRanges(body: string): Array<{ start: number; end: number }> {
     const ranges: Array<{ start: number; end: number }> = [];
+    // Match across Markdown token boundaries, e.g. a display formula containing
+    // blank lines. Offsets always refer to the unchanged input, including CRLF.
+    const opaque = Array.from(body.matchAll(INLINE_DATA), match => ({
+        start: match.index, end: match.index + match[0].length
+    }));
+    const protectedTypes = [ "code", "table", "blockquote", "html", "def" ];
+    const nestedProtectedRanges = (
+        token: ReturnType<typeof Lexer.lex>[number], start: number, end: number
+    ): Array<{ start: number; end: number }> => {
+        if (protectedTypes.includes(token.type)) return [ { start, end } ];
+        if (token.type !== "list") return [];
+        const protectedRanges: Array<{ start: number; end: number }> = [];
+        let childCursor = start;
+        for (const item of token.items) for (const child of item.tokens) {
+            // List continuation indentation is removed from child.raw by the
+            // lexer. Match the exact lines in order while tolerating that indent.
+            const pattern = child.raw.split("\n")
+                .map((line: string) => line.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"))
+                .join("\\r?\\n[ \\t]*");
+            const match = body.slice(childCursor, end).match(new RegExp(pattern, "u"));
+            if (!match) return [ { start, end } ]; // Never guess an opaque span.
+            const childStart = childCursor + match.index!;
+            childCursor = childStart + match[0].length;
+            protectedRanges.push(...nestedProtectedRanges(child, childStart, childCursor));
+        }
+        return protectedRanges;
+    };
     let cursor = 0;
     for (const token of Lexer.lex(body)) {
         const tokenStart = body.indexOf(token.raw, cursor);
         if (tokenStart < 0) continue;
         cursor = tokenStart + token.raw.length;
-        if ([ "code", "table", "blockquote", "html" ].includes(token.type)) continue;
-        let partCursor = 0;
-        for (const [ index, part ] of token.raw.split(INLINE_DATA).entries()) {
-            const partStart = token.raw.indexOf(part, partCursor);
-            if (partStart < 0) continue;
-            partCursor = partStart + part.length;
-            if (index % 2 === 0 && part) {
-                ranges.push({ start: tokenStart + partStart, end: tokenStart + partStart + part.length });
-            }
+        const dataRanges = [ ...opaque, ...nestedProtectedRanges(token, tokenStart, cursor) ]
+            .sort((a, b) => a.start - b.start);
+        let start = tokenStart;
+        for (const data of dataRanges) {
+            if (data.end <= start) continue;
+            if (data.start >= cursor) break;
+            if (data.start > start) ranges.push({ start, end: data.start });
+            start = Math.min(cursor, data.end);
         }
+        if (start < cursor) ranges.push({ start, end: cursor });
     }
     return ranges;
+}
+
+export interface ReadWeaveNameReviewTarget {
+    field: "question" | "definition";
+    /** UTF-16 offsets and exact source text; recompute after any repair. */
+    start: number;
+    end: number;
+    original: string;
+    englishName: string;
+    before: string;
+    after: string;
+    /** This is a review target, never a claim that the English name is wrong. */
+    semanticStatus: "requires-article-context";
+    diagnostics: Array<"mixed-bilingual-name-parentheses">;
+    /** Present only for an explicit alias that can be moved without inference. */
+    replacement?: string;
+}
+
+const ENGLISH_NAME = /^[A-Za-z][A-Za-z0-9'’ .&+/#_-]*$/u;
+const CHINESE_ALIAS = /^(?:(?:也称|又称|亦称|别称|简称|中文名为|中文称为|中文名|中文称|也叫|又叫)[ \t]*[\p{Script=Han}][\p{Script=Han}· \t]*)(?:[，,、][ \t]*(?:(?:也称|又称|亦称|简称|也叫|又叫)[ \t]*)?[\p{Script=Han}][\p{Script=Han}· \t]*)*$/u;
+const ENGLISH_ALIAS = /^(?:也称|又称|亦称|别称|简称|也叫|又叫)[ \t]+[A-Za-z][A-Za-z'’ .&+/#_-]*$/u;
+
+/** Collect ordinary bilingual names, including non-acronyms. Correct-looking
+ * English names still need article context; no catalog can prove their meaning.
+ * Run this for both fields and send the targets plus article context to the
+ * contextual resolver. Returned offsets refer to the supplied field only. */
+export function readWeaveNameReviewTargets(
+    body: string, field: ReadWeaveNameReviewTarget["field"] = "definition"
+): ReadWeaveNameReviewTarget[] {
+    const targets: ReadWeaveNameReviewTarget[] = [];
+    for (const range of readWeaveProseRanges(body)) {
+        const prose = body.slice(range.start, range.end);
+        for (const match of prose.matchAll(/(?<=\p{Script=Han})[ \t]*([（(])([^（）()\n]+)([）)])/gu)) {
+            if ((match[1] === "（") !== (match[3] === "）")) continue;
+            const content = match[2].trim();
+            const mixed = /\p{Script=Han}/u.test(content) && /[A-Za-z]/u.test(content);
+            if (!mixed && !ENGLISH_NAME.test(content)) continue;
+            const alias = content.match(/^(.+?)[，,；;][ \t]*(.+)$/u);
+            const movable = alias && ENGLISH_NAME.test(alias[1].trim()) && (CHINESE_ALIAS.test(alias[2]) || ENGLISH_ALIAS.test(alias[2]))
+                && !/(?:但|并非|不等同|不是|用于|因为|如果)/u.test(alias[2]);
+            const start = range.start + match.index;
+            let end = start + match[0].length;
+            let replacement: string | undefined;
+            if (movable) {
+                const name = `${match[1]}${alias[1].trim()}${match[3]}`;
+                // Keep a definition's colon immediately after its bilingual name.
+                // Else use a separate alias aside so question grammar is retained.
+                const colon = body.slice(end, range.end).match(/^[ \t]*([：:])/u);
+                replacement = colon
+                    ? `${name}${colon[1]}${alias[2].trim()}；`
+                    : `${name}（${alias[2].trim()}）`;
+                if (colon) end += colon[0].length;
+            }
+            targets.push({
+                field, start, end, original: body.slice(start, end),
+                englishName: alias && ENGLISH_NAME.test(alias[1].trim()) ? alias[1].trim() : content,
+                before: body.slice(Math.max(0, start - 150), start),
+                after: body.slice(end, end + 150),
+                semanticStatus: "requires-article-context",
+                diagnostics: mixed ? [ "mixed-bilingual-name-parentheses" ] : [],
+                ...(replacement === undefined ? {} : { replacement })
+            });
+        }
+    }
+    return targets;
+}
+
+/** Reposition only supplied aliases; never correct or invent an English name. */
+export function formatReadWeaveNameParentheses(body: string): string {
+    for (const target of readWeaveNameReviewTargets(body).reverse()) {
+        if (target.replacement === undefined) continue;
+        body = body.slice(0, target.start) + target.replacement + body.slice(target.end);
+    }
+    return body;
 }
 
 const LATIN_PERSON_NAME = /^(?:[A-Z](?:\.|[A-Za-z'’.-]+))(?:\s+(?:(?:van|von|de|da|del|di|la|le|du|der|den|ten|ter)\s+)?[A-Z](?:\.|[A-Za-z'’.-]+)){1,5}$/u;
@@ -110,15 +210,9 @@ export function formatReadWeavePersonNameOrder(body: string, subject: string): s
 
 const TRAILING_ACRONYM_NAME = new RegExp(
     String.raw`((?:[A-Z][A-Za-z'’.-]*[ \t]+){0,4}[\p{Script=Han}]{2,30})[ \t]*[（(]`
-    + String.raw`([A-Za-z][A-Za-z'’.-]*(?:[ \t-]+[A-Za-z][A-Za-z'’.-]*){1,12})`
+    + String.raw`([A-Za-z][A-Za-z'’.-]*(?:[ \t-]+[A-Za-z][A-Za-z'’.-]*){0,12})`
     + String.raw`[ \t]*[，,][ \t]*([A-Z][A-Z0-9+/#_-]{1,15})[）)]`, "gu"
 );
-
-function englishInitials(value: string): string {
-    return value.split(/[ -]/u)
-        .filter(word => word && !/^(?:of|the|and|for)$/iu.test(word))
-        .map(word => word[0]).join("").toUpperCase();
-}
 
 /** Reorder names whose complete fields are already present. No model knowledge
  * or lexical content is introduced by this operation. */
@@ -126,7 +220,9 @@ export function formatReadWeaveCanonicalEntities(body: string): string {
     return mapReadWeaveProse(body, text => text.replace(
         TRAILING_ACRONYM_NAME,
         (original, rawLabel: string, englishName: string, abbreviation: string) => {
-            if (englishInitials(englishName) !== abbreviation) return original;
+            // All three fields are already explicitly paired by the author.
+            // Moving the short label does not assert a new expansion. Valid
+            // short forms such as LG (legalization) are not always initialisms.
             const sentence = /^[A-Z]/u.test(rawLabel) ? undefined : rawLabel.match(
                 /^(.*?(?:属于|涉及|采用|使用|通过|基于|面向|以及|和|与|是|为))([\p{Script=Han}]{2,30})$/u
             );
@@ -239,7 +335,7 @@ export function formatReadWeaveMarkdown(value: unknown): string {
         String.raw`^([ \t]*(?:[-*+] )?)([A-Za-z][A-Za-z -]{0,99})[（(]`
         + String.raw`([\p{Script=Han}][\p{Script=Han} ]{0,49})[)）][：:]`, "gmu"
     );
-    return formatReadWeaveCodeCopies(groupBilingualDefinitions(mapReadWeaveProse(value, (text) =>
+    return formatReadWeaveCodeCopies(groupBilingualDefinitions(mapReadWeaveProse(formatReadWeaveNameParentheses(value), (text) =>
         normalizeSimpleMathNotation(text)
             .replace(fullName, "$1 $3（$2）")
             .replace(englishFirst, "$1$3（$2）：")
@@ -399,6 +495,8 @@ export function applyReadWeaveFormatPatches(body: string, patches: ReadWeaveText
 
 export function readWeaveFormatIssues(body: string): string[] {
     const issues = new Set<string>();
+    if (readWeaveNameReviewTargets(body).some(target => target.diagnostics.length))
+        issues.add("FMT-045/051：中文别名或说明不能混入英文名称括号，名称含义须结合文章核对");
     if (formatReadWeaveCanonicalEntities(body) !== body)
         issues.add("FMT-052：缩写必须置于中文全称和英文全称之前");
     if (/^ {0,3}(?:#{1,2}|#{4,6})[ \t]+\S/gmu.test(body))
@@ -488,22 +586,35 @@ export async function repairReadWeaveOptionalQualifiers(
     }
 }
 
+export interface ReadWeaveTermRepairContext {
+    question: string;
+    articleContext?: string;
+}
+
 /** Annotate an incidental conventional initialism, never invent a project's
- * etymology or rewrite a sentence. Model knowledge is not a source quotation. */
+ * etymology or rewrite a sentence. Pass articleContext through the resolver's
+ * second argument into its prompt; answer-local text is not source evidence. */
 export async function repairReadWeaveConventionalTerms(
     original: string, question: string,
-    resolve: (targets: Array<{ token:string;before:string;after:string }>) => Promise<unknown>,
-    signal?: AbortSignal
+    resolve: (
+        targets: Array<{ token:string;before:string;after:string }>,
+        context: ReadWeaveTermRepairContext
+    ) => Promise<unknown>,
+    signal?: AbortSignal,
+    articleContext?: string
 ) {
     original = formatReadWeaveCanonicalEntities(original);
     const occurrences = readWeaveProseRanges(original).flatMap(range => Array.from(
         original.slice(range.start, range.end)
-            .matchAll(/(?<![\p{Script=Latin}\p{N}_.])(?:[A-Z][A-Z0-9+/#_-]{1,15}(?:\.[A-Za-z0-9]+)?|dB|SoC|NoC|IPv[46])(?![\p{Script=Latin}\p{N}_])/gu),
+            .matchAll(/(?<![\p{Script=Latin}\p{N}_.])(?:I\/O|[A-Z][A-Z0-9+#_-]{1,15}(?:\.[A-Za-z0-9]+)?|dB|SoC|NoC|IPv[46])(?![\p{Script=Latin}\p{N}_])/gu),
         match => ({ token: match[0], start: range.start + (match.index ?? 0), rangeStart: range.start })
     ));
     const firstByToken = new Map<string, { token:string;start:number;before:string;after:string }>();
+    const introduced = new Set<string>();
     for (const occurrence of occurrences) {
-        if (firstByToken.has(occurrence.token)) continue;
+        // Programming-language names are literal names, not initialisms.
+        if (occurrence.token === "C++" || occurrence.token === "C#") continue;
+        if (introduced.has(occurrence.token) || firstByToken.has(occurrence.token)) continue;
         const before = original.slice(Math.max(0, occurrence.start - 150), occurrence.start);
         const after = original.slice(occurrence.start + occurrence.token.length, occurrence.start + occurrence.token.length + 150);
         if (before.lastIndexOf("《") > before.lastIndexOf("》")) continue;
@@ -515,7 +626,10 @@ export async function repairReadWeaveConventionalTerms(
         const canonical = new RegExp(
             `^\\s+[\\p{Script=Han}][^（）()\\n]{1,120}（[^（）\\n]{1,220}[A-Za-z][^（）\\n]*）`, "u"
         );
-        if (canonical.test(after)) continue;
+        if (canonical.test(after)) {
+            introduced.add(occurrence.token);
+            continue;
+        }
         firstByToken.set(occurrence.token, { ...occurrence, before, after });
     }
     const targets = [ ...firstByToken.values() ];
@@ -523,7 +637,9 @@ export async function repairReadWeaveConventionalTerms(
         body:original,rounds:0,knowledgeTerms:[] as string[],warnings:[] as string[]
     };
     signal?.throwIfAborted();
-    const result = await resolve(targets.map(({ token,before,after })=>({ token,before,after })));
+    const result = await resolve(targets.map(({ token,before,after })=>({ token,before,after })), {
+        question, ...(articleContext === undefined ? {} : { articleContext })
+    });
     signal?.throwIfAborted();
     let body = original;
     const knowledgeTerms: string[] = [];
@@ -545,14 +661,14 @@ export async function repairReadWeaveConventionalTerms(
             || typeof term.chineseName !== "string"
             || !/^[\p{Script=Han}]{2,24}$/u.test(term.chineseName)
             || typeof term.englishName !== "string"
-            || !/^[A-Za-z]+(?:[ -][A-Za-z]+){1,7}$/u.test(term.englishName)) {
+            || !/^[A-Za-z]+(?:[ /-][A-Za-z]+){1,7}$/u.test(term.englishName)) {
             warnings.push(`${target.token}：局部术语置信度、用法说明或名称格式不符合约定，未应用`);
             continue;
         }
-        const initials = term.englishName.split(/[ -]/u)
+        const initials = term.englishName.split(/[ /-]/u)
             .filter((word:string)=>!/^(?:of|the|and|for)$/iu.test(word))
             .map((word:string)=>word[0]).join("").toUpperCase();
-        if (initials !== target.token) {
+        if (initials !== target.token.replaceAll("/", "")) {
             warnings.push(`${target.token}：英文名称首字母与缩写不匹配，未应用`);
             continue;
         }

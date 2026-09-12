@@ -227,6 +227,45 @@ async function ensureGeneratedItemSaved(panel: Locator) {
     if (await manualSave.count() > 0) await expect(manualSave).toBeDisabled();
 }
 
+test("ReadWeave passes the whole article, remembers checkboxes and generates directly from pending selection", async ({ page, context }) => {
+    test.setTimeout(120_000);
+    const app = new App(page, context);
+    const errors: string[] = [];
+    const starts: Record<string, unknown>[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    page.on("request", request => {
+        if (request.method() === "POST" && new URL(request.url()).pathname === "/api/readweave/generation-jobs") starts.push(request.postDataJSON());
+    });
+    await gotoReadWeave(app, page);
+    const source = `The kernel computes wirelength gradients for chip placement.\n\n${"Complete original article content. ".repeat(2600)}ARTICLE END: boundary constraints are essential.`;
+    const editor = await createTextNote(app, uniqueTitle("ReadWeave E2E · Complete context"), source);
+    await selectTextRange(page, editor.locator("p").first(), "kernel");
+    const panel = app.sidebar.locator("#readweave-panel");
+    await expect(panel.getByTestId("readweave-question")).toHaveValue("What is “kernel”?");
+    const quote = panel.getByTestId("readweave-quote-selected-text");
+    await expect(quote).toBeChecked();
+    await quote.uncheck();
+    await expect(panel.getByTestId("readweave-question")).toHaveValue("What is kernel?");
+    await panel.getByTestId("readweave-auto-apply-plan").uncheck();
+    await panel.getByTestId("readweave-generate").click();
+    await expect(panel.locator(".readweave-answer-plan-editor")).toBeVisible();
+    expect(starts).toHaveLength(0);
+    await panel.getByTestId("readweave-generate").click();
+    await expect(panel.getByTestId("readweave-answer")).toBeVisible({timeout:30_000});
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toMatchObject({quoteSelectedText:false,autoApplyPlan:false,answerPlan:{reviewStatus:"approved"}});
+    const fragments = starts[0].fragments as Array<{id:string;text:string}>;
+    expect(fragments.find(fragment=>fragment.id==="current-block")?.text).toContain("chip placement");
+    expect(fragments.map(fragment=>fragment.text).join("\n")).toContain("ARTICLE END: boundary constraints are essential.");
+    expect(fragments.reduce((sum,fragment)=>sum+fragment.text.length,0)).toBeGreaterThan(80_000);
+    await page.reload();
+    const restoredParagraph = app.currentNoteSplit.locator(".note-detail-readonly-text-content:visible p, .note-detail-editable-text.visible .note-detail-editable-text-editor p").first();
+    await selectReadOnlyTextRange(page, restoredParagraph, "gradients");
+    await expect(panel.getByTestId("readweave-quote-selected-text")).not.toBeChecked();
+    await expect(panel.getByTestId("readweave-auto-apply-plan")).not.toBeChecked();
+    expect(errors).toEqual([]);
+});
+
 test("ReadWeave saves selected answer parents and opens three independent follow-up windows", async ({ page, context }) => {
     test.setTimeout(120_000);
     const errors: string[] = [];
@@ -247,6 +286,7 @@ test("ReadWeave saves selected answer parents and opens three independent follow
     await expect(mainAnswer).toBeVisible();
     const mainHtml = await mainAnswer.innerHTML();
     const mainQuestion = await panel.getByRole("textbox", {name:"Question", exact:true}).inputValue();
+    await panel.getByTestId("readweave-auto-apply-plan").uncheck();
     async function selectAnswer(answer: Locator) {
         await answer.evaluate(element => {
             const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
@@ -280,6 +320,9 @@ test("ReadWeave saves selected answer parents and opens three independent follow
         const floating = page.getByRole("dialog", {name:`第 ${level} 层追问`, exact:true});
         await expect(floating).toBeVisible();
         expect(await floating.evaluate(element => !!element.closest("#readweave-panel"))).toBe(false);
+        await floating.getByRole("button", {name:"生成流程计划",exact:true}).click();
+        await expect(floating.getByTestId("readweave-follow-up-plan")).toBeVisible();
+        expect(starts).toHaveLength(level);
         await floating.getByRole("button", {name:"生成回答",exact:true}).click();
         const answer = floating.locator(
             ".readweave-follow-up-content > .readweave-answer-container > .readweave-readable-body",
@@ -301,6 +344,8 @@ test("ReadWeave saves selected answer parents and opens three independent follow
     }
     expect(starts).toHaveLength(4);
     expect(starts.slice(1).every(request => request.parentLinkId && request.answerSelection)).toBe(true);
+    expect(starts.slice(1).every(request => request.autoApplyPlan === false
+        && (request.answerPlan as { reviewStatus?: string })?.reviewStatus === "approved")).toBe(true);
     expect((starts[1].answerSelection as { text?: string }).text).toBe("$C = A B$");
     expect(await editor.innerText()).toBe(source);
     expect(errors).toEqual([]);

@@ -473,10 +473,24 @@ export function validateReadWeaveFollowUp(request: import("@triliumnext/commons"
         || body.slice(selection.startOffset, selection.endOffset) !== selection.text) {
         throw new ValidationError("父回答或选中文字已变化，请重新选择后追问");
     }
-    // Context supplied by the browser cannot impersonate the saved parent.
+    // Context supplied by the browser cannot impersonate a saved parent.
+    // Keep the entire parent chain and article, never a fixed character window.
+    const ancestors: import("@triliumnext/commons").ReadWeaveContextFragment[] = [];
+    let ancestorId = parent.parentLinkId;
+    const visited = new Set([parent.linkId]);
+    while (ancestorId && !visited.has(ancestorId)) {
+        visited.add(ancestorId);
+        const ancestor = getReadWeaveLink(ancestorId).link;
+        const ancestorObject = getReadWeaveObject(ancestor.objectId);
+        ancestors.push({ id:`ancestor-${ancestor.linkId}`, role:"previous", text:ancestor.displayBody ?? ancestorObject.body });
+        ancestorId = ancestor.parentLinkId;
+    }
+    const article = becca.getNoteOrThrow(requireReadableArticle(request.articleId));
     request.fragments = [
         { id: "answer-selection", role: "selected", text: selection.text },
-        { id: "parent-answer", role: "previous", text: body.slice(Math.max(0, selection.startOffset - 1500), selection.endOffset + 1500) }
+        { id: "parent-answer", role: "previous", text: body },
+        ...ancestors,
+        { id: "document", role: "document", text:String(article.getContent()) }
     ];
 }
 

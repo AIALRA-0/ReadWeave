@@ -14,6 +14,7 @@ describe("independent follow-up lifecycle", () => {
     beforeEach(() => {
         vi.clearAllMocks();
         sessionStorage.clear();
+        localStorage.clear();
         document.body.append(host);
         api.post.mockResolvedValue({ job: { jobId: "child", title: "问题", status: "running" } });
         api.patch.mockResolvedValue({ job: { jobId: "child", title: "问题", status: "cancelled" } });
@@ -36,6 +37,26 @@ describe("independent follow-up lifecycle", () => {
         await vi.waitFor(() => expect(api.patch).toHaveBeenCalledWith("readweave/generation-jobs/child/cancel", {}));
         await vi.waitFor(() => expect(button("中断生成")).toBeUndefined());
         expect(api.post).toHaveBeenCalledTimes(1);
+    });
+    it("reviews a complete editable plan before generating when the remembered automatic preference is off", async () => {
+        await act(() => render(<ReadWeaveFollowUpWindow parent={parent}
+            selection={{parentRevision:1,startOffset:0,endOffset:2,text:"选区"}}
+            generationPreferences={{autoApplyPlan:false,optimizeQuestion:false,quoteSelectedText:false,externalSearchDisabled:true}}
+            onClose={() => {}} onOpen={() => {}} onJob={() => {}} />, host));
+        const button = (text:string) => Array.from(document.querySelectorAll<HTMLButtonElement>(".readweave-follow-up-window button"))
+            .find(item=>item.textContent===text)!;
+        await act(() => { button("生成流程计划").click(); });
+        expect(api.post).not.toHaveBeenCalled();
+        const steps = document.querySelector<HTMLTextAreaElement>('[data-testid="readweave-follow-up-plan"] label:nth-of-type(4) textarea')!;
+        await act(() => { steps.value=""; steps.dispatchEvent(new Event("input",{bubbles:true})); });
+        await act(() => { button("生成回答").click(); });
+        expect(api.post).not.toHaveBeenCalled();
+        expect(document.querySelector('[role="alert"]')?.textContent).toContain("有效步骤");
+        const lines=Array.from({length:20},(_,i)=>`解释第 ${i+1} 项要求`);
+        await act(() => { steps.value=lines.join("\n"); steps.dispatchEvent(new Event("input",{bubbles:true})); });
+        await act(async () => { button("生成回答").click(); });
+        expect(api.post.mock.calls[0][1]).toMatchObject({autoApplyPlan:false,quoteSelectedText:false,
+            answerPlan:{reviewStatus:"approved",steps:lines}});
     });
     it("saves an unsaved parent exactly once before opening the next independent level", async () => {
         const onOpen = vi.fn();

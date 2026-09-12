@@ -98,7 +98,7 @@ describe("ReadWeave deterministic engine", () => {
         ]);
     });
 
-    it("always includes the selected paragraph and respects the budget", () => {
+    it("expands the planning budget instead of dropping article context", () => {
         const result = selectReadWeaveContext("矩阵计算是什么", [
             { id: "document", role: "document", text: "无关背景".repeat(1_000) },
             { id: "selected", role: "selected", text: "矩阵计算是本段重点。" },
@@ -106,10 +106,12 @@ describe("ReadWeave deterministic engine", () => {
         ], 800);
 
         expect(result.decision.fragmentIds).toContain("selected");
-        expect(result.decision.characterCount).toBeLessThanOrEqual(800);
+        expect(result.decision.characterCount).toBeGreaterThan(800);
+        expect(result.decision.fragmentIds).toEqual(["document", "selected", "heading"]);
+        expect(result.decision.expansionLevel).toBe(1);
     });
 
-    it("does not fill spare context budget with unrelated document paragraphs", () => {
+    it("retains every article block so semantic relevance is not guessed from title overlap", () => {
         const selectedText = "样品甲的读数高于样品乙，但记录没有说明差异原因。";
         const result = selectReadWeaveContext("两种样品的读数差异是什么，能判断原因吗", [
             { id: "selected", role: "selected", text: selectedText },
@@ -120,8 +122,9 @@ describe("ReadWeave deterministic engine", () => {
             }))
         ], 6_000);
 
-        expect(result.decision.fragmentIds).toEqual(["selected"]);
-        expect(result.decision.characterCount).toBe(selectedText.length);
+        expect(result.decision.fragmentIds).toHaveLength(41);
+        expect(result.decision.fragmentIds).toContain("noise-39");
+        expect(result.fragments[0].text).toBe(selectedText);
     });
 
     it("keeps a document paragraph when its content is relevant to the question", () => {
@@ -131,7 +134,7 @@ describe("ReadWeave deterministic engine", () => {
             { id: "unrelated", role: "document", text: "海洋环流会影响沿岸气候。" }
         ], 6_000);
 
-        expect(result.decision.fragmentIds).toEqual(["selected", "related"]);
+        expect(result.decision.fragmentIds).toEqual(["selected", "related", "unrelated"]);
     });
 
     it("ranks a term's raw subject above fragments matching only a generalized definition prompt", () => {
@@ -154,6 +157,6 @@ describe("ReadWeave deterministic engine", () => {
         ], 800, true);
 
         expect(result.decision.fragmentIds).toContain("term-relevant");
-        expect(result.decision.fragmentIds).not.toContain("generic-prompt");
+        expect(result.decision.fragmentIds).toContain("generic-prompt");
     });
 });

@@ -7,15 +7,6 @@ import type {
     ReadWeaveTermIdentity
 } from "@triliumnext/commons";
 
-const ROLE_WEIGHT: Record<ReadWeaveContextFragment["role"], number> = {
-    selected: 10_000,
-    heading: 700,
-    previous: 500,
-    next: 480,
-    section: 350,
-    document: 100
-};
-
 function tokenize(value: string): Set<string> {
     const normalized = value.normalize("NFKC").toLocaleLowerCase().replace(/\s+/g, " ").trim();
     const segments = normalized.match(/[\p{Script=Han}]+|[\p{Letter}\p{Number}]+/gu) ?? [];
@@ -233,55 +224,30 @@ function termIdentitySimilarity(
 }
 
 export function selectReadWeaveContext(
-    title: string,
+    _title: string,
     fragments: ReadWeaveContextFragment[],
     characterBudget = 6_000,
-    includeDocument = false
+    _includeDocument = false
 ): { fragments: ReadWeaveContextFragment[]; decision: ReadWeaveContextDecision } {
-    const budget = Math.min(Math.max(characterBudget, 800), 80_000);
-    const promptTokens = tokenize(title);
+    const budget = Math.max(characterBudget, 800);
     const unique = new Map<string, ReadWeaveContextFragment>();
     for (const fragment of fragments) {
-        const text = fragment.text.replace(/\s+/g, " ").trim();
+        const text = fragment.text;
         if (!text || unique.has(fragment.id)) continue;
-        unique.set(fragment.id, { ...fragment, text: text.slice(0, 80_000) });
+        unique.set(fragment.id, { ...fragment, text });
     }
 
-    const ranked = Array.from(unique.values()).map((fragment, originalIndex) => {
-        const relevance = overlapScore(promptTokens, tokenize(fragment.text));
-        return {
-            fragment,
-            originalIndex,
-            relevance,
-            score: ROLE_WEIGHT[fragment.role]
-                + relevance * 1_000
-                - Math.max(fragment.distance ?? 0, 0) * 15
-        };
-    }).filter(item => item.fragment.role !== "document" || includeDocument || item.relevance > 0)
-        .toSorted((left, right) => right.score - left.score || left.originalIndex - right.originalIndex);
-
-    const selected: typeof ranked = [];
-    let characterCount = 0;
-    for (const item of ranked) {
-        const remaining = budget - characterCount;
-        if (remaining <= 0) break;
-        if (item.fragment.text.length > remaining && item.fragment.role !== "selected") continue;
-        const fragment = item.fragment.text.length > remaining
-            ? { ...item.fragment, text: item.fragment.text.slice(0, remaining) }
-            : item.fragment;
-        selected.push({ ...item, fragment });
-        characterCount += fragment.text.length;
-    }
-
-    selected.sort((left, right) => left.originalIndex - right.originalIndex);
+    // The initial budget is a planning hint, not permission to lose context.
+    const selected = Array.from(unique.values());
+    const characterCount = selected.reduce((total, fragment) => total + fragment.text.length, 0);
     return {
-        fragments: selected.map(item => item.fragment),
+        fragments: selected,
         decision: {
-            fragmentIds: selected.map(item => item.fragment.id),
+            fragmentIds: selected.map(item => item.id),
             characterCount,
             characterBudget: budget,
-            expansionLevel: 0,
-            attemptedBudgets: [ budget ]
+            expansionLevel: characterCount > budget ? 1 : 0,
+            attemptedBudgets: characterCount > budget ? [ budget, characterCount ] : [ budget ]
         }
     };
 }

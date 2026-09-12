@@ -9,13 +9,13 @@ describe("answer-first evidence allocation", () => {
     });
     const input = (sources:ReadWeaveEvidenceSource[]) => JSON.stringify(sources.map(s=>[ s.sourceId,s.excerpt ]));
     const rates = { cacheHitInput:0.1,cacheMissInput:3,output:9 };
-    it("retains selected facts and complete useful sources while skipping oversized duplicates",()=>{
+    it("retains all source identities regardless of a small planning budget",()=>{
         const selected = source("L1","条件为 3 秒，禁止上传");
         const complete = source("S2","The interval is three seconds; raw data must not be uploaded.");
         const result = fitReadWeaveWriterEvidence([ selected,source("S1","irrelevant ".repeat(3000)),complete,
             source("S3",complete.excerpt) ],new Set([ "L1" ]),input,"rules",1600,rates,0.02);
-        expect(result.sources).toEqual([ selected,complete ]);
-        expect(result.reservation).toBeLessThanOrEqual(.02);
+        expect(result.sources.map(source=>source.sourceId)).toEqual([ "L1","S1","S2","S3" ]);
+        expect(result.reservation).toBeGreaterThan(.02);
         expect(result.input).toContain(complete.excerpt);
     });
     it("never silently discards a mandatory selection to meet an impossible tariff",()=>{

@@ -8,7 +8,8 @@ import {
     getAnchorSummaries,
     getEntriesForAnchor,
     getReadWeaveImpact,
-    saveReadWeaveEntry
+    saveReadWeaveEntry,
+    validateReadWeaveFollowUp
 } from "./readweave_repository.js";
 import sqlInit from "./sql_init.js";
 
@@ -597,6 +598,23 @@ describe("ReadWeave repository", () => {
             expect(getEntriesForAnchor(article.noteId, base.anchorId).map(entry => entry.linkId))
                 .toEqual(expect.arrayContaining([ root.linkId, levels[1].linkId ]));
             expect(getEntriesForAnchor(article.noteId, base.anchorId)).toHaveLength(2);
+        });
+    });
+    it("supplies the complete saved parent chain and article to follow-up generation", () => {
+        cls.init(() => {
+            const articleText=`<p>${"article context ".repeat(7000)}ARTICLE_TAIL</p>`;
+            const article=noteService.createNewNote({parentNoteId:"root",title:"Full follow-up context",type:"text",mime:"text/html",content:articleText}).note;
+            const base={articleId:article.noteId,anchorId:"full_follow_up",anchorType:"range" as const,sourceExcerpt:"article",kind:"question" as const,calloutType:"note" as const};
+            const root=saveReadWeaveEntry({...base,title:"根问题",body:professionalAnswer("根回答")});
+            const parent=saveReadWeaveEntry({...base,parentLinkId:root.linkId,title:"父问题",body:`开始${"完整父回答".repeat(1500)}PARENT_TAIL`});
+            const request:import("@triliumnext/commons").ReadWeaveGenerateRequest={...base,parentLinkId:parent.linkId,title:"开始是什么？",
+                answerSelection:{parentRevision:parent.revision,startOffset:0,endOffset:2,text:"开始"},
+                fragments:[{id:"forged-parent",role:"previous",text:"untrusted replacement"}]};
+            validateReadWeaveFollowUp(request);
+            expect(request.fragments.find(item=>item.id==="parent-answer")?.text).toBe(parent.body);
+            expect(request.fragments.find(item=>item.id===`ancestor-${root.linkId}`)?.text).toBe(root.body);
+            expect(request.fragments.find(item=>item.id==="document")?.text).toBe(articleText);
+            expect(request.fragments.some(item=>item.id==="forged-parent")).toBe(false);
         });
     });
 

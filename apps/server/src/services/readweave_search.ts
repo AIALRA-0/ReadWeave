@@ -64,7 +64,7 @@ type SearchAdapter = (query: string, config: ReadWeaveSearchRuntimeConfig, fetch
 const cache = new Map<string, CachedEvidence>();
 const inFlight = new Map<string, Promise<ReadWeaveSearchEvidence>>();
 
-function plainText(value: unknown, maximum = 700): string {
+function plainText(value: unknown, _maximum = 700): string {
     if (typeof value !== "string") return "";
     let decoded = value.replace(/<[^>]*>/gu, " ");
     for (let pass = 0; pass < 3; pass++) {
@@ -84,8 +84,7 @@ function plainText(value: unknown, maximum = 700): string {
     }
     return decoded
         .replace(/\s+/gu, " ")
-        .trim()
-        .slice(0, maximum);
+        .trim();
 }
 
 function safeSearchCodePoint(value: number): string {
@@ -321,7 +320,7 @@ const openAlexSearch: SearchAdapter = async (query, config, fetcher) => {
             item.title,
             item.doi || item.primary_location?.landing_page_url || item.id,
             [
-                item.authorships?.slice(0, 4).map(authorship => authorship.author?.display_name).filter(Boolean).join(", "),
+                item.authorships?.map(authorship => authorship.author?.display_name).filter(Boolean).join(", "),
                 item.primary_location?.source?.display_name,
                 item.publication_year
             ].filter(Boolean).join("；"),
@@ -356,7 +355,6 @@ const openAlexAuthorSearch: SearchAdapter = async (query, config, fetcher) => {
             .join("、");
         const topics = item.topics
             ?.toSorted((left, right) => (right.count ?? 0) - (left.count ?? 0))
-            .slice(0, 5)
             .map(topic => topic.display_name)
             .filter(Boolean)
             .join("、");
@@ -506,8 +504,7 @@ const dblpOfficialSearch: SearchAdapter = async (query, _config, fetcher) => {
     const paragraphs = Array.from(html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/giu), match => plainText(match[1], 1_500));
     const text = paragraphs
         .filter(paragraph => /(?:initially|backronym|proper name|lost its meaning|dblp computer science bibliography)/iu.test(paragraph))
-        .join(" ")
-        .slice(0, 3_000);
+        .join(" ");
     if (!/dblp computer science bibliography/iu.test(text) || !/lost its meaning/iu.test(text)) return [];
     const value = source(
         "dblp official FAQ",
@@ -536,8 +533,7 @@ const orcidOfficialDefinitionSearch: SearchAdapter = async (query, _config, fetc
     const paragraphs = Array.from(html.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/giu), match => plainText(match[1], 1_500));
     const text = paragraphs
         .filter(paragraph => /(?:stands for Open Researcher and Contributor ID|unique, persistent identifier|ORCID iD)/iu.test(paragraph))
-        .join(" ")
-        .slice(0, 3_000);
+        .join(" ");
     if (!/Open Researcher and Contributor ID/iu.test(text) || !/persistent identifier/iu.test(text)) return [];
     const value = source("ORCID official", "About ORCID", url, text, undefined, 125);
     return value ? [ value ] : [];
@@ -562,8 +558,7 @@ const linuxKernelDaxOfficialSearch: SearchAdapter = async (query, _config, fetch
     const paragraphs = Array.from(mainHtml.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/giu), match => plainText(match[1], 1_500));
     const text = paragraphs
         .filter(paragraph => /(?:Direct Access|\bDAX\b|page cache|memory-like|mmap)/iu.test(paragraph))
-        .join(" ")
-        .slice(0, 3_000);
+        .join(" ");
     if (!/Direct Access/iu.test(`${title}\n${text}`) || !/\bDAX\b/iu.test(text)) return [];
     const value = source("Linux kernel documentation", title || "Direct Access for files", url, text, undefined, 130);
     return value ? [ value ] : [];
@@ -787,7 +782,7 @@ const serperSearch: SearchAdapter = async (query, config, fetcher) => {
             snippet: payload.knowledgeGraph.description
         });
     }
-    return rows.slice(0, 5).flatMap((item, index) => {
+    return rows.flatMap((item, index) => {
         const value = source("Serper", item.title, item.link, item.snippet, item.date, 75 - index, {
             originalRank: index + 1,
             retrievalMode: "raw-serp"
@@ -809,7 +804,7 @@ const exaPeopleSearch: SearchAdapter = async (query, config, fetcher) => {
             type: "auto",
             category: "people",
             numResults: 5,
-            contents: { highlights: true, text: { maxCharacters: 1_200 } }
+            contents: { highlights: true, text: true }
         })
     });
     return (payload.results ?? []).flatMap((item, index) => {
@@ -817,7 +812,7 @@ const exaPeopleSearch: SearchAdapter = async (query, config, fetcher) => {
             "Exa People",
             item.title,
             item.url,
-            item.highlights?.join(" ") || item.text,
+            item.text || item.highlights?.join(" "),
             item.publishedDate,
             79 - index,
             { originalRank: index + 1, retrievalMode: "semantic" }
@@ -1077,8 +1072,7 @@ function deduplicateAndRank(sources: ReadWeaveSearchSource[], query: string): Re
             if (seen.has(key)) return false;
             seen.add(key);
             return true;
-        })
-        .slice(0, 8);
+        });
 }
 
 function buildEvidenceMemo(query: string, sources: ReadWeaveSearchSource[]): string {
@@ -1092,7 +1086,7 @@ function buildEvidenceMemo(query: string, sources: ReadWeaveSearchSource[]): str
             item.snippet ? `证据片段：${item.snippet}` : "",
             `链接：${item.url}`
         ].filter(Boolean).join("\n"))
-    ].join("\n\n").slice(0, 7_000);
+    ].join("\n\n");
 }
 
 function putCache(key: string, value: ReadWeaveSearchEvidence) {

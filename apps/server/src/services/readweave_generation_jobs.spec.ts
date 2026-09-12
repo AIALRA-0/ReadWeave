@@ -236,6 +236,20 @@ describe("ReadWeave persisted generation jobs", () => {
         cancelReadWeaveGenerationJob(started.jobId);
     });
 
+    it("persists the quote preference through regeneration and rejects malformed values", async () => {
+        const started = startReadWeaveGenerationJob({ ...request, quoteSelectedText: false });
+        const completed = await waitForStatus(started.jobId, "ready-for-review");
+        expect(completed.quoteSelectedText).toBe(false);
+        expect(generateMock.mock.calls[0][0].quoteSelectedText).toBe(false);
+        const retried = regenerateReadWeaveGenerationJob(started.jobId, { expectedStateVersion:completed.stateVersion });
+        expect(retried.quoteSelectedText).toBe(false);
+        cancelReadWeaveGenerationJob(started.jobId);
+        const before = sql.getValue<number>("SELECT COUNT(*) FROM readweave_generation_jobs");
+        expect(() => startReadWeaveGenerationJob({ ...request, quoteSelectedText:"false" as never }))
+            .toThrow("quoteSelectedText must be boolean");
+        expect(sql.getValue<number>("SELECT COUNT(*) FROM readweave_generation_jobs")).toBe(before);
+    });
+
     it("persists live events, unread results and incremental cursors", async () => {
         generateMock.mockImplementationOnce(async (_request, onProgress) => {
             onProgress?.({ stage: "drafting", round: 1, message: "正在生成测试首稿。  ", issues: [] });

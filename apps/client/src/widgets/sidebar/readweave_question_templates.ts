@@ -55,9 +55,14 @@ function safeCodePoint(value: number): string {
     return String.fromCodePoint(value);
 }
 
-export function renderReadWeaveQuestionTemplate(template: ReadWeaveQuestionTemplate, selection: string): string {
+export function renderReadWeaveQuestionTemplate(template: ReadWeaveQuestionTemplate, selection: string, quoteSelectedText = true): string {
     const subject = decodeReadWeaveText(selection).replace(/^[“"'‘]+|[”"'’]+$/gu, "").trim();
-    return template.pattern.replaceAll("{selection}", subject).trim();
+    // Only the built-in wrapper belongs to this preference. Custom pattern
+    // literals and quotes typed by the user remain exactly as authored.
+    const builtin = DEFAULT_READWEAVE_QUESTION_TEMPLATES.find(item => item.id === template.id);
+    const pattern = !quoteSelectedText && template.builtin && builtin?.pattern === template.pattern
+        ? template.pattern.replaceAll("“{selection}”", "{selection}") : template.pattern;
+    return pattern.replaceAll("{selection}", subject).trim();
 }
 
 /**
@@ -137,12 +142,12 @@ export function recordReadWeaveTemplateUse(
 
 /** Highlight the template matching the current question, not the last click. */
 export function activeReadWeaveQuestionTemplate(
-    templates: ReadWeaveQuestionTemplate[], question: string, selection: string, caret: number
+    templates: ReadWeaveQuestionTemplate[], question: string, selection: string, caret: number, quoteSelectedText = true
 ): string | undefined {
     const position = Math.min(question.length, Math.max(0, caret));
     const start = question.lastIndexOf("\n", Math.max(0, position - 1)) + 1;
     const next = question.indexOf("\n", position);
     const current = question.slice(start, next < 0 ? question.length : next).trim();
-    const matches = templates.filter(template => renderReadWeaveQuestionTemplate(template, selection) === current);
+    const matches = templates.filter(template => renderReadWeaveQuestionTemplate(template, selection, quoteSelectedText) === current);
     return matches.length === 1 ? matches[0].id : undefined;
 }

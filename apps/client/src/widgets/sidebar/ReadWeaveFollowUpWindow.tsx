@@ -1,5 +1,6 @@
 import {
     READWEAVE_MAX_FOLLOW_UP_DEPTH,
+    type ReadWeaveAnswerPlan,
     type ReadWeaveAnswerSelection,
     type ReadWeaveGenerationJob,
     type ReadWeaveResolvedEntry,
@@ -8,7 +9,10 @@ import { createPortal } from "preact/compat";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 
 import server from "../../services/server.js";
+import { readReadWeaveGenerationPreferences, type ReadWeaveGenerationPreferences } from "./readweave_generation_preferences.js";
+import { DEFAULT_READWEAVE_QUESTION_TEMPLATES, renderReadWeaveQuestionTemplate } from "./readweave_question_templates.js";
 import { ReadWeaveAnswer } from "./ReadWeaveAnswer.js";
+import { createEditableReadWeaveAnswerPlan, normalizeEditableReadWeaveAnswerPlan, splitPlanLines } from "./readweave_answer_plan.js";
 
 export function ReadWeaveFollowUpWindow({
     parent,
@@ -16,7 +20,8 @@ export function ReadWeaveFollowUpWindow({
     onClose,
     onOpen,
     onJob,
-    externalSearchDisabled = false,
+    externalSearchDisabled,
+    generationPreferences,
 }: {
     parent: ReadWeaveResolvedEntry;
     selection: ReadWeaveAnswerSelection;
@@ -24,13 +29,16 @@ export function ReadWeaveFollowUpWindow({
     onOpen: (parent: ReadWeaveResolvedEntry, selection: ReadWeaveAnswerSelection) => void;
     onJob: (job: ReadWeaveGenerationJob) => void;
     externalSearchDisabled?: boolean;
+    generationPreferences?: ReadWeaveGenerationPreferences;
 }) {
     const key = `readweave:follow-up:${parent.linkId}:${parent.revision}:${selection.startOffset}:${selection.endOffset}`;
-    const [title, setTitle] = useState(`“${selection.text.slice(0, 160)}”是什么意思？`);
+    const [preferences] = useState(() => generationPreferences ?? readReadWeaveGenerationPreferences());
+    const [title, setTitle] = useState(() => renderReadWeaveQuestionTemplate(DEFAULT_READWEAVE_QUESTION_TEMPLATES[0], selection.text, preferences.quoteSelectedText));
     const [job, setJob] = useState<ReadWeaveGenerationJob>();
+    const [answerPlan, setAnswerPlan] = useState<ReadWeaveAnswerPlan>();
     const [error, setError] = useState("");
     const [busy, setBusy] = useState(false);
-    const [searchDisabled] = useState(externalSearchDisabled);
+    const [searchDisabled] = useState(externalSearchDisabled ?? preferences.externalSearchDisabled);
     const [position, setPosition] = useState({
         x: Math.max(8, Math.min(window.innerWidth - 490, 80 + parent.depth * 32)),
         y: 90 + parent.depth * 28,
@@ -58,6 +66,7 @@ export function ReadWeaveFollowUpWindow({
                     if (mounted.current) {
                         accept(response.job);
                         setTitle(response.job.title);
+                        setAnswerPlan(response.job.answerPlan);
                     }
                 })
                 .catch(() => sessionStorage.removeItem(key));
@@ -110,12 +119,23 @@ export function ReadWeaveFollowUpWindow({
     }
     async function generate() {
         if (!title.trim() || parent.depth >= READWEAVE_MAX_FOLLOW_UP_DEPTH || active) return;
+        if (!preferences.autoApplyPlan && !answerPlan) {
+            setAnswerPlan(createEditableReadWeaveAnswerPlan(title, "problem", preferences.quoteSelectedText));
+            return;
+        }
+        const preparedPlan = answerPlan
+            ? normalizeEditableReadWeaveAnswerPlan(answerPlan, true, preferences.autoApplyPlan) : undefined;
+        if (!preferences.autoApplyPlan && !preparedPlan) {
+            setError("流程需要填写目标、必答项和至少一个有效步骤");
+            return;
+        }
         await action(async () => {
             const response =
                 job && !job.savedLinkId && title === job.title
                     ? await server.post<{ job: ReadWeaveGenerationJob }>(
                         `readweave/generation-jobs/${encodeURIComponent(job.jobId)}/regenerate`,
-                        { title },
+                        { title, answerPlan:preparedPlan, autoApplyPlan:preferences.autoApplyPlan,
+                            quoteSelectedText: job.quoteSelectedText ?? preferences.quoteSelectedText },
                     )
                     : await server.post<{ job: ReadWeaveGenerationJob }>(
                         "readweave/generation-jobs",
@@ -129,8 +149,10 @@ export function ReadWeaveFollowUpWindow({
                             parentLinkId: parent.linkId,
                             answerSelection: selection,
                             title,
-                            optimizeQuestion: true,
-                            autoApplyPlan: true,
+                            optimizeQuestion: preferences.optimizeQuestion,
+                            autoApplyPlan: preferences.autoApplyPlan,
+                            answerPlan: preparedPlan,
+                            quoteSelectedText: preferences.quoteSelectedText,
                             autoExternalSearch: !searchDisabled,
                             activeExternalSearch: false,
                             fragments: [
@@ -139,6 +161,7 @@ export function ReadWeaveFollowUpWindow({
                                     role: "selected",
                                     text: selection.text,
                                 },
+                                { id:"parent-answer", role:"previous", text:parent.body },
                             ],
                         },
                     );
@@ -179,7 +202,7 @@ export function ReadWeaveFollowUpWindow({
             role="dialog"
             aria-modal="false"
             aria-label={`第 ${level} 层追问`}
-            style={{ left: `${position.x}px`, top: `${position.y}px` }}
+            style={{ left: `${position.x}px`, top: `${position.y}px`, maxHeight:`calc(100vh - ${position.y + 8}px)` }}
             data-testid="readweave-follow-up-window"
         >
             <header
@@ -225,9 +248,25 @@ export function ReadWeaveFollowUpWindow({
                         value={title}
                         rows={2}
                         disabled={busy || active}
-                        onInput={(event) => setTitle(event.currentTarget.value)}
+                        onInput={(event) => { setTitle(event.currentTarget.value); setAnswerPlan(undefined); }}
                     />
                 </label>
+                {!preferences.autoApplyPlan && answerPlan && (
+                    <details data-testid="readweave-follow-up-plan" open={!job}>
+                        <summary>回答流程</summary>
+                        <label>目标<input value={answerPlan.objective ?? ""} disabled={busy || active}
+                            onInput={event => setAnswerPlan({ ...answerPlan, objective:event.currentTarget.value })} /></label>
+                        {([
+                            ["answerRequirements", "必答项"], ["exclusions", "排除项"],
+                            ["steps", "流程步骤"], ["searchQueries", "检索词"]
+                        ] as const).map(([field,label]) => (
+                            <label key={field}>{label}<textarea rows={3} value={(answerPlan[field] ?? []).join("\n")}
+                                disabled={busy || active} onInput={event => setAnswerPlan({
+                                    ...answerPlan, [field]:splitPlanLines(event.currentTarget.value)
+                                })} /></label>
+                        ))}
+                    </details>
+                )}
                 <button
                     type="button"
                     class="btn btn-secondary"
@@ -235,7 +274,7 @@ export function ReadWeaveFollowUpWindow({
                         || parent.depth >= READWEAVE_MAX_FOLLOW_UP_DEPTH}
                     onClick={() => void generate()}
                 >
-                    生成回答
+                    {!preferences.autoApplyPlan && !answerPlan ? "生成流程计划" : "生成回答"}
                 </button>
                 {active && (
                     <button

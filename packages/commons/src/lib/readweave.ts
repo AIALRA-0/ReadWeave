@@ -329,6 +329,7 @@ export interface ReadWeaveGenerationJob {
     origin?: ReadWeaveContentOrigin;
     activeExternalSearch?: boolean;
     autoExternalSearch?: boolean;
+    quoteSelectedText?: boolean;
     parentLinkId?: string;
     title: string;
     sourceExcerpt: string;
@@ -477,6 +478,8 @@ export interface ReadWeaveGenerateRequest {
     autoApplyPlan?: boolean;
     /** User explicitly requests external evidence for this generation. */
     activeExternalSearch?: boolean;
+    /** Whether automatically composed questions quote the selection; defaults to true. */
+    quoteSelectedText?: boolean;
     /** Allow the server to trigger external evidence for freshness or scope-sensitive questions. */
     autoExternalSearch?: boolean;
     answerPlan?: ReadWeaveAnswerPlan;

@@ -100,6 +100,9 @@ function requireReviewedAnswerPlan(request: ReadWeaveGenerateRequest) {
 }
 
 function validateExternalSearchSettings(request: ReadWeaveGenerateRequest): void {
+    if (request.quoteSelectedText !== undefined && typeof request.quoteSelectedText !== "boolean") {
+        throw new ValidationError("quoteSelectedText must be boolean.");
+    }
     if (request.activeExternalSearch !== undefined
         && typeof request.activeExternalSearch !== "boolean") {
         throw new ValidationError("activeExternalSearch must be boolean.");
@@ -340,6 +343,7 @@ function publicJob(row: JobRow, includeProgress = true): ReadWeaveGenerationJob 
         origin: storedRequest?.origin ?? readWeaveContentOriginForType(contentType),
         activeExternalSearch: storedRequest?.activeExternalSearch,
         autoExternalSearch: storedRequest?.autoExternalSearch,
+        quoteSelectedText: storedRequest?.quoteSelectedText,
         parentLinkId: storedRequest?.parentLinkId,
         title: decodeStoredValue(row.title, row.isProtected) ?? "",
         sourceExcerpt: decodeStoredValue(row.sourceExcerpt, row.isProtected) ?? "",
@@ -1022,6 +1026,7 @@ interface ReadWeaveRegenerateRequest {
     autoApplyPlan?: unknown;
     activeExternalSearch?: unknown;
     autoExternalSearch?: unknown;
+    quoteSelectedText?: unknown;
     calloutType?: unknown;
     termIdentity?: unknown;
     fragments?: unknown;
@@ -1066,6 +1071,12 @@ export function regenerateReadWeaveGenerationJob(jobId: string, inputValue: unkn
         }
         request.autoApplyPlan = input.autoApplyPlan as boolean | undefined;
     }
+    if (Object.hasOwn(input, "quoteSelectedText")) {
+        if (input.quoteSelectedText !== undefined && typeof input.quoteSelectedText !== "boolean") {
+            throw new ValidationError("quoteSelectedText must be boolean.");
+        }
+        request.quoteSelectedText = input.quoteSelectedText as boolean | undefined;
+    }
     if (Object.hasOwn(input, "activeExternalSearch")) {
         if (input.activeExternalSearch !== undefined
             && typeof input.activeExternalSearch !== "boolean") {
@@ -1095,7 +1106,7 @@ export function regenerateReadWeaveGenerationJob(jobId: string, inputValue: unkn
         request.termIdentity = input.termIdentity as ReadWeaveGenerateRequest["termIdentity"];
     }
     if (Object.hasOwn(input, "fragments")) {
-        if (!Array.isArray(input.fragments) || input.fragments.length === 0 || input.fragments.length > 300
+        if (!Array.isArray(input.fragments) || input.fragments.length === 0
             || input.fragments.some(fragment => !fragment
                 || typeof fragment !== "object"
                 || typeof (fragment as { id?: unknown }).id !== "string"
