@@ -1142,7 +1142,7 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.body).toBeTruthy();
         expect(result.usage).toMatchObject({ modelCalls:1,withinBudget:true,budgetCny:.10 });
         expect(result.usage?.costCny).toBeLessThanOrEqual(.05);
-        expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body)).max_output_tokens).toBe(1600);
+        expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body)).max_output_tokens).toBeGreaterThanOrEqual(4096);
         expect(progress.filter(event=>event.usage)[0]?.usage).toMatchObject({ modelCalls:0,costCny:.0072 });
     });
     it("keeps a full-name answer affordable without discarding complete evidence", async () => {
@@ -1208,7 +1208,7 @@ describe("ReadWeave one-pass workflow", () => {
         expect(fetch).toHaveBeenCalledTimes(2);
         expect(progress.filter(event => event.usage).at(-1)?.usage?.modelCalls).toBe(2);
     });
-    it.each([ "malformed", "transport", "truncated" ])(
+    it.each([ "malformed", "transport" ])(
         "retains attempt costs when generation fails: %s", async mode => {
             const progress: ReadWeaveGenerationProgress[] = [];
             const fetch = vi.fn(async () => {
@@ -1234,6 +1234,71 @@ describe("ReadWeave one-pass workflow", () => {
             expect(last.usage?.outputTokens).toBe(mode === "transport" ? 0 : 100);
         }
     );
+    it("automatically retries a truncated writer with more output space and the same evidence", async () => {
+        const previousRates = runtimeConfig.current.rates;
+        // A retry is possible only when the configured provider's actual
+        // tariff leaves room under the per-answer budget.
+        runtimeConfig.current.rates = { cacheHitInput: 0.1, cacheMissInput: 1, output: 3 };
+        const limits: number[] = [];
+        const progress: ReadWeaveGenerationProgress[] = [];
+        vi.stubGlobal("fetch", vi.fn(async (_url, options: RequestInit) => {
+            const payload = JSON.parse(String(options.body));
+            limits.push(payload.max_output_tokens);
+            return Response.json({ model: "deepseek-v4-flash",
+                status: limits.length === 1 ? "incomplete" : "completed",
+                incomplete_details: limits.length === 1 ? { reason: "max_output_tokens" } : null,
+                output: [ { type: "message", content: [ { type: "output_text",
+                    text: JSON.stringify({ body: "这是完整的直接答案", claims: [], unresolvedClaims: [] })
+                } ] } ],
+                usage: { input_tokens: 1_000, output_tokens: 100, total_tokens: 1_100 }
+            });
+        }));
+        try {
+            const result = await generateUnifiedReadWeaveAnswer({ ...request("这是什么意思？"),
+                activeExternalSearch: false, autoExternalSearch: false
+            }, event => progress.push(event));
+            expect(result.body).toBe("这是完整的直接答案");
+            expect(limits).toHaveLength(2);
+            expect(limits[1]).toBeGreaterThan(limits[0]);
+            expect(progress.filter(event => event.usage).at(-1)?.usage?.modelCalls).toBe(2);
+        } finally {
+            runtimeConfig.current.rates = previousRates;
+        }
+    });
+    it("retries a third-party chat completion that ends with finish_reason length", async () => {
+        const previous = runtimeConfig.current;
+        runtimeConfig.current = { ...previous, baseUrl: "https://gateway.example.com/v1",
+            providerType: "deepseek-compatible", rates: { cacheHitInput: 0.1, cacheMissInput: 1, output: 3 } };
+        const limits: number[] = [];
+        vi.stubGlobal("fetch", vi.fn(async (_url, options: RequestInit) => {
+            limits.push(JSON.parse(String(options.body)).max_tokens);
+            return Response.json({ model: "deepseek-v4-flash", choices: [ {
+                finish_reason: limits.length === 1 ? "length" : "stop",
+                message: { content: JSON.stringify({ body: "完整的第三方回答", claims: [], unresolvedClaims: [] }) }
+            } ], usage: { prompt_tokens: 1_000, completion_tokens: 100, total_tokens: 1_100 } });
+        }));
+        try {
+            const result = await generateUnifiedReadWeaveAnswer({ ...request("对象是什么？"),
+                activeExternalSearch: false, autoExternalSearch: false });
+            expect(result.body).toBe("完整的第三方回答");
+            expect(limits).toHaveLength(2);
+            expect(limits[1]).toBeGreaterThan(limits[0]);
+            expect(result.usage?.modelCalls).toBe(2);
+        } finally {
+            runtimeConfig.current = previous;
+        }
+    });
+    it("does not buy an output-limit retry when the remaining budget cannot cover it", async () => {
+        const fetch = vi.fn(async () => Response.json({ model: "deepseek-v4-flash",
+            status: "incomplete", incomplete_details: { reason: "max_output_tokens" },
+            output: [ { type: "message", content: [ { type: "output_text", text: "{\"body\":\"incomplete\"}" } ] } ],
+            usage: { input_tokens: 1_000, output_tokens: 100, total_tokens: 1_100 } }));
+        vi.stubGlobal("fetch", fetch);
+        await expect(generateUnifiedReadWeaveAnswer({ ...request("对象是什么？"),
+            activeExternalSearch: false, autoExternalSearch: false }))
+            .rejects.toThrow(/费用上限不足/);
+        expect(fetch).toHaveBeenCalledTimes(1);
+    });
     it("repairs an unsupported naming qualifier within the original task budget", async () => {
         const original = "Lumen 于 1987 年得名于光通量单位。";
         const replacement = "Lumen 得名于光通量单位。";

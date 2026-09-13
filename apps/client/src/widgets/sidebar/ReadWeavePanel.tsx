@@ -27,7 +27,7 @@ import {
     type ReadWeaveSourceLocator,
     type ReadWeaveTermIdentity} from "@triliumnext/commons";
 import type { JSX } from "preact";
-import { useEffect, useRef, useState } from "preact/hooks";
+import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
 import { t } from "../../services/i18n.js";
 import server from "../../services/server.js";
@@ -83,6 +83,8 @@ import {
     visibleReadWeaveCandidates
 } from "./readweave_panel_state.js";
 import { confirmReadWeavePendingSelection } from "./readweave_pending_selection.js";
+import { READWEAVE_SELECTION_ACTIONS, readWeaveSelectionActionKind } from "./readweave_selection_actions.js";
+import { readWeaveSelectionTextForRange } from "./readweave_selection_text.js";
 import { insertOrReplaceReadWeaveQuestion, readWeaveQuestionStackFromText } from "./readweave_question_stack.js";
 import {
     activeReadWeaveQuestionTemplate,
@@ -97,7 +99,9 @@ import {
     renderReadWeaveQuestionTemplate
 } from "./readweave_question_templates.js";
 import { ReadWeaveAnswer } from "./ReadWeaveAnswer.js";
-import { ReadWeaveFollowUpWindow } from "./ReadWeaveFollowUpWindow.js";
+import { ReadWeaveParentWindow } from "./ReadWeaveParentWindow.js";
+import { ReadWeaveChapterMap } from "./ReadWeaveChapterMap.js";
+import { buildReadWeaveChapterMap } from "./readweave_chapter_map.js";
 import RightPanelWidget from "./RightPanelWidget.js";
 
 const BLOCK_SELECTOR = READWEAVE_CONTEXT_BLOCK_SELECTOR;
@@ -126,6 +130,8 @@ interface AnchorSelection {
     anchorId: string;
     anchorType: ReadWeaveAnchorType;
     excerpt: string;
+    /** Canonical visible selection for questions; excerpt remains the exact anchor text. */
+    questionExcerpt?: string;
     fragments: ReadWeaveContextFragment[];
     sourceLocator?: ReadWeaveSourceLocator;
     readonly?: boolean;
@@ -285,7 +291,8 @@ export default function ReadWeavePanel() {
     const [templateManagerOpen, setTemplateManagerOpen] = useState(false);
     const [settingsOpen, setSettingsOpen] = useState(false);
     const [questionCaret, setQuestionCaret] = useState(0);
-    const [followUpWindows, setFollowUpWindows] = useState<Array<{ parent: ReadWeaveResolvedEntry; selected: ReadWeaveAnswerSelection }>>([]);
+    const [followUpContext, setFollowUpContext] = useState<{ parent: ReadWeaveResolvedEntry; selected: ReadWeaveAnswerSelection }>();
+    const [chapterMapOpen, setChapterMapOpen] = useState(false);
     const [customTemplateLabel, setCustomTemplateLabel] = useState("");
     const [customTemplatePattern, setCustomTemplatePattern] = useState("关于“{selection}”，");
     const hoverOpenTimer = useRef<number>();
@@ -318,12 +325,17 @@ export default function ReadWeavePanel() {
     activeGenerationJobId.current = generationJobId;
     generationJobsRef.current = generationJobs;
     const articleGenerationJobs = generationJobs.filter(job => job.articleId === articleNoteId);
+    const chapterMapRoot = chapterMapOpen ? activeContentRootRef.current ?? contentElement : null;
+    const chapterMapTree = useMemo(() => chapterMapRoot && note
+        ? buildReadWeaveChapterMap(chapterMapRoot, note.title, anchorSummaries) : undefined,
+    [ chapterMapRoot, note?.title, anchorSummaries ]);
     const decorationGenerationJobs = transientGenerationJob
         && transientGenerationJob.articleId === articleNoteId
         ? [ transientGenerationJob, ...articleGenerationJobs ]
         : articleGenerationJobs;
 
-    const definitionExists = kind === "term" && entries.some(entry => entry.kind === "term");
+    const definitionExists = kind === "term" && entries.some(entry => entry.kind === "term"
+        && entry.parentLinkId === parentLinkId);
     const currentJob = generationJobs.find(job => job.jobId === generationJobId);
     const currentTransientJob = transientGenerationJob
         && transientGenerationJob.articleId === noteId
@@ -345,7 +357,8 @@ export default function ReadWeavePanel() {
     const currentTitle = kind === "question"
         ? decodeReadWeaveText(questionTitle)
         : formatPartialTermIdentity(termIdentity) || selection?.excerpt.trim() || "";
-    const nestedParent = parentLinkId ? entries.find(entry => entry.linkId === parentLinkId) : undefined;
+    const nestedParent = parentLinkId ? entries.find(entry => entry.linkId === parentLinkId)
+        ?? (followUpContext?.parent.linkId === parentLinkId ? followUpContext.parent : undefined) : undefined;
     const suggestedTemplates = rankedReadWeaveQuestionTemplates(questionTemplates, questionTitle, questionTemplates.length);
     const activeTemplateId = activeReadWeaveQuestionTemplate(questionTemplates, questionTitle, selection?.excerpt ?? "", questionCaret, quoteSelectedText);
     const currentSourceExcerpt = selection
@@ -357,8 +370,7 @@ export default function ReadWeavePanel() {
     const reviewSaveAllowed = true;
     const saveReady = !!selection && !selection.pending && !definitionExists && !!currentTitle && !!body.trim() && !!currentSourceExcerpt && reviewSaveAllowed;
     const generationBusy = displayedJob?.status === "queued" || displayedJob?.status === "running" || displayedJob?.status === "saving";
-    const hasActiveGenerationJobs = hasActiveReadWeaveGenerationJobs(articleGenerationJobs
-        .filter(job => !followUpWindows.some(window => window.parent.linkId === job.parentLinkId)));
+    const hasActiveGenerationJobs = hasActiveReadWeaveGenerationJobs(articleGenerationJobs);
     const editorLocked = busy || generationBusy || confirmingGeneration;
     const generationDisabled = confirmingGeneration || (selection?.pending
         ? busy || !noteId || !selection.excerpt.trim()
@@ -533,7 +545,8 @@ export default function ReadWeavePanel() {
         return response;
     }
 
-    async function selectAnchor(nextSelection: AnchorSelection, preferredKind?: ReadWeaveObjectKind) {
+    async function selectAnchor(nextSelection: AnchorSelection, preferredKind?: ReadWeaveObjectKind, preferredContentType?: ReadWeaveContentType) {
+        setFollowUpContext(undefined);
         entriesRequestRevision.current += 1;
         selectionActionRevision.current += 1;
         selectionIdentityRevision.current += 1;
@@ -548,9 +561,9 @@ export default function ReadWeavePanel() {
         setParentLinkId(undefined);
         const draft = readDraft(noteId!, nextSelection.anchorId);
         const nextKind = preferredKind ?? draft?.kind ?? "question";
-        const requestedContentType = draft?.kind === nextKind
+        const requestedContentType = preferredContentType ?? (draft?.kind === nextKind
             ? draft.contentType ?? (nextKind === "term" ? "definition" : "problem")
-            : nextKind === "term" ? "definition" : "problem";
+            : nextKind === "term" ? "definition" : "problem");
         const matchingDraft = draft?.kind === nextKind && requestedContentType === (draft.contentType ?? requestedContentType) ? draft : undefined;
         const matchingJob = matchingDraft?.newQuestionDraft
             ? undefined
@@ -581,7 +594,7 @@ export default function ReadWeavePanel() {
             : (nextKind === "question"
                 ? confirmingPendingSelection && questionTitle.trim()
                     ? decodeReadWeaveText(questionTitle)
-                    : decodeReadWeaveText(matchingJob?.title || defaultQuestionForExcerpt(nextSelection.excerpt, matchingDraft?.quoteSelectedText ?? readReadWeaveGenerationPreferences().quoteSelectedText))
+                    : decodeReadWeaveText(matchingJob?.title || defaultQuestionForExcerpt(nextSelection.questionExcerpt ?? nextSelection.excerpt, matchingDraft?.quoteSelectedText ?? readReadWeaveGenerationPreferences().quoteSelectedText))
                 : ""));
         setOptimizeQuestion(matchingDraft?.optimizeQuestion ?? (confirmingPendingSelection ? optimizeQuestion : readReadWeaveGenerationPreferences().optimizeQuestion));
         setQuoteSelectedText(matchingDraft?.quoteSelectedText ?? matchingJob?.quoteSelectedText ?? (confirmingPendingSelection ? quoteSelectedText : readReadWeaveGenerationPreferences().quoteSelectedText));
@@ -594,7 +607,7 @@ export default function ReadWeavePanel() {
             fallbackQuestionTitle: nextKind === "question"
                 ? confirmingPendingSelection && questionTitle.trim()
                     ? decodeReadWeaveText(questionTitle)
-                    : decodeReadWeaveText(matchingJob?.title || defaultQuestionForExcerpt(nextSelection.excerpt, matchingDraft?.quoteSelectedText ?? readReadWeaveGenerationPreferences().quoteSelectedText))
+                    : decodeReadWeaveText(matchingJob?.title || defaultQuestionForExcerpt(nextSelection.questionExcerpt ?? nextSelection.excerpt, matchingDraft?.quoteSelectedText ?? readReadWeaveGenerationPreferences().quoteSelectedText))
                 : "",
             fallbackTermIdentity: confirmingPendingSelection ? cleanPartialTermIdentity(termIdentity) : initialTermIdentity(nextSelection.excerpt, nextKind),
             job: matchingJob
@@ -665,6 +678,7 @@ export default function ReadWeavePanel() {
     }
 
     function previewSelection(nextSelection: AnchorSelection) {
+        setFollowUpContext(undefined);
         generationClickSequence.current++;
         generationClickInFlight.current = false;
         setConfirmingGeneration(false);
@@ -686,7 +700,7 @@ export default function ReadWeavePanel() {
         setParentLinkId(undefined);
         const preferences = readReadWeaveGenerationPreferences();
         questionTemplateSource.current = DEFAULT_READWEAVE_QUESTION_TEMPLATES[0];
-        setQuestionTitle(defaultQuestionForExcerpt(nextSelection.excerpt, preferences.quoteSelectedText));
+        setQuestionTitle(defaultQuestionForExcerpt(nextSelection.questionExcerpt ?? nextSelection.excerpt, preferences.quoteSelectedText));
         setOptimizeQuestion(preferences.optimizeQuestion);
         setAutoApplyPlan(preferences.autoApplyPlan);
         setExternalSearchDisabled(preferences.externalSearchDisabled);
@@ -1013,7 +1027,8 @@ export default function ReadWeavePanel() {
             setStatusTone("normal");
             return;
         }
-        if (kind === "term" && confirmed?.entries.some(entry => entry.kind === "term")) {
+        if (kind === "term" && confirmed?.entries.some(entry => entry.kind === "term"
+            && entry.parentLinkId === parentLinkId)) {
             setStatus("所选片段已有定义，请打开已有定义后编辑");
             setStatusTone("warning");
             return;
@@ -1066,9 +1081,9 @@ export default function ReadWeavePanel() {
         setReviewIssues([]);
         setReviewIssueBaseline(undefined);
         try {
-            await persistReadWeaveAnchor(noteContext, selected);
+            if (!followUpContext) await persistReadWeaveAnchor(noteContext, selected);
             if (!isSelectionActionCurrent(target)) throw new Error(t("readweave.selection_sync_failed"));
-            if (!await readWeaveAnchorIsPresent(noteContext, selected.anchorId, selected.readonly)) {
+            if (!followUpContext && !await readWeaveAnchorIsPresent(noteContext, selected.anchorId, selected.readonly)) {
                 throw new Error(t("readweave.anchor_lost_before_generation"));
             }
             const response = await server.post<{ job: ReadWeaveGenerationJob }>("readweave/generation-jobs", {
@@ -1080,6 +1095,7 @@ export default function ReadWeavePanel() {
                 origin: readWeaveContentOriginForType(contentType),
                 calloutType,
                 parentLinkId,
+                answerSelection: followUpContext?.selected,
                 rootSourceExcerpt: selected.excerpt,
                 sourceLocator: selected.sourceLocator,
                 title: currentTitle,
@@ -1232,7 +1248,7 @@ export default function ReadWeavePanel() {
                 // creating the job. Only repair a missing DOM anchor here; a
                 // second unconditional force snapshot would issue an
                 // identical PUT.
-                if (!await readWeaveAnchorIsPresent(noteContext, selection.anchorId, selection.readonly)) {
+                if (!followUpContext && !await readWeaveAnchorIsPresent(noteContext, selection.anchorId, selection.readonly)) {
                     await persistReadWeaveAnchor(noteContext, selection);
                 }
                 const response = await server.post<{ job: ReadWeaveGenerationJob }>(`readweave/generation-jobs/${encodeURIComponent(completedJobId)}/commit`, {
@@ -1249,7 +1265,7 @@ export default function ReadWeavePanel() {
                 // A direct save/reuse path may not have gone through
                 // generation, so its editable model anchor still needs the
                 // normal force snapshot even when it is already present.
-                await persistReadWeaveAnchor(noteContext, selection);
+                if (!followUpContext) await persistReadWeaveAnchor(noteContext, selection);
                 savedEntry = (await server.post<{ entry: ReadWeaveResolvedEntry }>("readweave/entries", {
                     articleId: noteId,
                     anchorId: selection.anchorId,
@@ -1258,6 +1274,7 @@ export default function ReadWeavePanel() {
                     contentType,
                     origin: readWeaveContentOriginForType(contentType),
                     parentLinkId,
+                    answerSelection: followUpContext?.selected,
                     title: reviewedTitle,
                     body: reviewedBody,
                     sourceExcerpt: currentSourceExcerpt,
@@ -1465,9 +1482,9 @@ export default function ReadWeavePanel() {
         setLocalRewriteResult(undefined);
         setNewQuestionDraft(false);
         setQuestionTitle(currentKind === "question" && selection && !selection.pending
-            ? defaultQuestionForExcerpt(selection.excerpt, quoteSelectedText)
+            ? defaultQuestionForExcerpt(selection.questionExcerpt ?? selection.excerpt, quoteSelectedText)
             : "");
-        setTermIdentity(initialTermIdentity(selection?.excerpt ?? "", currentKind));
+        setTermIdentity(initialTermIdentity(selection?.questionExcerpt ?? selection?.excerpt ?? "", currentKind));
         setTermIdentityEdited(false);
         setBody("");
         setBodyEdited(false);
@@ -1535,7 +1552,7 @@ export default function ReadWeavePanel() {
             // The content type selector is the only confirmation control. A
             // pending read-only range is finalized by the same click that
             // chooses its content type.
-            try { await confirmPendingSelection(nextKind, selection.excerpt); }
+            try { await confirmPendingSelection(nextKind, selection.excerpt, nextContentType); }
             catch (error) {
                 setStatus(readableError(error, t("readweave.selection_sync_failed")));
                 setStatusTone("error");
@@ -1548,10 +1565,11 @@ export default function ReadWeavePanel() {
         setContentType(nextContentType);
         setKind(nextKind);
         setNewQuestionDraft(false);
-        setParentLinkId(nextContentType === "problem" ? parentLinkId : undefined);
+        setParentLinkId(parentLinkId);
         resetEditor(nextKind);
         if (nextContentType === "key-point") setQuestionTitle("总结所选内容的知识点");
         if (nextContentType === "annotation") setQuestionTitle("解释并扩写所选内容");
+        if (nextContentType === "note") setQuestionTitle("笔记");
         setCalloutType(readWeaveCalloutForContentType(nextContentType));
         setStatus(undefined);
         setStatusTone("normal");
@@ -1754,25 +1772,83 @@ export default function ReadWeavePanel() {
         });
     }
 
-    function openFollowUp(entry: ReadWeaveResolvedEntry, selected: ReadWeaveAnswerSelection) {
+    async function openFollowUp(entry: ReadWeaveResolvedEntry, selected: ReadWeaveAnswerSelection, nextType: ReadWeaveContentType = "problem") {
         if (entry.depth >= READWEAVE_MAX_FOLLOW_UP_DEPTH) { setStatus("追问最多三层"); return; }
-        setFollowUpWindows(current => current.some(item => item.parent.linkId === entry.linkId
-            && item.selected.startOffset === selected.startOffset && item.selected.endOffset === selected.endOffset)
-            ? current : [...current, { parent: entry, selected: { ...selected, parentRevision: entry.revision } }]);
+        if (entry.articleId !== activeArticleNoteId.current) { setStatus("父回答不属于当前文章"); return; }
+        const summaries = anchorSummaries.some(item => item.anchorId === entry.anchorId)
+            ? anchorSummaries
+            : (await server.get<{ anchors: ReadWeaveAnchorSummary[] }>(`readweave/articles/${encodeURIComponent(entry.articleId)}/anchors`)).anchors;
+        const anchor = summaries.find(item => item.anchorId === entry.anchorId);
+        if (!anchor) { setStatus("父回答的原文锚点已丢失，请先重新绑定"); return; }
+        const answerSelection = { ...selected, parentRevision: entry.revision };
+        await selectAnchor({
+            anchorId: entry.anchorId, anchorType: entry.anchorType,
+            excerpt: anchor.excerpt, questionExcerpt: selected.text,
+            sourceLocator: anchor.sourceLocator,
+            fragments: [
+                { id: "answer-selection", role: "selected", text: selected.text },
+                { id: "parent-answer", role: "previous", text: entry.body }
+            ],
+            readonly: activeContentRootRef.current?.dataset.readweaveContentRoot === "readonly"
+        }, readWeaveKindForContentType(nextType), nextType);
+        setFollowUpContext({ parent: entry, selected: answerSelection });
+        setParentLinkId(entry.linkId);
+        setKind(readWeaveKindForContentType(nextType));
+        setContentType(nextType);
+        setGenerationJobId(undefined);
+        setNewQuestionDraft(true);
+        setBusy(false);
+        setAnswerPlan(undefined);
+        setBody("");
+        setBodyEditing(true);
+        setTermIdentity(initialTermIdentity(selected.text, readWeaveKindForContentType(nextType)));
+        setQuestionTitle(nextType === "annotation" ? "解释并扩写所选内容"
+            : nextType === "key-point" ? "总结所选内容的知识点"
+                : nextType === "note" ? "笔记"
+                    : defaultQuestionForExcerpt(selected.text, readReadWeaveGenerationPreferences().quoteSelectedText));
+        setCalloutType(readWeaveCalloutForContentType(nextType));
     }
 
-    function beginFollowUp(entry: ReadWeaveResolvedEntry, selected?: ReadWeaveAnswerSelection) {
-        openFollowUp(entry, selected ?? { parentRevision: entry.revision, startOffset: 0, endOffset: entry.body.length, text: entry.body });
+    function beginFollowUp(entry: ReadWeaveResolvedEntry, selected?: ReadWeaveAnswerSelection, nextType: ReadWeaveContentType = "problem") {
+        void openFollowUp(entry, selected ?? { parentRevision: entry.revision, startOffset: 0, endOffset: entry.body.length, text: entry.body }, nextType)
+            .catch(error => setStatus(readableError(error, "无法打开回答追问")));
+    }
+
+    function closeFollowUp() {
+        setFollowUpContext(undefined);
+        setParentLinkId(undefined);
+        setSelection(undefined);
+        setEntries([]);
+        setGenerationJobId(undefined);
+        setBody("");
+        setQuestionTitle("");
+        setBusy(false);
+    }
+
+    async function openEntryFromChapterMap(linkId: string) {
+        const anchor = anchorSummaries.find(summary => summary.entries.some(entry => entry.linkId === linkId));
+        if (!anchor) return;
+        setChapterMapOpen(false);
+        await selectAnchor({ anchorId: anchor.anchorId, anchorType: anchor.anchorType,
+            excerpt: anchor.excerpt, fragments: [], sourceLocator: anchor.sourceLocator });
+        window.requestAnimationFrame(() => window.requestAnimationFrame(() => {
+            Array.from(document.querySelectorAll<HTMLElement>(".readweave-entry[data-link-id]"))
+                .find(element => element.dataset.linkId === linkId)?.scrollIntoView({ block: "nearest" });
+        }));
     }
 
     const followUpSaveLock = useRef(false);
-    async function followUpFromDraft(selected: ReadWeaveAnswerSelection) {
+    async function followUpFromDraft(selected: ReadWeaveAnswerSelection, nextType: ReadWeaveContentType = "problem") {
         if (followUpSaveLock.current) return;
         followUpSaveLock.current = true;
         try {
             let entry = currentJob?.savedLinkId ? entries.find(entry => entry.linkId === currentJob.savedLinkId) : undefined;
+            if (!entry && currentJob?.savedLinkId && noteId && selection) {
+                entry = (await server.get<{ entries: ReadWeaveResolvedEntry[] }>(`readweave/articles/${encodeURIComponent(noteId)}/anchors/${encodeURIComponent(selection.anchorId)}`))
+                    .entries.find(candidate => candidate.linkId === currentJob.savedLinkId);
+            }
             if (!entry) entry = await save();
-            if (entry) openFollowUp(entry, { ...selected, parentRevision: entry.revision });
+            if (entry) await openFollowUp(entry, { ...selected, parentRevision: entry.revision }, nextType);
         } finally { followUpSaveLock.current = false; }
     }
 
@@ -1916,10 +1992,14 @@ export default function ReadWeavePanel() {
     return (
         <RightPanelWidget id="readweave-panel" title="ReadWeave">
             <div class="readweave-panel">
-                {followUpWindows.map(window => <ReadWeaveFollowUpWindow key={`${window.parent.linkId}:${window.selected.startOffset}:${window.selected.endOffset}`} parent={window.parent} selection={window.selected}
-                    generationPreferences={readReadWeaveGenerationPreferences()}
-                    onClose={() => setFollowUpWindows(current => current.filter(item => item !== window))}
-                    onOpen={openFollowUp} onJob={job => { if (job.articleId === activeArticleNoteId.current) upsertGenerationJob(job); }} />)}
+                {articleNoteId && <button type="button" class="btn btn-sm btn-secondary readweave-open-chapter-map"
+                    onClick={() => setChapterMapOpen(true)} data-testid="readweave-open-chapter-map">章节思维导图</button>}
+                {chapterMapTree && <ReadWeaveChapterMap tree={chapterMapTree}
+                    onClose={() => setChapterMapOpen(false)}
+                    onOpenEntry={linkId => void openEntryFromChapterMap(linkId)} />}
+                {followUpContext && <ReadWeaveParentWindow parent={followUpContext.parent} selection={followUpContext.selected}
+                    onClose={closeFollowUp}
+                    onAction={(selected, type) => beginFollowUp(followUpContext.parent, selected, type)} />}
                 {!selection ? (
                     <p class="readweave-hint">{t("readweave.select_range")}</p>
                 ) : (
@@ -1928,7 +2008,7 @@ export default function ReadWeavePanel() {
                             <div class="readweave-eyebrow">{selection.pending
                                 ? t("readweave.selection_pending")
                                 : selection.anchorType === "range" ? t("readweave.selected_range") : t("readweave.selected_paragraph")}</div>
-                            <p>{selection.excerpt}</p>
+                            <p>{followUpContext?.selected.text ?? selection.questionExcerpt ?? selection.excerpt}</p>
                         </section>
                         <section class="readweave-existing">
                             <div class="readweave-section-title">{t("readweave.saved_items")}</div>
@@ -2016,7 +2096,7 @@ export default function ReadWeavePanel() {
                                 <div class="readweave-follow-up-context">
                                     <span>{t("readweave.follow_up_level", { level: nestedParent.depth + 1 })}</span>
                                     <strong>{nestedParent.title}</strong>
-                                    <button type="button" class="btn btn-sm btn-link" onClick={() => setParentLinkId(undefined)}>{t("readweave.exit_follow_up")}</button>
+                                    <button type="button" class="btn btn-sm btn-link" onClick={closeFollowUp}>{t("readweave.exit_follow_up")}</button>
                                 </div>
                             )}
                             <ContentTypeSelector value={contentType} disabled={editorLocked} onChange={chooseContentType} />
@@ -2090,6 +2170,10 @@ export default function ReadWeavePanel() {
                                             data-testid="readweave-question"
                                         />
                                     </label>
+                                    {questionTitle.includes("$") && <div class="readweave-question-math-preview" data-testid="readweave-question-math-preview">
+                                        <small>公式预览</small>
+                                        <ReadableBody body={questionTitle} />
+                                    </div>}
                                     <label class="readweave-question-optimization" title={t("readweave.optimize_question_hint")}>
                                         <input type="checkbox" checked={optimizeQuestion} disabled={editorLocked} onChange={event => changeGenerationPreference("optimizeQuestion", event.currentTarget.checked)} data-testid="readweave-optimize-question" />
                                         <span><strong>{t("readweave.optimize_question")}</strong></span>
@@ -2270,7 +2354,7 @@ export default function ReadWeavePanel() {
                                     labelledBy="readweave-draft-body-label"
                                     testId="readweave-answer"
                                     followUpLabel={currentJob?.savedLinkId ? "追问" : "保存并追问"}
-                                    onFollowUp={selected => void followUpFromDraft(selected)}
+                                    onAction={(selected, type) => void followUpFromDraft(selected, type)}
                                 />
                             )}
                             {body.trim() && (
@@ -2498,11 +2582,11 @@ function ReadableBody(props: Parameters<typeof ReadWeaveAnswer>[0]) {
     return <ReadWeaveAnswer {...props} />;
 }
 
-function HoverEntry({ entry, onFollowUp }: { entry: ReadWeaveResolvedEntry; onFollowUp: (entry: ReadWeaveResolvedEntry, selected?: ReadWeaveAnswerSelection) => void }) {
+function HoverEntry({ entry, onFollowUp }: { entry: ReadWeaveResolvedEntry; onFollowUp: (entry: ReadWeaveResolvedEntry, selected?: ReadWeaveAnswerSelection, contentType?: ReadWeaveContentType) => void }) {
     return (
         <article class={`${entry.kind === "question" ? "readweave-hover-question" : "readweave-hover-term"} readweave-callout-${entry.calloutType}`} tabindex={0}>
             <div class="readweave-hover-title"><i class={CALLOUT_ICONS[entry.calloutType]} /><span>{entry.title}</span>{entry.kind === "question" && <i class="bx bx-chevron-down readweave-hover-chevron" />}</div>
-            <ReadableBody body={entry.body} revision={entry.revision} onFollowUp={entry.depth < READWEAVE_MAX_FOLLOW_UP_DEPTH ? selected => onFollowUp(entry, selected) : undefined} className={entry.kind === "question" ? "readweave-hover-answer" : "readweave-hover-definition"} />
+            <ReadableBody body={entry.body} revision={entry.revision} onAction={entry.depth < READWEAVE_MAX_FOLLOW_UP_DEPTH ? (selected, type) => onFollowUp(entry, selected, type) : undefined} className={entry.kind === "question" ? "readweave-hover-answer" : "readweave-hover-definition"} />
         </article>
     );
 }
@@ -2554,7 +2638,7 @@ function SavedEntryTree({
     busy: boolean;
     onEdit: (entry: ReadWeaveResolvedEntry) => void;
     onDelete: (entry: ReadWeaveResolvedEntry) => void;
-    onFollowUp: (entry: ReadWeaveResolvedEntry, selected?: ReadWeaveAnswerSelection) => void;
+    onFollowUp: (entry: ReadWeaveResolvedEntry, selected?: ReadWeaveAnswerSelection, contentType?: ReadWeaveContentType) => void;
 }) {
     const ids = new Set(entries.map(entry => entry.linkId));
     const roots = entries.filter(entry => !entry.parentLinkId || !ids.has(entry.parentLinkId));
@@ -2567,7 +2651,7 @@ function SavedEntryTree({
                     busy={busy}
                     onEdit={() => onEdit(entry)}
                     onDelete={() => onDelete(entry)}
-                    onFollowUp={selected => onFollowUp(entry, selected)}
+                    onFollowUp={(selected, type) => onFollowUp(entry, selected, type)}
                 />
                 {children.length > 0 && (
                     <div class="readweave-entry-tree-children">
@@ -2591,10 +2675,10 @@ function SavedEntry({
     busy: boolean;
     onEdit: () => void;
     onDelete: () => void;
-    onFollowUp: (selected?: ReadWeaveAnswerSelection) => void;
+    onFollowUp: (selected?: ReadWeaveAnswerSelection, contentType?: ReadWeaveContentType) => void;
 }) {
     return (
-        <article class={`readweave-entry readweave-callout-${entry.calloutType}`} tabindex={0}>
+        <article class={`readweave-entry readweave-callout-${entry.calloutType}`} tabindex={0} data-link-id={entry.linkId}>
             <div class="readweave-entry-title">
                 <span><i class={CALLOUT_ICONS[entry.calloutType]} /><span class="readweave-entry-type">{readWeaveContentTypeLabel(entry.contentType ?? (entry.kind === "term" ? "definition" : "problem"))}</span>{entry.title}</span>
                 <span class="readweave-entry-heading-actions">
@@ -2614,7 +2698,7 @@ function SavedEntry({
                 </span>
             </div>
             <div class="readweave-entry-detail">
-                <ReadableBody body={entry.body} revision={entry.revision} onFollowUp={entry.depth < READWEAVE_MAX_FOLLOW_UP_DEPTH ? onFollowUp : undefined} className="readweave-entry-body" />
+                <ReadableBody body={entry.body} revision={entry.revision} onAction={entry.depth < READWEAVE_MAX_FOLLOW_UP_DEPTH ? (selected, type) => onFollowUp(selected, type) : undefined} className="readweave-entry-body" />
                 <EvidenceSources sources={entry.evidenceSources} claims={entry.claims} />
             </div>
         </article>
@@ -2672,7 +2756,7 @@ interface AnchorInteractionOptions {
     generationJobs: ReadWeaveGenerationJob[];
     dataReady: boolean;
     activeAnchorId?: string;
-    onSelect: (selection: AnchorSelection, preferredKind?: ReadWeaveObjectKind) => Promise<ConfirmedGenerationSelection>;
+    onSelect: (selection: AnchorSelection, preferredKind?: ReadWeaveObjectKind, preferredContentType?: ReadWeaveContentType) => Promise<ConfirmedGenerationSelection>;
     onSelectionPreview: (selection: AnchorSelection) => void;
     onStatus: (status: string | undefined) => void;
     onHover: (entries: ReadWeaveResolvedEntry[], rect: DOMRect, locked: boolean, avoidRect?: DOMRect) => void;
@@ -2686,7 +2770,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
     const activeAnchorRef = useRef<string>();
     const hoveredAnchorRef = useRef<string>();
     const suppressedAnchorRef = useRef<string>();
-    const pendingSelectionActionsRef = useRef<Partial<Record<ReadWeaveObjectKind, { excerpt: string; action: () => Promise<ConfirmedGenerationSelection> }>>>({});
+    const pendingSelectionActionsRef = useRef<Partial<Record<ReadWeaveContentType, { excerpt: string; action: () => Promise<ConfirmedGenerationSelection> }>>>({});
 
     useEffect(() => {
         const { noteId, noteContext } = optionsRef.current;
@@ -2898,6 +2982,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             }
             const nativeRange = nativeSelection.getRangeAt(0).cloneRange();
             const excerpt = nativeRange.toString();
+            const questionExcerpt = readWeaveSelectionTextForRange(nativeRange) || excerpt;
             const common = nativeRange.commonAncestorContainer instanceof Element ? nativeRange.commonAncestorContainer : nativeRange.commonAncestorContainer.parentElement;
             const root = common?.closest<HTMLElement>(CONTENT_ROOT_SELECTOR);
             if (!root || !excerpt) {
@@ -2932,7 +3017,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             const interactionRoot = root;
             const interactionBlock = block;
             const interactionModelRange = modelRange;
-            const fragments = collectFragments(interactionRoot, interactionBlock, excerpt);
+            const fragments = collectFragments(interactionRoot, interactionBlock, questionExcerpt);
             const sourceLocator = readWeaveSourceLocatorForRange(interactionRoot, interactionBlock, nativeRange, BLOCK_SELECTOR);
             pendingSelectionActionsRef.current = {};
 
@@ -2940,6 +3025,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
                 anchorId: "rw_selection_preview",
                 anchorType: "range",
                 excerpt,
+                questionExcerpt,
                 fragments,
                 sourceLocator,
                 readonly: mode === "readonly",
@@ -2967,13 +3053,13 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
             actionRange = nativeRange.cloneRange();
             actionBubble.className = "readweave-selection-actions";
             actionBubble.setAttribute("role", "toolbar");
-            for (const preferredKind of ["question", "term"] as ReadWeaveObjectKind[]) {
+            for (const { contentType: preferredContentType, label, icon } of READWEAVE_SELECTION_ACTIONS) {
+                const preferredKind = readWeaveSelectionActionKind(preferredContentType);
                 const button = document.createElement("button");
                 button.type = "button";
-                button.className = preferredKind === "question" ? "bx bx-message-square-add" : "bx bx-book-open";
-                const label = preferredKind === "question" ? t("readweave.ask_action") : t("readweave.define_action");
-                button.textContent = label;
-                button.setAttribute("aria-label", label);
+                button.innerHTML = `<i class="${icon}" aria-hidden="true"></i><span></span>`;
+                button.querySelector("span")!.textContent = label;
+                button.setAttribute("aria-label", preferredContentType === "problem" ? t("readweave.ask_action") : preferredContentType === "definition" ? t("readweave.define_action") : label);
                 let activation: Promise<ConfirmedGenerationSelection> | undefined;
                 function activate(buttonEvent: Event): Promise<ConfirmedGenerationSelection> {
                     buttonEvent.preventDefault();
@@ -3005,6 +3091,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
                         anchorId: anchorId!,
                         anchorType: "range",
                         excerpt,
+                        questionExcerpt,
                         fragments,
                         sourceLocator,
                         readonly: mode === "readonly"
@@ -3012,7 +3099,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
                     // Finalize the editor state in the same event turn. Deferring the
                     // whole transition left the pending preview interactive for one
                     // frame, so fast typing could be overwritten when onSelect ran.
-                    activation = optionsRef.current.onSelect(finalizedSelection, preferredKind);
+                    activation = optionsRef.current.onSelect(finalizedSelection, preferredKind, preferredContentType);
                     window.requestAnimationFrame(() => {
                         decorateAnchors(interactionRoot);
                         setActiveAnchor(interactionRoot, anchorId!);
@@ -3028,7 +3115,7 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
                     event.stopPropagation();
                 });
                 button.addEventListener("click", handleActivation);
-                pendingSelectionActionsRef.current[preferredKind] = {
+                pendingSelectionActionsRef.current[preferredContentType] = {
                     excerpt,
                     action: () => activate(new Event("readweave-confirm-selection", { cancelable: true }))
                 };
@@ -3322,11 +3409,11 @@ function useAnchorInteractions(options: AnchorInteractionOptions) {
         return () => { cancelled = true; };
     }, [options.noteId, options.noteContext, options.contentElement, options.summaries, options.generationJobs, options.dataReady, options.activeAnchorId]);
 
-    return (preferredKind: ReadWeaveObjectKind, excerpt?: string): Promise<ConfirmedGenerationSelection> => {
+    return (preferredKind: ReadWeaveObjectKind, excerpt?: string, preferredContentType: ReadWeaveContentType = preferredKind === "term" ? "definition" : "problem"): Promise<ConfirmedGenerationSelection> => {
         const noteId = optionsRef.current.noteId;
         return confirmReadWeavePendingSelection(() => {
             if (optionsRef.current.noteId !== noteId) throw new Error(t("readweave.selection_sync_failed"));
-            const pending = pendingSelectionActionsRef.current[preferredKind];
+            const pending = pendingSelectionActionsRef.current[preferredContentType];
             if (pending && excerpt !== undefined && pending.excerpt !== excerpt) throw new Error(t("readweave.selection_sync_failed"));
             return pending?.action;
         });

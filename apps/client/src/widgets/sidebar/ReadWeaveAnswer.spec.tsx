@@ -76,6 +76,20 @@ describe("selectable Markdown answers", () => {
             text: "$Ax=b$",
         });
     });
+    it("maps a displayed formula with whitespace inside delimiters back to its exact source", () => {
+        const body = "前文\n\n$$\nA = B\n$$\n\n后文";
+        const root = document.createElement("div");
+        root.innerHTML = '<p>前文</p><span class="katex"><span class="katex-mathml"><math><annotation encoding="application/x-tex">A = B</annotation></math></span><span class="katex-html" aria-hidden="true">A=B</span></span><p>后文</p>';
+        const visual = root.querySelector<HTMLElement>(".katex-html")!.firstChild!;
+        const range = document.createRange();
+        range.selectNodeContents(visual);
+        expect(readWeaveAnswerSelection(root, body, range, 2)).toEqual({
+            parentRevision: 2,
+            startOffset: body.indexOf("$$"),
+            endOffset: body.indexOf("$$", body.indexOf("$$") + 2) + 2,
+            text: "$$\nA = B\n$$",
+        });
+    });
     it("keeps mixed prose and rendered math in source order without duplicate MathML text", () => {
         const body = "甲 $x^2$ 乙 $x^2$ 丙";
         const root = document.createElement("div");
@@ -106,9 +120,22 @@ describe("selectable Markdown answers", () => {
         await act(() => {
             root.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "Shift" }));
         });
-        expect(host.querySelector("button")?.textContent).toBe("保存并追问");
-        await act(() => host.querySelector("button")!.click());
+        expect(document.querySelector(".readweave-answer-selection-actions button")?.textContent).toBe("保存并追问");
+        await act(() => document.querySelector<HTMLButtonElement>(".readweave-answer-selection-actions button")!.click());
         expect(follow).toHaveBeenCalledTimes(1);
         expect(follow.mock.calls[0][0].text).toBe("可以选择答案");
+    });
+    it("offers all five actions beside a selected answer", async () => {
+        const action = vi.fn();
+        await act(() => render(<ReadWeaveAnswer body="回答中的文字" onAction={action} />, host));
+        const root = host.querySelector<HTMLElement>(".readweave-readable-body")!;
+        const range = document.createRange();
+        range.selectNodeContents(root.querySelector("p")!);
+        window.getSelection()!.addRange(range);
+        await act(() => { root.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true })); });
+        const toolbar = document.querySelector<HTMLElement>('.readweave-answer-selection-actions[role="toolbar"]')!;
+        expect(Array.from(toolbar.querySelectorAll("button"), button => button.textContent)).toEqual(["提问", "定义", "注解", "总结", "笔记"]);
+        await act(() => toolbar.querySelectorAll("button")[3].click());
+        expect(action).toHaveBeenCalledWith(expect.objectContaining({ text: "回答中的文字" }), "key-point");
     });
 });

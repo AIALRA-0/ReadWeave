@@ -274,6 +274,7 @@ function resolveLink(link: ReadWeaveLink): ReadWeaveResolvedEntry | null {
         rootLinkId: link.rootLinkId ?? link.linkId,
         depth: link.depth ?? 0,
         parentStale: parentStale || undefined,
+        answerSelection: link.answerSelection,
         kind: object.kind,
         contentType: link.contentType ?? object.contentType ?? readWeaveContentTypeForKind(object.kind),
         origin: link.origin ?? object.origin ?? readWeaveContentOriginForType(link.contentType ?? object.contentType ?? readWeaveContentTypeForKind(object.kind)),
@@ -437,7 +438,6 @@ function parentTreeFor(request: Pick<ReadWeaveSaveRequest, "articleId" | "anchor
     parentRevision?: number;
 } {
     if (!request.parentLinkId) return { depth: 0 };
-    if (request.kind !== "question") throw new ValidationError("Only questions can be nested.");
     const { link: parentLink } = getReadWeaveLink(requireId(request.parentLinkId, "parentLinkId"));
     if (parentLink.articleId !== request.articleId || parentLink.anchorId !== request.anchorId) {
         throw new ValidationError("A follow-up question must remain under the same article anchor.");
@@ -454,7 +454,7 @@ function parentTreeFor(request: Pick<ReadWeaveSaveRequest, "articleId" | "anchor
 }
 
 /** Reject unsaved/stale/cross-article parents before spending model tokens. */
-export function validateReadWeaveFollowUp(request: import("@triliumnext/commons").ReadWeaveGenerateRequest): void {
+export function validateReadWeaveFollowUp(request: import("@triliumnext/commons").ReadWeaveGenerateRequest | ReadWeaveSaveRequest): void {
     if (!request.parentLinkId) {
         if (request.answerSelection) throw new ValidationError("回答选区缺少已保存的父回答");
         return;
@@ -466,7 +466,7 @@ export function validateReadWeaveFollowUp(request: import("@triliumnext/commons"
     if (!selection) throw new ValidationError("追问需要选择父回答中的文字");
     const body = parent.displayBody ?? object.body;
     request.sourceLocator = parent.sourceLocator;
-    request.rootSourceExcerpt = parent.sourceExcerpt;
+    if ("rootSourceExcerpt" in request) request.rootSourceExcerpt = parent.sourceExcerpt;
     if (selection.parentRevision !== object.revision || !Number.isInteger(selection.startOffset)
         || !Number.isInteger(selection.endOffset) || selection.startOffset < 0 || selection.endOffset <= selection.startOffset || selection.endOffset > body.length
         || typeof selection.text !== "string" || !selection.text.trim()
@@ -486,7 +486,7 @@ export function validateReadWeaveFollowUp(request: import("@triliumnext/commons"
         ancestorId = ancestor.parentLinkId;
     }
     const article = becca.getNoteOrThrow(requireReadableArticle(request.articleId));
-    request.fragments = [
+    if ("fragments" in request) request.fragments = [
         { id: "answer-selection", role: "selected", text: selection.text },
         { id: "parent-answer", role: "previous", text: body },
         ...ancestors,
@@ -524,6 +524,7 @@ function createLink(request: ReadWeaveSaveRequest, object: ReadWeaveObject): Rea
         rootLinkId: tree.rootLinkId ?? linkId,
         depth: tree.depth,
         parentRevision: tree.parentRevision,
+        answerSelection: request.answerSelection,
         sourceExcerpt,
         sourceLocator,
         contentType: object.contentType,
@@ -554,11 +555,15 @@ export function saveReadWeaveEntry(request: ReadWeaveSaveRequest, hooks?: {
     const anchorType = requireAnchorType(request.anchorType);
     const sourceExcerpt = requireText(request.sourceExcerpt, "sourceExcerpt", 10_000);
     normalizeSourceLocator(request.sourceLocator);
+    // Legacy direct saves may carry a parent without answer offsets. New
+    // answer-selection saves must validate the exact saved parent revision.
+    if (request.answerSelection) validateReadWeaveFollowUp(request);
     validateAnchorConsistency(articleId, anchorId, anchorType, sourceExcerpt);
     parentTreeFor(request);
     if (request.kind === "term") {
         const existingDefinition = listReadWeaveLinks()
-            .filter(link => link.articleId === articleId && link.anchorId === anchorId)
+            .filter(link => link.articleId === articleId && link.anchorId === anchorId
+                && link.parentLinkId === request.parentLinkId)
             .map(resolveLink)
             .find((entry): entry is ReadWeaveResolvedEntry => entry?.kind === "term");
         if (existingDefinition) {

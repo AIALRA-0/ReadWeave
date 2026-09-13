@@ -618,6 +618,32 @@ describe("ReadWeave repository", () => {
         });
     });
 
+    it("saves every answer action under the exact saved parent selection", () => {
+        cls.init(() => {
+            const article = noteService.createNewNote({ parentNoteId: "root", title: "Follow-up actions",
+                type: "text", mime: "text/html", content: "<p>A circuit has components.</p>" }).note;
+            const base = { articleId: article.noteId, anchorId: "rw_follow_up_actions",
+                anchorType: "range" as const, sourceExcerpt: "circuit", calloutType: "note" as const };
+            const parent = saveReadWeaveEntry({ ...base, kind: "question", contentType: "problem",
+                title: "电路是什么？", body: professionalAnswer("电路由导电路径和元件构成") });
+            const selection = { parentRevision: parent.revision, startOffset: 0, endOffset: 2,
+                text: parent.body.slice(0, 2) };
+            for (const [ contentType, kind ] of [
+                [ "problem", "question" ], [ "definition", "term" ],
+                [ "annotation", "question" ], [ "key-point", "question" ], [ "note", "question" ]
+            ] as const) {
+                const child = saveReadWeaveEntry({ ...base, kind, contentType,
+                    parentLinkId: parent.linkId, answerSelection: selection,
+                    title: `${contentType} 子内容`, body: professionalAnswer(`${contentType} 的子内容解释`) });
+                expect(child).toMatchObject({ parentLinkId: parent.linkId, depth: 1,
+                    answerSelection: selection, contentType });
+            }
+            expect(() => saveReadWeaveEntry({ ...base, kind: "question", contentType: "problem",
+                parentLinkId: parent.linkId, answerSelection: { ...selection, text: "错字" },
+                title: "错误选区", body: professionalAnswer("不应保存错误选区") })).toThrow(/父回答或选中文字已变化/);
+        });
+    });
+
     it("can promote follow-up children when deleting their parent question", () => {
         cls.init(() => {
             const article = noteService.createNewNote({

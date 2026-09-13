@@ -35,7 +35,7 @@ import {
 } from "./readweave_domain_policy.js";
 import { selectReadWeaveContext } from "./readweave_engine.js";
 import { READWEAVE_CONTEXT_RULES, readWeaveCompleteContext } from "./readweave_context.js";
-import { NonRetryableReadWeaveError } from "./readweave_errors.js";
+import { NonRetryableReadWeaveError, ReadWeaveOutputLimitError } from "./readweave_errors.js";
 import {
     omitUnsupportedReadWeaveNaming,
     repairReadWeaveNamingEvidence
@@ -395,7 +395,7 @@ async function requestJson<T>(
                     && (payload as ResponsesApiResponse).incomplete_details?.reason === "max_output_tokens"
                 : (payload as CompletionResponse).choices?.[0]?.finish_reason === "length";
             if (incomplete)
-                throw new NonRetryableReadWeaveError("模型达到本次输出长度上限，未交付不完整答案；已记录本次用量");
+                throw new ReadWeaveOutputLimitError(effectiveMaxTokens, normalizedUsage?.completion_tokens);
             const content = usesResponsesApi
                 ? responseApiContent(payload as ResponsesApiResponse)
                     ?? (payload as CompletionResponse).choices?.[0]?.message?.content?.trim()
@@ -3133,8 +3133,11 @@ export async function generateUnifiedReadWeaveAnswer(
     const writerSystem = writerSystemPrompt(harness, domainProfile,
         request.contentType ?? (request.kind === "term" ? "definition" : "problem"),
         writingSkill.prompt);
-    const writerOutputTokens = request.kind === "term" ? 2_200
-        : answerPlan.steps.length === 1 ? 900 : 1_600;
+    // The answer plan, not a short fixed allowance, determines initial output
+    // space. Provider limits and the actual paid budget remain the boundaries.
+    let writerOutputTokens = Math.max(4_096,
+        answerPlan.steps.length * 1_000 + contract.answerRequirements.length * 240
+            + (request.kind === "term" ? 1_200 : 0));
     const writerRates = runtime.rates ?? readWeaveModelRates(runtime.model);
     const mandatoryIds = new Set(localSources.filter(source => source.title === "用户选择的原文片段")
         .map(source => source.sourceId));
@@ -3212,9 +3215,31 @@ export async function generateUnifiedReadWeaveAnswer(
         : `已准备 ${localSources.length} 个文章片段，未取得外部来源`);
 
     report("drafting", "正在按问题契约和证据清单生成回答");
-    let writer = await requestJson<WriterPayload>(writerSystem, preparedWriter.input,
-        writerOutputTokens, 30_000, runtime, signal, "回答生成", budget, recordUsage);
-    let generationAttempts = 1;
+    let writer: ModelCallResult<WriterPayload> | undefined;
+    let generationAttempts = 0;
+    while (!writer) {
+        generationAttempts++;
+        try {
+            writer = await requestJson<WriterPayload>(writerSystem, preparedWriter.input,
+                writerOutputTokens, 30_000, runtime, signal, "回答生成", budget, recordUsage);
+        } catch (error) {
+            if (!(error instanceof ReadWeaveOutputLimitError)) throw error;
+            const nextTokens = Math.max(writerOutputTokens + 512,
+                Math.ceil(writerOutputTokens * 1.5));
+            const nextReservation = readWeaveModelReservation(writerSystem, preparedWriter.input,
+                nextTokens, writerRates);
+            if (nextReservation > budget.remainingCny && budgetCny < 0.10) {
+                budgetCny = 0.10;
+                budget.raiseLimit(budgetCny);
+            }
+            if (nextReservation > budget.remainingCny) {
+                report("checking", "回答输出被截断；自动增大输出空间需要超过本题费用上限", [error.message]);
+                throw new NonRetryableReadWeaveError("当前费用上限不足以安全完成被截断的回答；没有交付不完整文本");
+            }
+            report("drafting", `模型输出使用 ${error.usedTokens ?? "未知"} 个令牌，达到预留的 ${writerOutputTokens} 个；同一证据包自动增至 ${nextTokens} 个并续写完整回答`);
+            writerOutputTokens = nextTokens;
+        }
+    }
     let body = typeof writer.value.body === "string" ? writer.value.body.trim() : "";
     if (request.contentType !== "key-point") {
         for (let closureRound = 0; closureRound < 2; closureRound++) {

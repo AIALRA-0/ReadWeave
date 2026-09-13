@@ -268,7 +268,7 @@ test("ReadWeave passes the whole article, remembers checkboxes and generates dir
     expect(errors).toEqual([]);
 });
 
-test("ReadWeave saves selected answer parents and opens three independent follow-up windows", async ({ page, context }) => {
+test("ReadWeave follows selected answers through the same editor and a separate parent window", async ({ page, context }) => {
     test.setTimeout(120_000);
     const errors: string[] = [];
     const starts: Record<string, unknown>[] = [];
@@ -286,10 +286,9 @@ test("ReadWeave saves selected answer parents and opens three independent follow
     await panel.getByTestId("readweave-generate").click();
     const mainAnswer = panel.locator('.readweave-readable-body[data-testid="readweave-answer"]');
     await expect(mainAnswer).toBeVisible();
-    const mainHtml = await mainAnswer.innerHTML();
-    const mainQuestion = await panel.getByRole("textbox", {name:"Question", exact:true}).inputValue();
     await panel.getByTestId("readweave-auto-apply-plan").uncheck();
     async function selectAnswer(answer: Locator) {
+        await answer.evaluate(element => element.scrollIntoView({ block: "start" }));
         await answer.evaluate(element => {
             const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
             let text = walker.nextNode();
@@ -303,6 +302,7 @@ test("ReadWeave saves selected answer parents and opens three independent follow
     }
     const renderedFormula = mainAnswer.locator(".katex-html").first();
     await expect(renderedFormula).toBeVisible();
+    await renderedFormula.scrollIntoViewIfNeeded();
     await renderedFormula.evaluate((element) => {
         const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
         const text = walker.nextNode();
@@ -317,31 +317,44 @@ test("ReadWeave saves selected answer parents and opens three independent follow
             new KeyboardEvent("keyup", { key: "Shift", bubbles: true })
         );
     });
-    await panel.getByRole("button", {name:"保存并追问", exact:true}).click();
+    const answerActions = page.locator(".readweave-answer-selection-actions");
+    await expect(answerActions.getByRole("button")).toHaveCount(5);
+    await answerActions.getByRole("button", {name:"提问",exact:true}).click();
     for (let level=1; level<=3; level++) {
-        const floating = page.getByRole("dialog", {name:`第 ${level} 层追问`, exact:true});
+        const floating = page.getByTestId("readweave-parent-window");
         await expect(floating).toBeVisible();
         expect(await floating.evaluate(element => !!element.closest("#readweave-panel"))).toBe(false);
-        await floating.getByRole("button", {name:"生成流程计划",exact:true}).click();
-        await expect(floating.getByTestId("readweave-follow-up-plan")).toBeVisible();
+        if (level === 1) {
+            const csrfToken = await page.evaluate(() => (window as unknown as { glob: { csrfToken: string } }).glob.csrfToken);
+            const missingSelection = await page.request.post(new URL("/api/readweave/entries", page.url()).toString(), {
+                headers: { "x-csrf-token": csrfToken }, data: { parentLinkId: starts[0].parentLinkId ?? "missing-selection" }
+            });
+            expect(missingSelection.status()).toBe(400);
+        }
+        await expect(panel.getByTestId("readweave-auto-apply-plan")).not.toBeChecked();
+        await panel.getByTestId("readweave-generate").click();
+        await expect(panel.getByTestId("readweave-answer-plan-editor")).toBeVisible();
         expect(starts).toHaveLength(level);
-        await floating.getByRole("button", {name:"生成回答",exact:true}).click();
-        const answer = floating.locator(
-            ".readweave-follow-up-content > .readweave-answer-container > .readweave-readable-body",
-        );
+        await panel.getByTestId("readweave-generate").click();
+        const answer = panel.locator('.readweave-readable-body[data-testid="readweave-answer"]');
         await expect(answer).toBeVisible();
-        expect(await mainAnswer.innerHTML()).toBe(mainHtml);
-        await expect(panel.getByRole("textbox", {name:"Question",exact:true})).toHaveValue(mainQuestion);
+        await expect(panel.locator(".readweave-follow-up-context")).toContainText(`Level ${level} follow-up`);
+        if (level === 1) {
+            await panel.getByTestId("readweave-open-chapter-map").click();
+            const map = page.getByRole("dialog", { name: "文章章节思维导图" });
+            await expect(map).toBeVisible();
+            await expect(map.getByTestId("readweave-chapter-map-canvas")).toBeVisible();
+            await expect(map.locator(`me-tpc[data-nodeid="meentry:${starts[1].parentLinkId}"]`)).toBeVisible();
+            await map.getByRole("button", { name: "关闭思维导图" }).click();
+            await expect(map).toBeHidden();
+        }
         await selectAnswer(answer);
         if (level<3) {
-            const followUp = floating.getByRole("button", { name: /^(保存并追问|追问)$/u });
-            await expect(followUp).toBeVisible();
-            await followUp.click();
+            await expect(answerActions.getByRole("button")).toHaveCount(5);
+            await answerActions.getByRole("button", {name:"提问",exact:true}).click();
         }
         else {
-            await expect(floating.getByRole("button", {name:"保存并追问",exact:true})).toHaveCount(0);
-            await floating.getByRole("button", {name:"保存回答",exact:true}).click();
-            await expect(floating).toContainText("已保存");
+            await ensureGeneratedItemSaved(panel);
         }
     }
     expect(starts).toHaveLength(4);
@@ -349,6 +362,11 @@ test("ReadWeave saves selected answer parents and opens three independent follow
     expect(starts.slice(1).every(request => request.autoApplyPlan === false
         && (request.answerPlan as { reviewStatus?: string })?.reviewStatus === "approved")).toBe(true);
     expect((starts[1].answerSelection as { text?: string }).text).toBe("$C = A B$");
+    await panel.getByTestId("readweave-open-chapter-map").click();
+    const map = page.getByRole("dialog", { name: "文章章节思维导图" });
+    await map.locator(`me-tpc[data-nodeid="meentry:${starts[1].parentLinkId}"]`).click();
+    await expect(map).toBeHidden();
+    await expect(panel.locator(`.readweave-entry[data-link-id="${starts[1].parentLinkId}"]`)).toBeVisible();
     expect(await editor.innerText()).toBe(source);
     expect(errors).toEqual([]);
 });
@@ -707,7 +725,7 @@ test("ReadWeave completes range anchoring, reviewed Q&A, term definition, reuse,
     const chunks: Buffer[] = [];
     for await (const chunk of stream) chunks.push(Buffer.from(chunk));
     const exported = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    const schema = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), "../../docs/readlayer/schemas/readweave-index-export.schema.json"), "utf8"));
+    const schema = JSON.parse(fs.readFileSync(path.resolve(__dirname, "../../../docs/readlayer/schemas/readweave-index-export.schema.json"), "utf8"));
     const ajv = new Ajv2020({ strict: false });
     addFormats(ajv as unknown as Parameters<typeof addFormats>[0]);
     const validate = ajv.compile(schema);
@@ -855,6 +873,49 @@ test("ReadWeave supports read-only questions without changing the article", asyn
     }).toBe(articleBefore);
     expect(articleDataPuts).toEqual([]);
     page.off("request", onRequest);
+});
+
+test("ReadWeave copies rendered article math as one editable TeX formula", async ({ page, context }) => {
+    test.setTimeout(90_000);
+    const app = new App(page, context);
+    await gotoReadWeave(app, page);
+    const title = uniqueTitle("ReadWeave E2E · Math selection");
+    await createTextNote(app, title, "公式选区初始化");
+    const noteId = await page.evaluate(() => (window as unknown as {
+        glob: { appContext: { tabManager: { getActiveContext: () => { noteId: string } } } }
+    }).glob.appContext.tabManager.getActiveContext().noteId);
+    const origin = new URL(page.url()).origin;
+    const csrfToken = await page.evaluate(() => (window as unknown as { glob: { csrfToken: string } }).glob.csrfToken);
+    const html = '<p>误差函数 <span class="math-tex">\\(f(\\phi(x_i;w),y_i)\\)</span> 是什么</p>';
+    const saved = await page.request.put(`${origin}/api/notes/${encodeURIComponent(noteId)}/data`, {
+        headers: { "x-csrf-token": csrfToken }, data: { content: html, attachments: [] }
+    });
+    expect(saved.ok()).toBe(true);
+    const readOnly = await page.request.post(`${origin}/api/notes/${encodeURIComponent(noteId)}/attributes`, {
+        headers: { "x-csrf-token": csrfToken }, data: { type: "label", name: "readOnly", value: "true" }
+    });
+    expect(readOnly.ok()).toBe(true);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    const paragraph = page.locator('.note-detail-readonly-text-content[data-readweave-content-root="readonly"] p', { hasText: "误差函数" });
+    await expect(paragraph.locator(".katex-html")).toBeVisible({ timeout: 20_000 });
+    await paragraph.evaluate(element => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const selection = window.getSelection()!;
+        selection.removeAllRanges();
+        selection.addRange(range);
+        document.dispatchEvent(new Event("selectionchange"));
+        element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    });
+    const panel = app.sidebar.locator("#readweave-panel");
+    const formula = "$f(\\phi(x_i;w),y_i)$";
+    await expect(panel.getByTestId("readweave-question")).toHaveValue(new RegExp("f\\(\\\\phi\\(x_i;w\\),y_i\\)"));
+    const question = await panel.getByTestId("readweave-question").inputValue();
+    expect(question).toContain(formula);
+    expect(question.match(/f\(\\phi\(x_i;w\),y_i\)/gu)).toHaveLength(1);
+    await expect(panel.getByTestId("readweave-question-math-preview").locator(".katex-html")).toBeVisible();
+    const after = await page.request.get(`${origin}/api/notes/${encodeURIComponent(noteId)}/blob`);
+    expect(((await after.json()) as { content: string }).content).toBe(html);
 });
 
 test("ReadWeave does not reapply an identical editor blob after saving an anchor", async ({ page, context }) => {

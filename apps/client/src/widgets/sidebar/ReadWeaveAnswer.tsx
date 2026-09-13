@@ -1,7 +1,9 @@
-import { KATEX_MACROS, type ReadWeaveAnswerSelection } from "@triliumnext/commons";
+import { KATEX_MACROS, type ReadWeaveAnswerSelection, type ReadWeaveContentType } from "@triliumnext/commons";
 import DOMPurify from "dompurify";
 import { Marked } from "marked";
+import { createPortal } from "preact/compat";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
+import { READWEAVE_SELECTION_ACTIONS } from "./readweave_selection_actions.js";
 
 const markdown = new Marked({ breaks: true, gfm: true });
 
@@ -30,6 +32,7 @@ function decodedSource(body: string) {
 
 function renderedUnits(root: HTMLElement, body: string): ReadWeaveRenderedUnit[] {
     const { decoded, positions } = decodedSource(body);
+    const formulaSources = Array.from(body.matchAll(/\$\$([\s\S]*?)\$\$|\$([^$\n]*?)\$/gu));
     const units: ReadWeaveRenderedUnit[] = [];
     let decodedCursor = 0;
     let sourceCursor = 0;
@@ -41,18 +44,16 @@ function renderedUnits(root: HTMLElement, body: string): ReadWeaveRenderedUnit[]
         if (node instanceof Element && node.classList.contains("katex")) {
             const formula = node.querySelector("annotation[encoding='application/x-tex']")
                 ?.textContent ?? "";
-            const candidates = [ `$$${formula}$$`, `$${formula}$` ]
-                .map(source => ({ source, index: body.indexOf(source, sourceCursor) }))
-                .filter(candidate => candidate.index >= 0)
-                .sort((left, right) => left.index - right.index);
-            const candidate = candidates[0];
+            const candidate = formulaSources
+                .find(match => match.index >= sourceCursor
+                    && (match[1] ?? match[2]).trim() === formula.trim());
             if (candidate) {
                 units.push({
                     node,
                     start: candidate.index,
-                    end: candidate.index + candidate.source.length,
+                    end: candidate.index + candidate[0].length,
                 });
-                sourceCursor = candidate.index + candidate.source.length;
+                sourceCursor = candidate.index + candidate[0].length;
                 decodedCursor = decodedOffset(sourceCursor);
             }
             return;
@@ -126,6 +127,7 @@ export function ReadWeaveAnswer({
     revision = 0,
     followUpLabel = "追问",
     onFollowUp,
+    onAction,
 }: {
     body: string;
     className?: string;
@@ -135,9 +137,13 @@ export function ReadWeaveAnswer({
     revision?: number;
     followUpLabel?: string;
     onFollowUp?: (selection: ReadWeaveAnswerSelection) => void;
+    onAction?: (selection: ReadWeaveAnswerSelection, contentType: ReadWeaveContentType) => void;
 }) {
     const root = useRef<HTMLDivElement>(null);
+    const toolbar = useRef<HTMLDivElement>(null);
+    const selectionRect = useRef<DOMRect>();
     const [selected, setSelected] = useState<ReadWeaveAnswerSelection>();
+    const [actionPosition, setActionPosition] = useState({ left: 8, top: 8 });
     const html = useMemo(
         () =>
             DOMPurify.sanitize(markdown.parse(body) as string, {
@@ -147,6 +153,16 @@ export function ReadWeaveAnswer({
         [body],
     );
     useEffect(() => setSelected(undefined), [body, revision]);
+    useLayoutEffect(() => {
+        if (!selected || !toolbar.current || !selectionRect.current) return;
+        const rect = selectionRect.current;
+        const width = toolbar.current.offsetWidth || Math.min(360, window.innerWidth - 16);
+        const height = toolbar.current.offsetHeight || 48;
+        const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+        const above = rect.top - height - 8;
+        const top = above >= 8 ? above : Math.min(window.innerHeight - height - 8, rect.bottom + 8);
+        setActionPosition({ left, top: Math.max(8, top) });
+    }, [selected]);
     useLayoutEffect(() => {
         const container = root.current;
         if (!container) return;
@@ -174,14 +190,26 @@ export function ReadWeaveAnswer({
     }, [html, body]);
     const capture = useCallback(() => {
         const selection = window.getSelection();
-        if (!root.current || !selection?.rangeCount) return;
+        if (!root.current || !selection?.rangeCount) {
+            setSelected(undefined);
+            return;
+        }
+        const range = selection.getRangeAt(0);
         const value = readWeaveAnswerSelection(
             root.current,
             body,
-            selection.getRangeAt(0),
+            range,
             revision,
         );
-        if (value) setSelected(value);
+        if (value) {
+            const rect = typeof range.getBoundingClientRect === "function" ? range.getBoundingClientRect() : new DOMRect();
+            if (rect.bottom < 0 || rect.top > window.innerHeight || rect.right < 0 || rect.left > window.innerWidth) {
+                setSelected(undefined);
+                return;
+            }
+            selectionRect.current = rect;
+        }
+        setSelected(value);
     }, [body, revision]);
     useEffect(() => {
         let frame = 0;
@@ -190,8 +218,12 @@ export function ReadWeaveAnswer({
             frame = requestAnimationFrame(capture);
         };
         document.addEventListener("selectionchange", changed);
+        document.addEventListener("scroll", changed, true);
+        window.addEventListener("resize", changed);
         return () => {
             document.removeEventListener("selectionchange", changed);
+            document.removeEventListener("scroll", changed, true);
+            window.removeEventListener("resize", changed);
             cancelAnimationFrame(frame);
         };
     }, [capture]);
@@ -210,18 +242,24 @@ export function ReadWeaveAnswer({
                 // eslint-disable-next-line react/no-danger
                 dangerouslySetInnerHTML={{ __html: html }}
             />
-            {selected && onFollowUp && (
-                <button
-                    type="button"
-                    class="btn btn-sm readweave-answer-follow-up"
-                    onPointerDown={(event) => event.preventDefault()}
-                    onClick={() => {
-                        onFollowUp(selected);
-                        setSelected(undefined);
-                    }}
-                >
-                    {followUpLabel}
-                </button>
+            {selected && (onAction || onFollowUp) && createPortal(
+                <div ref={toolbar} class="readweave-answer-selection-actions readweave-selection-actions"
+                    role="toolbar" aria-label="回答选区操作" style={actionPosition}>
+                    {(onAction ? READWEAVE_SELECTION_ACTIONS : READWEAVE_SELECTION_ACTIONS.slice(0, 1)).map(action => (
+                        <button type="button" key={action.contentType}
+                            class="readweave-answer-follow-up"
+                            aria-label={action.label}
+                            onPointerDown={event => event.preventDefault()}
+                            onClick={() => {
+                                if (onAction) onAction(selected, action.contentType);
+                                else onFollowUp?.(selected);
+                                setSelected(undefined);
+                            }}>
+                            <i class={action.icon} aria-hidden="true" />
+                            <span>{onAction ? action.label : followUpLabel}</span>
+                        </button>
+                    ))}
+                </div>, document.body
             )}
         </div>
     );

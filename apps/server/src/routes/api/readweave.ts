@@ -80,7 +80,10 @@ function getObject(req: Request<{ objectId: string }>) {
 }
 
 function saveEntry(req: Request) {
-    return { entry: saveReadWeaveEntry(req.body as ReadWeaveSaveRequest) };
+    const body = req.body as ReadWeaveSaveRequest;
+    if (body.parentLinkId && !body.answerSelection)
+        throw new ValidationError("追问必须携带已保存父回答中的文字选区");
+    return { entry: saveReadWeaveEntry(body) };
 }
 
 function getImpact(req: Request<{ objectId: string }>) {

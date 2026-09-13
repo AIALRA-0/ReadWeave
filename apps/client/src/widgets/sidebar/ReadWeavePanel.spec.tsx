@@ -124,6 +124,14 @@ describe("ReadWeave panel generation actions", () => {
         await select("Second selection");
         expect(selectedType()).toBe("问题");
     });
+    it("offers five floating actions and keeps the selected content type", async () => {
+        await select("First selection");
+        const actions = Array.from(document.querySelectorAll<HTMLButtonElement>(".readweave-selection-actions button"));
+        expect(actions).toHaveLength(5);
+        expect(actions.map(button => button.textContent)).toEqual(["提问", "定义", "注解", "总结", "笔记"]);
+        await act(() => actions[3].click());
+        await vi.waitFor(() => expect(host.querySelector('.readweave-content-type-selector [aria-pressed="true"]')?.textContent).toBe("总结"));
+    });
     it("restores draft preferences without overwriting defaults, and sends those draft values", async () => {
         state.root!.querySelector("p")!.innerHTML = '<span data-readweave-range-anchor-id="saved">First selection</span>';
         sessionStorage.setItem("readweave:draft:article:saved:root:latest", JSON.stringify({

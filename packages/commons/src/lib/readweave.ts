@@ -389,6 +389,7 @@ export interface ReadWeaveLink {
     rootLinkId?: string;
     depth?: number;
     parentRevision?: number;
+    answerSelection?: ReadWeaveAnswerSelection;
     sourceExcerpt: string;
     sourceLocator?: ReadWeaveSourceLocator;
     displayTitle?: string;
@@ -409,6 +410,7 @@ export interface ReadWeaveResolvedEntry {
     rootLinkId?: string;
     depth: number;
     parentStale?: boolean;
+    answerSelection?: ReadWeaveAnswerSelection;
     kind: ReadWeaveObjectKind;
     contentType?: ReadWeaveContentType;
     origin?: ReadWeaveContentOrigin;
@@ -552,6 +554,7 @@ export interface ReadWeaveSaveRequest {
     contentType?: ReadWeaveContentType;
     origin?: ReadWeaveContentOrigin;
     parentLinkId?: string;
+    answerSelection?: ReadWeaveAnswerSelection;
     title: string;
     body: string;
     sourceExcerpt: string;

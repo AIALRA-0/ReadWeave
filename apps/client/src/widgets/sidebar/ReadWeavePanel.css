@@ -217,6 +217,8 @@
     position: fixed;
     z-index: 10020;
     display: flex;
+    flex-wrap: wrap;
+    max-width: min(360px, calc(100vw - 16px));
     gap: 4px;
     padding: 5px;
     border: 1px solid var(--main-border-color);
@@ -238,10 +240,15 @@
     color: inherit;
     font-family: inherit;
     font-size: 0.82rem;
+    white-space: nowrap;
 }
 
 .readweave-selection-actions button:hover {
     background: var(--accented-background-color);
+}
+
+.readweave-answer-selection-actions {
+    z-index: 10030;
 }
 
 .readweave-panel {
@@ -309,6 +316,57 @@
     padding: 8px 12px;
     cursor: move;
     touch-action: none;
+}
+
+.readweave-parent-window {
+    max-width: calc(100vw - 16px);
+}
+
+.readweave-parent-window .readweave-follow-up-content {
+    max-height: calc(100vh - 145px);
+    overflow: auto;
+}
+
+.readweave-map-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 10040;
+    display: grid;
+    place-items: center;
+    padding: 12px;
+    background: rgb(0 0 0 / 55%);
+}
+
+.readweave-chapter-map {
+    width: min(1100px, 100%);
+    height: min(760px, calc(100vh - 24px));
+    display: flex;
+    flex-direction: column;
+    border-radius: 10px;
+    background: var(--main-background-color);
+    color: var(--main-text-color);
+    overflow: hidden;
+}
+
+.readweave-chapter-map > header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 14px;
+}
+
+.readweave-chapter-map-canvas {
+    flex: 1;
+    min-height: 0;
+}
+
+@media (max-width: 700px) {
+    .readweave-parent-window {
+        width: min(440px, calc(100vw - 16px));
+        max-height: 42vh;
+    }
+
+    .readweave-chapter-map { height: calc(100vh - 24px); }
 }
 
 .readweave-follow-up-content {

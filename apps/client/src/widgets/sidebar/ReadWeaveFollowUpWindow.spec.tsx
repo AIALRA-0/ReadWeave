@@ -91,9 +91,11 @@ describe("independent follow-up lifecycle", () => {
         await act(() => {
             answer()!.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true, key: "Shift" }));
         });
-        await vi.waitFor(() => expect(buttons().find(button => button.textContent === "保存并追问"))
+        const portalButton = () => Array.from(document.querySelectorAll<HTMLButtonElement>(
+            ".readweave-answer-selection-actions button")).find(button => button.textContent === "保存并追问");
+        await vi.waitFor(() => expect(portalButton())
             .toBeDefined());
-        await act(async () => { buttons().find(button => button.textContent === "保存并追问")!.click(); });
+        await act(async () => { portalButton()!.click(); });
         await vi.waitFor(() => expect(onOpen).toHaveBeenCalledTimes(1));
         expect(api.post.mock.calls.filter(([ url ]) => String(url).endsWith("/commit"))).toHaveLength(1);
         expect(onOpen.mock.calls[0][0]).toMatchObject({ linkId: "saved-child", revision: 4, depth: 1 });
