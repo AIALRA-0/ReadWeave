@@ -1,6 +1,6 @@
 import { Lexer, type Tokens } from "marked";
 
-export const READWEAVE_FORMAT_VERSION = "format-2026-09-v5";
+export const READWEAVE_FORMAT_VERSION = "format-2026-09-v6";
 
 function normalizeSimpleMathNotation(value: string): string {
     const scientific = new RegExp(
@@ -121,7 +121,7 @@ export interface ReadWeaveNameReviewTarget {
     replacement?: string;
 }
 
-const ENGLISH_NAME = /^[A-Za-z][A-Za-z0-9'’ .&+/#_-]*$/u;
+const ENGLISH_NAME = /^[A-Za-z][A-Za-z0-9'’ ,.&+/#_-]*$/u;
 const CHINESE_ALIAS = /^(?:(?:也称|又称|亦称|别称|简称|中文名为|中文称为|中文名|中文称|也叫|又叫)[ \t]*[\p{Script=Han}][\p{Script=Han}· \t]*)(?:[，,、][ \t]*(?:(?:也称|又称|亦称|简称|也叫|又叫)[ \t]*)?[\p{Script=Han}][\p{Script=Han}· \t]*)*$/u;
 const ENGLISH_ALIAS = /^(?:也称|又称|亦称|别称|简称|也叫|又叫)[ \t]+[A-Za-z][A-Za-z'’ .&+/#_-]*$/u;
 
@@ -141,9 +141,19 @@ export function readWeaveNameReviewTargets(
             const mixed = /\p{Script=Han}/u.test(content) && /[A-Za-z]/u.test(content);
             // A Latin-only alias or trailing abbreviation is still extra name
             // content. Review it without guessing a replacement relationship.
-            const extra = /^[A-Za-z][A-Za-z'’ .&+/#_-]{2,}[，,；;、]\s*\S/u.test(content);
+            const parts = content.split(/[，,；;、]/u).map(part => part.trim());
+            const tail = parts.at(-1) ?? "";
+            // A comma may be part of the official name (e.g. University of
+            // California, Los Angeles). A trailing initialism or a second
+            // one-word label is a separate field and still needs review.
+            const extra = parts.length > 1 && (
+                /^[A-Z][A-Z0-9+/#_-]{1,15}$/u.test(tail)
+                || /^(?:也称|又称|亦称|别称|简称|中文名|也叫|又叫)/u.test(tail)
+                || (parts.length === 2 && parts.every(part => /^[A-Za-z][A-Za-z'’.-]*$/u.test(part)))
+            );
             if (!mixed && !extra && !ENGLISH_NAME.test(content)) continue;
-            const alias = content.match(/^(.+?)[，,；;][ \t]*(.+)$/u);
+            const alias = content.match(/^(.+?)[，,；;][ \t]*((?:也称|又称|亦称|别称|简称|中文名|也叫|又叫)[^\n]+)$/u)
+                ?? (extra ? content.match(/^(.+)[，,；;][ \t]*([^，,；;]+)$/u) : null);
             const movable = alias && ENGLISH_NAME.test(alias[1].trim()) && (CHINESE_ALIAS.test(alias[2]) || ENGLISH_ALIAS.test(alias[2]))
                 && !/(?:但|并非|不等同|不是|用于|因为|如果)/u.test(alias[2]);
             const start = range.start + match.index;
@@ -343,7 +353,7 @@ export function formatReadWeaveMarkdown(value: unknown): string {
         String.raw`^([ \t]*(?:[-*+] )?)([A-Za-z][A-Za-z -]{0,99})[（(]`
         + String.raw`([\p{Script=Han}][\p{Script=Han} ]{0,49})[)）][：:]`, "gmu"
     );
-    return formatReadWeaveCodeCopies(groupBilingualDefinitions(mapReadWeaveProse(formatReadWeaveNameParentheses(value), (text) =>
+    const normalized = formatReadWeaveCodeCopies(groupBilingualDefinitions(mapReadWeaveProse(formatReadWeaveNameParentheses(value), (text) =>
         normalizeSimpleMathNotation(text)
             .replace(fullName, "$1 $3（$2）")
             .replace(englishFirst, "$1$3（$2）：")
@@ -403,6 +413,21 @@ export function formatReadWeaveMarkdown(value: unknown): string {
                                 .join("\n")}`
             )
     ).trim()));
+    return formatReadWeaveIndependentParallel(normalized);
+}
+
+/** Split independently checkable long reasons without paraphrasing either fact.
+ * Ambiguous semicolon clauses are reported for local review, not blindly split. */
+export function formatReadWeaveIndependentParallel(body: string): string {
+    return mapReadWeaveProse(body, prose => prose.replace(/^[^\n]+$/gmu, line => {
+        const match = line.match(/^([^\n；]{1,60}：)([^\n；]{8,})；([^\n；]{8,})$/u);
+        if (match && /(?:两类|两项|两个|两方面|两部分|几类|几项|主要有|包括|包含|分别)/u.test(match[1]))
+            return `${match[1]}\n\n- ${match[2].trim()}\n- ${match[3].trim()}`;
+        const independent = line.match(/^([^\n；]{18,})；((?:此外|另外|另一方面|与此同时|其次|再者)[^\n；]{8,})$/u);
+        if (independent && !/^\s*[-*+]\s+(?:[A-Z][A-Z0-9-]*\s+)?[^：\n]+（[^）\n]+）：/u.test(line))
+            return `- ${independent[1].trim()}\n- ${independent[2].trim()}`;
+        return line;
+    }));
 }
 
 export interface ReadWeaveTextPatch {
@@ -491,9 +516,21 @@ export function applyReadWeaveFormatPatches(body: string, patches: ReadWeaveText
             throw new Error("格式补丁与当前正文不一致，未应用修改");
         }
         // A format repair may change layout/punctuation, never lexical facts.
-        const words = (value: string) =>
-            value.replace(/^[ \t]*[-*+]\s+/gmu, "").replace(/[\s，,；;。:：]/gu, "");
-        if (words(patch.original) !== words(patch.replacement))
+        const words = (value: string) => {
+            const lexical = value.replace(/^[ \t]*[-*+]\s+/gmu, "")
+                .replace(/[\s，,；;。:：]/gu, "");
+            return patch.rule === "FMT-local" ? lexical.toLocaleLowerCase() : lexical;
+        };
+        const acronym = patch.original.match(/（([A-Za-z][^（）\n]*?)[，,][ \t]*([A-Z][A-Z0-9+/#_-]{1,15})）/u);
+        const safeAcronymMove = patch.rule === "FMT-local" && acronym && (() => {
+            const [originalPair, englishName, abbreviation] = acronym;
+            const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+            const canonical = new RegExp(`${escaped(abbreviation)}\\s+[\\p{Script=Han}]{2,30}（${escaped(englishName)}）`, "u");
+            return canonical.test(patch.replacement)
+                && words(patch.original.replace(originalPair, `（${englishName}）`))
+                    === words(patch.replacement.replace(new RegExp(`(?<![A-Za-z0-9])${escaped(abbreviation)}(?![A-Za-z0-9])`, "u"), ""));
+        })();
+        if (words(patch.original) !== words(patch.replacement) && !safeAcronymMove)
             throw new Error("格式补丁改变了正文内容，未应用修改");
         const data = (value: string) => mapReadWeaveProse(value, () => "");
         if (data(patch.original) !== data(patch.replacement))
@@ -518,6 +555,12 @@ export function readWeaveFormatIssues(body: string): string[] {
         issues.add("FMT-045/051：中文别名或说明不能混入英文名称括号，名称含义须结合文章核对");
     if (nameTargets.some(target => target.diagnostics.includes("extra-english-name-parentheses")))
         issues.add("FMT-121：英文名称括号不能混入缩写、别名或分隔说明，须核对已有名称而非编造展开");
+    if (nameTargets.some(target => !target.diagnostics.length
+        && /^[A-Za-z][A-Za-z ,&-]*$/u.test(target.englishName)
+        && target.englishName.split(/[ ,&-]+/u).some((word, index) =>
+            /^[a-z]{4,}$/u.test(word)
+            && (index === 0 || !/^(?:of|the|and|for|in|on|to|with|from)$/u.test(word)))))
+        issues.add("FMT-062：普通双语术语标签的英文名称需要核对标题式大小写与官方拼写");
     if (formatReadWeaveCanonicalEntities(body) !== body)
         issues.add("FMT-052：缩写必须置于中文全称和英文全称之前");
     const headings = Lexer.lex(body).filter((token): token is Tokens.Heading => token.type === "heading");
@@ -526,6 +569,9 @@ export function readWeaveFormatIssues(body: string): string[] {
     if (formatReadWeaveAnswerHeadings(body) !== body)
         issues.add("FMT-023：分区回答的首段缺少小标题");
     mapReadWeaveProse(body, (text) => {
+        if (/(?:两类|两项|两个|两方面|两部分|几类|几项|主要有|包括|包含|分别)[^\n：]{0,24}：[^\n；]{8,}；[^\n；]{8,}/u.test(text)
+            || /[^\n；]{18,}；(?:此外|另外|另一方面|与此同时|其次|再者)[^\n；]{8,}/u.test(text))
+            issues.add("FMT-036：两个以上独立原因或事实需要分行，不能以分号挤在同一行");
         if (/。/u.test(text)) issues.add("FMT-009：普通正文仍含中文句号");
         if (/[；。][ \t]*(?:\n|$)/u.test(text)) issues.add("FMT-018：段末标点不符合规则");
         if (/\n(?:[ \t]*\n){2,}/u.test(text)) issues.add("FMT-024：存在多余空白行");
@@ -539,7 +585,36 @@ export function readWeaveFormatIssues(body: string): string[] {
             issues.add("FMT-044：人物姓名顺序必须为中文姓名（English or Pinyin Name）");
         return text;
     });
+    const writableBody = maskReadWeaveProtectedMath(body);
+    const ordinaryProse = writableBody.replace(/\$\$[\s\S]*?\$\$|\$(?!\$)[^$\n]+?\$/gu, "");
+    for (const match of writableBody.matchAll(/\$\$([\s\S]*?)\$\$/gu)) {
+        const formula = match[1];
+        if (!/\\(?:sum|min|max|int|frac|lambda|nabla)|[∑∫λ]/u.test(formula)) continue;
+        const variables = Array.from(formula.replace(/\\[A-Za-z]+/gu, "")
+            .matchAll(/(?<![A-Za-z])(?:[A-Z]{1,4}|[a-z])(?![A-Za-z])/gu), item => item[0]);
+        const missing = [ ...new Set(variables) ].filter(variable =>
+            !new RegExp(`(?<![A-Za-z])${variable}(?![A-Za-z])`, "u").test(ordinaryProse));
+        if (missing.length >= 2
+            || /\\sum/u.test(formula) && !/求和|累加|各项相加/u.test(ordinaryProse)
+            || /\\(?:min|max)/u.test(formula) && !/最小|最大|优化目标|求最优/u.test(ordinaryProse)
+            || /\\lambda/u.test(formula) && !/权重|系数|参数|λ/u.test(ordinaryProse)) {
+            issues.add("EXPL-010/FMT-070：公式缺少首次符号、关键组分或运算关系的就近解释");
+            break;
+        }
+    }
     return [ ...issues ];
+}
+
+/** Preserve offsets while excluding quotations and literal code from formula repair. */
+function maskReadWeaveProtectedMath(body: string): string {
+    return body.replace(/(?:^|\n)[ \t]*(?:```|~~~)[\s\S]*?(?:```|~~~)[ \t]*(?=\n|$)|`[^`\n]*`|^>[ \t]?.*$/gmu,
+        protectedText => " ".repeat(protectedText.length));
+}
+
+export function readWeaveDisplayFormulas(body: string): Array<{ formula: string; start: number; end: number }> {
+    return Array.from(maskReadWeaveProtectedMath(body).matchAll(/\$\$[\s\S]*?\$\$/gu),
+        match => ({ formula: body.slice(match.index, match.index + match[0].length),
+            start: match.index, end: match.index + match[0].length }));
 }
 
 interface OptionalQualifier {
@@ -582,13 +657,12 @@ export async function repairReadWeaveOptionalQualifiers(
     if (!targets.length) return { body:original, rounds:0, warnings:[] as string[] };
     signal?.throwIfAborted();
     try {
-        const chosen = targets.slice(0, 2);
-        const result = await approve(chosen.map(({ token, fragment, before, after }) =>
+        const result = await approve(targets.map(({ token, fragment, before, after }) =>
             ({ token, fragment, before, after })));
         signal?.throwIfAborted();
         if (!Array.isArray(result)) throw new Error("局部简称检查未返回有效决定");
         let body = original;
-        for (const target of chosen.toSorted((a, b) => b.start - a.start)) {
+        for (const target of targets.toSorted((a, b) => b.start - a.start)) {
             const decision = result.filter(item => item?.token === target.token);
             if (decision.length !== 1 || decision[0].omit !== true
                 || typeof decision[0].reason !== "string" || decision[0].reason.trim().length < 4)
@@ -778,4 +852,77 @@ export async function repairReadWeaveFormat(
         }
     }
     return { body, rounds, warnings };
+}
+
+/** One review round covers every failing prose span. The caller may split a
+ * large round into bounded requests; its combined patch set is checked atomically. */
+export async function repairReadWeaveFormatBatch(
+    original: string,
+    repair: (targets: Array<{ start: number; original: string; issues: string[] }>) =>
+        Promise<ReadWeaveTextPatch[]>,
+    signal?: AbortSignal,
+    maxRounds = 2
+): Promise<{ body: string; rounds: number; warnings: string[] }> {
+    let body = original;
+    let rounds = 0;
+    const warnings: string[] = [];
+    while (rounds < Math.min(2, Math.max(0, maxRounds))) {
+        const targets = readWeaveProseRanges(body).flatMap(range => {
+            const text = body.slice(range.start, range.end);
+            return Array.from(text.matchAll(/[^\n]+/gu), match => ({
+                start: range.start + match.index,
+                original: match[0],
+                issues: [
+                    ...readWeaveFormatIssues(match[0]).filter(issue =>
+                        !issue.startsWith("EXPL-010/FMT-070")),
+                    ...(match[0].length >= 90
+                        && match[0].split("；").filter(part => part.trim().length >= 24).length >= 2
+                        && !/^\s*[-*+]\s+(?:[A-Z][A-Z0-9-]*\s+)?[^：\n]+（[^）\n]+）：/u.test(match[0])
+                        ? [ "FMT-036-REVIEW：长分号句须按语义判断是否含独立并列项；连续因果保持原样" ] : [])
+                ]
+            })).filter(target => target.issues.length > 0);
+        });
+        if (!targets.length) break;
+        signal?.throwIfAborted();
+        rounds++;
+        try {
+            const patches = await repair(targets);
+            signal?.throwIfAborted();
+            if (!Array.isArray(patches)) throw new Error("格式补丁批次缺少数组");
+            const expected = new Map(targets.map(target => [ target.start, target.original ]));
+            if (patches.length !== targets.length || patches.some(patch =>
+                expected.get(patch?.start) !== patch?.original
+                || patch?.rule !== "FMT-local"))
+                throw new Error("格式补丁没有覆盖本轮全部命中位置");
+            const next = applyReadWeaveFormatPatches(body, patches);
+            if (next === body) break;
+            body = next;
+        } catch (error) {
+            signal?.throwIfAborted();
+            warnings.push(error instanceof Error ? error.message : "局部格式修改未应用");
+            break;
+        }
+    }
+    return { body, rounds, warnings };
+}
+
+/** Bound each response size without discarding later findings. The caller
+ * processes every returned group and validates the complete patch set. */
+export function groupReadWeaveFormatTargets<T extends { original: string }>(
+    targets: T[], maxCharacters = 1_000
+): T[][] {
+    const groups: T[][] = [];
+    let group: T[] = [];
+    let characters = 0;
+    for (const target of targets) {
+        if (group.length && characters + target.original.length > maxCharacters) {
+            groups.push(group);
+            group = [];
+            characters = 0;
+        }
+        group.push(target);
+        characters += target.original.length;
+    }
+    if (group.length) groups.push(group);
+    return groups;
 }

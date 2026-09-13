@@ -1,5 +1,5 @@
-/** Compiled from the pinned public skill; production never loads local skill files. */
-export const READWEAVE_WRITING_SKILL_REVISION = "43133c20eabd0edde5ff8effa8d8a51c7ee8afa3";
+/** The full bundled skill is loaded from server assets; this is the contract family. */
+export const READWEAVE_WRITING_SKILL_REVISION = "bundled-complete-skill";
 
 /** Facts and explicit user requirements outrank presentation. */
 export const HUMAN_READABLE_CHINESE_STYLE_CONTRACT = [
@@ -9,10 +9,11 @@ export const HUMAN_READABLE_CHINESE_STYLE_CONTRACT = [
     "FMT-029/035：不用‘术语：’等冒号伪标题；完整引导句可用冒号引出清单",
     "FMT-036/043：两个以上独立事实、原因、比较对象分行列项，子项缩进；相互依赖的操作仍逐步编号，互斥条件归入分支；连续因果不按逗号机械拆分",
     "FMT-044/051：英文配中文，中英文及数字间留空格，保持官方大小写",
+    "FMT-062：普通双语术语标签用主要实词首字母大写，官方拼写和原样材料优先",
     "FMT-045/051/061：问题与定义中的名称都须核对；中文名称后的英文括号只放英文名称，中文别名、译名和说明移到括号外；"
         + "只移动已有名称，不补造别名，不凭术语目录把英文名称替换成看似匹配的常见名称；括号格式正确不代表名称含义正确",
     "FMT-121：英文名称括号只放经用户确认、带来源术语记录或可核对官方来源确认的英文名称本体；"
-        + "不得混入缩写、别名、逗号、分号或解释；缩写移至中文名称前；无法确认时省略英文括号，继续用中文准确解释，不直译造名",
+        + "官方名称内部标点原样保留，不得在名称后附加缩写、别名或解释；缩写移至中文名称前；无法确认时省略英文括号，继续用中文准确解释，不直译造名",
     "人物姓名固定为中文姓名（English or Pinyin Name），例如任浩星（Haoxing Ren）；禁止把顺序写反",
     "FMT-052/053：首次术语写成“- 中文全称（English Full Name）：定义”；"
         + "缩写写成“- 缩写 中文全称（English Full Name）：定义”；概览也不能提前用未解释术语",
@@ -34,7 +35,7 @@ export const HUMAN_READABLE_CHINESE_STYLE_CONTRACT = [
         + "直接解释对象及含义，不反复强调来源；必要的来源归属、补充和推断仍须准确区分，不因比例要求删除证据或改变事实",
     "只问全称或词义时只给名称与释义，多词分项，不套定义目录，不补未问背景",
     "FMT-067/071：新增行内公式用 $...$，独立公式用 $$...$$，不用反引号代替；原始变量、运算符、上下标和关系不改",
-    "公式解释仅在问题涉及公式时展开：先说明现实用途、输入输出，再展示公式；逐项解释首次符号、单位、类型、范围和关键组分，"
+    "用户询问公式或回答主动引入公式时按重要程度解释：先说明现实用途、输入输出，再展示公式；逐项解释首次符号、单位、类型、范围和关键组分，"
         + "按依赖顺序演示运算与中间结果，说明结果判断和成立条件；教学数值明确标为示例，不能冒充实测；"
         + "附带公式只补理解所需信息，相同作用域不重复解释，含义改变时重新说明；收束定义不得引入未解释的新符号",
     "FMT-031/034/069：保留标题真实父子层级，公式主标题与符号、组分的小标题各有归属；不把所有层级压平；"

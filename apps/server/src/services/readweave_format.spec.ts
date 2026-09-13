@@ -7,18 +7,108 @@ import {
     formatReadWeaveCodeCopies,
     formatReadWeaveDefinitionBlock,
     formatReadWeaveFullNameOpening,
+    groupReadWeaveFormatTargets,
     formatReadWeaveMarkdown,
     formatReadWeaveNameParentheses,
     formatReadWeavePersonNameOrder,
     formatReadWeaveTermReferences,
     readWeaveFormatIssues,
+    readWeaveDisplayFormulas,
     readWeaveNameReviewTargets,
     repairReadWeaveConventionalTerms,
     repairReadWeaveFormat,
+    repairReadWeaveFormatBatch,
     repairReadWeaveOptionalQualifiers } from "./readweave_format.js";
 import { HUMAN_READABLE_CHINESE_STYLE_CONTRACT, READWEAVE_WRITING_SKILL_REVISION } from "./readweave_style_contract.js";
+import { readWeaveWritingSkill } from "./readweave_writing_skill.js";
 
 describe("versioned formatting contract", () => {
+    it("loads the complete bundled entry, formatting, explanation and formula rules", () => {
+        const { prompt, revision } = readWeaveWritingSkill();
+        expect(revision).toMatch(/^[a-f0-9]{64}$/u);
+        for (const marker of [ "# 中文格式与零基础解释", "FMT-001", "FMT-121",
+            "EXPL-001", "EXPL-014", "## 八、交付前复核", "官方名称本身含有逗号" ])
+            expect(prompt).toContain(marker);
+        expect(prompt).toContain("即使用户没有直接询问公式，只要作者主动引入公式");
+    });
+    it("splits independent long reasons while preserving each complete statement", () => {
+        const source = "同时存在两类固定开销：线程之间的同步与通信随线程数增加而增长，全局归约、原子操作和缓存一致性开销会抵消一部分并行收益；此外线程数增加会加剧内存带宽与访存的竞争，使得每个线程的有效吞吐下降";
+        expect(readWeaveFormatIssues(source)).toContain("FMT-036：两个以上独立原因或事实需要分行，不能以分号挤在同一行");
+        const formatted = formatReadWeaveMarkdown(source);
+        expect(formatted).toContain("\n- 线程之间的同步与通信");
+        expect(formatted).toContain("\n- 此外线程数增加");
+        expect(readWeaveFormatIssues(formatted)).not.toContain("FMT-036：两个以上独立原因或事实需要分行，不能以分号挤在同一行");
+        expect(formatReadWeaveMarkdown("盒盖关紧后，外面的水汽较难进入，盒内物品更不容易受潮"))
+            .not.toContain("\n- ");
+    });
+    it("splits counted short reasons but keeps a continuous definition intact", () => {
+        const source = "成本分两部分：计算消耗随规模增加；通信开销也逐步上升";
+        expect(readWeaveFormatIssues(source)).toContain("FMT-036：两个以上独立原因或事实需要分行，不能以分号挤在同一行");
+        expect(formatReadWeaveMarkdown(source)).toBe("成本分两部分：\n\n- 计算消耗随规模增加\n- 通信开销也逐步上升");
+        const definition = "算法（Algorithm）：输入一些数据；经过有限步骤得到结果";
+        expect(formatReadWeaveMarkdown(definition)).not.toContain("\n- ");
+    });
+    it("keeps official punctuation but reports appended acronyms and ordinary lowercase labels", () => {
+        expect(readWeaveFormatIssues("加州大学洛杉矶分校（University of California, Los Angeles）"))
+            .not.toContain("FMT-121：英文名称括号不能混入缩写、别名或分隔说明，须核对已有名称而非编造展开");
+        expect(readWeaveFormatIssues("加州大学洛杉矶分校（University of California, Los Angeles, UCLA）"))
+            .toContain("FMT-121：英文名称括号不能混入缩写、别名或分隔说明，须核对已有名称而非编造展开");
+        expect(readWeaveFormatIssues("代码仓库（repository）；全局布局（global placement）"))
+            .toContain("FMT-062：普通双语术语标签的英文名称需要核对标题式大小写与官方拼写");
+        expect(readWeaveFormatIssues("代码仓库（Repository）；全局布局（Global Placement）"))
+            .not.toContain("FMT-062：普通双语术语标签的英文名称需要核对标题式大小写与官方拼写");
+    });
+    it("reports a complex formula whose symbols or operators are unexplained", () => {
+        const formula = "$$\\min(\\sum_{e\\in E} WL(e;x,y))+\\lambda D(x,y)$$";
+        expect(readWeaveFormatIssues(`${formula}\n\n其中 WL 是线长函数，D 是密度惩罚`))
+            .toContain("EXPL-010/FMT-070：公式缺少首次符号、关键组分或运算关系的就近解释");
+        expect(readWeaveFormatIssues("```tex\n$$\\min(\\sum_{e\\in E} WL(e;x,y))+\\lambda D(x,y)$$\n```"))
+            .not.toContain("EXPL-010/FMT-070：公式缺少首次符号、关键组分或运算关系的就近解释");
+    });
+    it("only locates rendered formulas, never quoted or literal math", () => {
+        const source = ["```tex", "$$\\sum_{i=1}^{n} i$$", "```", "",
+            "> $$\\min x$$", "", "正文 $$\\lambda x$$ 的解释"].join("\n");
+        const formulas = readWeaveDisplayFormulas(source);
+        expect(formulas.map(item => item.formula)).toEqual([ "$$\\lambda x$$" ]);
+        expect(source.slice(formulas[0].start, formulas[0].end)).toBe(formulas[0].formula);
+    });
+    it("repairs every independent failing span in one local batch without changing facts", async () => {
+        const original = "第一句。\n\n第二句。\n\n第三句。";
+        const repair = vi.fn(async (targets: Array<{ start:number; original:string }>) =>
+            targets.map(target => ({ ...target, replacement:target.original.replaceAll("。", ""), rule:"FMT-local" })));
+        const result = await repairReadWeaveFormatBatch(original, repair);
+        expect(repair).toHaveBeenCalledTimes(1);
+        expect(repair.mock.calls[0][0]).toHaveLength(3);
+        expect(result.body).toBe("第一句\n\n第二句\n\n第三句");
+        expect(result.warnings).toEqual([]);
+    });
+    it("groups a long review across every finding without a first-N cutoff", () => {
+        const targets = Array.from({ length: 11 }, (_, index) =>
+            ({ original: String(index) + "：" + "x".repeat(400), index }));
+        const groups = groupReadWeaveFormatTargets(targets);
+        expect(groups.length).toBeGreaterThan(1);
+        expect(groups.flat().map(target => target.index)).toEqual(targets.map(target => target.index));
+        expect(groups.every(group => group.length === 1
+            || group.reduce((total, target) => total + target.original.length, 0) <= 1_000)).toBe(true);
+    });
+    it("accepts case-only label corrections but rejects lexical or protected changes", () => {
+        const body = "代码仓库（repository）\n\n`repository`";
+        expect(applyReadWeaveFormatPatches(body, [ { start:0, original:"代码仓库（repository）",
+            replacement:"代码仓库（Repository）", rule:"FMT-local" } ]))
+            .toBe("代码仓库（Repository）\n\n`repository`");
+        expect(() => applyReadWeaveFormatPatches(body, [ { start:0, original:"代码仓库（repository）",
+            replacement:"代码仓库（Repositories）", rule:"FMT-local" } ])).toThrow();
+    });
+    it("allows moving an explicitly supplied acronym outside an official name without changing that name", () => {
+        const original = "他是加州大学洛杉矶分校（University of California, Los Angeles, UCLA）教授";
+        const replacement = "他是 UCLA 加州大学洛杉矶分校（University of California, Los Angeles）教授";
+        expect(applyReadWeaveFormatPatches(original, [ { start:0, original,
+            replacement, rule:"FMT-local" } ])).toBe(replacement);
+        expect(readWeaveFormatIssues(replacement)).not.toContain(
+            "FMT-121：英文名称括号不能混入缩写、别名或分隔说明，须核对已有名称而非编造展开");
+        expect(() => applyReadWeaveFormatPatches(original, [ { start:0, original,
+            replacement:replacement.replace("Los Angeles", "San Diego"), rule:"FMT-local" } ])).toThrow();
+    });
     it("does not assign the first acronym meaning to an explicitly different expansion", async () => {
         const identity = { abbreviation:"IP",chineseName:"知识产权",englishName:"Intellectual Property" };
         const contrast = "这与网络协议中的 IP（Internet Protocol）无关";
@@ -59,11 +149,11 @@ describe("versioned formatting contract", () => {
         expect(result.body).toContain("在芯片设计语境中的全称是知识产权（Intellectual Property）");
     });
     it("pins the current public skill and includes conditional formula and media guidance", () => {
-        expect(READWEAVE_WRITING_SKILL_REVISION).toBe("43133c20eabd0edde5ff8effa8d8a51c7ee8afa3");
+        expect(READWEAVE_WRITING_SKILL_REVISION).toBe("bundled-complete-skill");
         const contract = HUMAN_READABLE_CHINESE_STYLE_CONTRACT.join("\n");
         expect(contract).toContain("FMT-121");
         expect(contract).toContain("无法确认时省略英文括号");
-        expect(contract).toContain("公式解释仅在问题涉及公式时展开");
+        expect(contract).toContain("用户询问公式或回答主动引入公式时按重要程度解释");
         expect(contract).toContain("附带公式只补理解所需信息");
         expect(contract).toContain("不把所有层级压平");
         expect(contract).toContain("FMT-111/120");
@@ -421,6 +511,15 @@ describe("versioned formatting contract", () => {
         expect(approve).toHaveBeenCalledTimes(1);
         expect(result.rounds).toBe(1);
         expect(result.body).toContain("12");
+    });
+    it("reviews every independent qualifier in one request instead of dropping later matches", async () => {
+        const body = "资料来自 ABC 公司、DEF 部门和 GHI 团体";
+        const approve = vi.fn(async (targets: Array<{ token: string }>) => {
+            expect(targets.map(target => target.token)).toEqual([ "ABC", "DEF", "GHI" ]);
+            return targets.map(target => ({ token: target.token, omit: false, reason: "保留来源身份" }));
+        });
+        expect((await repairReadWeaveOptionalQualifiers(body, "资料从何而来？", approve)).body).toBe(body);
+        expect(approve).toHaveBeenCalledTimes(1);
     });
     it.each([
         "ABC 和另一对象", "ABC 是核心对象", "“ABC 来源机构”", "《ABC 喜剧》",

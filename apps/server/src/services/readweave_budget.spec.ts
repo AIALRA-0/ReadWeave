@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
     ReadWeaveBudget, readWeaveModelReservation, readWeaveModelUsageCost, readWeaveModelRates
 } from "./readweave_budget.js";
+import { readWeaveWritingSkill } from "./readweave_writing_skill.js";
+
 describe("request-wide prepaid budget", () => {
     it.each([0.05, 0.1])("enforces the exact cap %s before a request", (cap) => {
         const budget = new ReadWeaveBudget(cap);
@@ -22,8 +24,12 @@ describe("request-wide prepaid budget", () => {
         expect(budget.reserveRequired(0.01)).toBe(true);
         expect(budget.remainingCny).toBe(0);
     });
-    it("accounts for Chinese UTF-8 input and maximum output", () => {
-        expect(readWeaveModelReservation("规则", "正文", 100)).toBe(((12 + 256) * 3 + 900) / 1e6);
+    it("reserves the cold-cache input with a safety margin and maximum output", () => {
+        expect(readWeaveModelReservation("规则", "正文", 100)).toBe((260 * 3 + 900) / 1e6);
+    });
+    it("fits the complete skill prefix under the difficult-question cold-cache ceiling", () => {
+        const { prompt } = readWeaveWritingSkill();
+        expect(readWeaveModelReservation(prompt, "", 1600, readWeaveModelRates())).toBeLessThan(0.10);
     });
     it("does not hide failed or missing-usage model calls", () => {
         const budget = new ReadWeaveBudget(0.05);

@@ -101,11 +101,26 @@ export const READWEAVE_ROUTINE_BUDGET_CNY = 0.05;
 export const READWEAVE_DIFFICULT_BUDGET_CNY = 0.1;
 export const READWEAVE_RESEARCH_ACTION_LIMIT = 20;
 
-// Uses the configured DeepSeek rates already used by ReadWeave. This is an
-// estimate, not a provider invoice; UTF-8 bytes conservatively bound input tokens.
+// Uses the configured rates for a preflight estimate, never for final billing.
+// DeepSeek documents about 0.6 token per Chinese character and 0.3 per
+// English character. Use a 50% safety margin; UTF-8 bytes
+// triple-count ordinary Chinese and would incorrectly consume the search
+// allowance when the complete writing skill is supplied.
+export function readWeaveEstimatedInputTokens(text: string): number {
+    let han = 0;
+    let ascii = 0;
+    let other = 0;
+    for (const character of text) {
+        if (/\p{Script=Han}/u.test(character)) han++;
+        else if (character.codePointAt(0)! <= 0x7f) ascii++;
+        else other++;
+    }
+    return Math.ceil(han * 0.9 + ascii * 0.45 + other * 1.5 + 256);
+}
+
 export function readWeaveModelReservation(
     system: string, user: string, maxTokens: number, rates = readWeaveModelRates()
 ): number {
-    return ((Buffer.byteLength(system + user, "utf8") + 256) * rates.cacheMissInput
+    return (readWeaveEstimatedInputTokens(system + user) * rates.cacheMissInput
         + maxTokens * rates.output) / 1e6;
 }
