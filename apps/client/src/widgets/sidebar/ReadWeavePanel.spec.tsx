@@ -138,10 +138,14 @@ describe("ReadWeave panel generation actions", () => {
         expect(rendered.textContent).toContain("$x_i$");
         await act(() => rendered.querySelector<HTMLButtonElement>("button")!.click());
         expect(question().hidden).toBe(false);
+        expect(rendered.isConnected).toBe(true);
+        expect(rendered.hidden).toBe(true);
         expect(question().value).toBe(raw);
         await vi.waitFor(() => expect(document.activeElement).toBe(question()));
         await act(() => question().blur());
         expect(question().hidden).toBe(true);
+        expect(host.querySelector('[data-testid="readweave-question-rendered"]')).toBe(rendered);
+        expect(rendered.hidden).toBe(false);
     });
     it("does not turn a confirmed definition back into a question when the editor restores its range", async () => {
         await select("First selection");

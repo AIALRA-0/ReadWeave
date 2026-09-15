@@ -2224,7 +2224,7 @@ export default function ReadWeavePanel() {
                                             onKeyDown={handleQuestionKeyDown}
                                             data-testid="readweave-question"
                                         />
-                                        {showRenderedQuestion && <div class="readweave-question-rendered" data-testid="readweave-question-rendered">
+                                        {hasReadWeaveQuestionMath(questionTitle) && <div class="readweave-question-rendered" data-testid="readweave-question-rendered" hidden={!showRenderedQuestion}>
                                             <ReadWeaveQuestionText text={questionTitle} />
                                             <button type="button" class="btn btn-sm btn-link" disabled={editorLocked} onClick={() => {
                                                 setEditingMathQuestion(true);
