@@ -6,10 +6,11 @@ import type {
     ReadWeaveGenerateRequest
 } from "@triliumnext/commons";
 
-const PERSON_PATTERN = /(?:是谁|谁是|是何人|人物|个人简介|现任|任职|履历|背景|who\s+is|who\s+was|biograph)/iu;
+import { readWeavePersonSubject } from "./readweave_question_intent.js";
+
 const DEFINITION_PATTERN = /(?:是什么|什么是|是啥|啥是|含义|定义|指什么|什么意思|meaning|definition)/iu;
 const CURRENT_PATTERN = /(?:现在|目前|现任|最新|当前|截至|today|current|latest|present|version)/iu;
-const BIBLIOGRAPHIC_PATTERN = /(?:论文|文章|报告|规范|标准|出处|引用|期刊|会议|\b10\.\d{4,9}\/[\w.()/:;-]+\b)/iu;
+const BIBLIOGRAPHIC_PATTERN = /(?:论文|文章|报告|出处|引用|期刊|会议|\b10\.\d{4,9}\/[\w.()/:;-]+\b)|(?:这篇|该篇|此篇|上述|前述).{0,24}(?:\bDOI\b|数字对象标识)|(?:\bDOI\b|数字对象标识).{0,20}(?:对应|编号|链接|查询|查找|检索|哪篇|哪一篇)|(?:标准|规范)(?:的)?(?:文档|编号|版本|状态|原文|全文|出处|链接|发布(?:日期|时间)?|制定|组织)|(?:哪|哪个|哪一项).{0,12}(?:标准|规范)/iu;
 const PROCEDURE_PATTERN = /(?:如何|怎么|怎样|步骤|流程|配置|安装|操作|使用|procedure|how\s+to)/iu;
 const COMPARISON_PATTERN = /(?:区别|比较|差异|不同|优缺点|取舍|相比|compare|difference|tradeoff)/iu;
 const CALCULATION_PATTERN = /(?:计算|多少|相差|增幅|降幅|百分比|算对|输入数据|求结果|公式|概率|calculate|formula)/iu;
@@ -63,14 +64,10 @@ export function buildReadWeaveDomainProfile(
     context = ""
 ): ReadWeaveDomainProfile {
     const requestText = `${normalizedQuestion}\n${request.title}`.normalize("NFKC").trim();
-    const candidatePerson = requestText.match(/[“"'‘]([^”"'’\n]{2,120})[”"'’]/u)?.[1]?.trim()
-        ?? requestText.match(/\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,5}\b/u)?.[0];
-    const contextualPerson = Boolean(candidatePerson
-        && context.toLocaleLowerCase().includes(candidatePerson.toLocaleLowerCase())
-        && /(?:教授|学者|研究者|科学家|工程师|任职|任教|院士|博士|个人主页|\bprofessor\b|\bresearcher\b|\bscientist\b|\bengineer\b|\bfaculty\b)/iu.test(context));
-    const text = `${requestText}\n${contextualPerson ? "人物 现任" : ""}`;
+    const personSubject = readWeavePersonSubject(requestText, context);
+    const text = requestText;
     const domains: ReadWeaveDomain[] = [];
-    if (PERSON_PATTERN.test(text)) domains.push("identity");
+    if (personSubject) domains.push("identity");
     if (request.kind === "term" || DEFINITION_PATTERN.test(text)) domains.push("definition");
     if (BIBLIOGRAPHIC_PATTERN.test(text)) domains.push("bibliographic");
     if (CURRENT_PATTERN.test(text)) domains.push("current-status");

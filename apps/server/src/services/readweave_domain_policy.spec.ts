@@ -49,6 +49,40 @@ describe("ReadWeave domain policy framework", () => {
         expect(profile.primaryDomain).toBe("identity");
     });
 
+    it("does not treat a technical term as a person because an article has author metadata", () => {
+        const profile = buildReadWeaveDomainProfile(
+            { kind: "question", title: "“标准单元”是什么？" },
+            "“标准单元”是什么？",
+            [
+                "作者：Sung Kyu Lim、David Z. Pan",
+                "David Z. Pan 是教授和研究者",
+                "标准单元是数字集成电路物理设计中的可复用逻辑单元"
+            ].join("\n")
+        );
+
+        expect(profile.primaryDomain).toBe("definition");
+        expect(profile.domains).not.toContain("identity");
+        expect(profile.domains).not.toContain("current-status");
+    });
+
+    it("distinguishes a DOI definition from a DOI lookup", () => {
+        expect(buildReadWeaveDomainProfile(
+            { kind: "question", title: "DOI 是什么？" },
+            "DOI 是什么？"
+        ).primaryDomain).toBe("definition");
+        expect(buildReadWeaveDomainProfile(
+            { kind: "question", title: "这篇论文的 DOI 是什么？" },
+            "这篇论文的 DOI 是什么？"
+        ).primaryDomain).toBe("bibliographic");
+    });
+
+    it("does not classify a standard-cell definition as bibliographic", () => {
+        expect(buildReadWeaveDomainProfile(
+            { kind: "question", title: "什么是标准单元？" },
+            "什么是标准单元？"
+        ).primaryDomain).toBe("definition");
+    });
+
     it("keeps source authority, fact type and time scope explicit", () => {
         const current = enrichReadWeaveEvidenceSource(source({ excerpt: "Currently Principal Software Engineer at AMD" }));
         const education = enrichReadWeaveEvidenceSource(source({

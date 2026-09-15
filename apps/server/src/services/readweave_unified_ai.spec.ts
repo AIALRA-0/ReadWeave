@@ -1895,6 +1895,79 @@ describe("ReadWeave one-pass workflow", () => {
         expect(fetch).toHaveBeenCalledTimes(2);
     });
 
+    it.each([
+        [ "异构", "异构是让不同芯片层采用不同制程或承担不同功能的集成方式" ],
+        [ "标准单元", "标准单元是数字芯片物理设计中可重复排列和布线的逻辑单元" ],
+        [
+            "SRAM 静态随机存取存储器（Static Random-Access Memory）",
+            "SRAM 静态随机存取存储器（Static Random-Access Memory）是一种无需周期刷新即可保持数据的片上存储器"
+        ],
+        [
+            "面对面混合键合",
+            "面对面混合键合是让两层芯片正面相对并同时连接金属焊盘与绝缘介质的层间连接方法"
+        ],
+        [
+            "GDSII 图形设计系统二代格式（Graphic Design System II）",
+            "GDSII 图形设计系统二代格式（Graphic Design System II）是保存集成电路版图几何图形和层级结构的数据格式"
+        ]
+    ])("keeps an academic article's author section out of the answer path for %s",
+        async (selectedText, answer) => {
+            const article = [
+                "论文作者：Lingjun Zhu、Jiawei Hu、Gauthaman Murali、Sung Kyu Lim",
+                "David Z. Pan 是电子设计自动化领域的教授和研究者",
+                "正文讨论异构、标准单元、SRAM、面对面混合键合与 GDSII 的芯片物理设计用途"
+            ].join("\n");
+            const prompts: string[] = [];
+            vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+                const prompt = requestPrompt(JSON.parse(String(init?.body)));
+                prompts.push(prompt);
+                const output = prompt.includes("统一问题分析器")
+                    ? {
+                        normalizedQuestion: `“${selectedText}”是什么？`,
+                        objective: "解释文章中的技术对象",
+                        answerRequirements: [ "给出定义和当前工程用途" ],
+                        exclusions: [ "不介绍论文作者" ],
+                        searchQueries: [
+                            `${selectedText} 官方主页 大学 教授 研究方向`,
+                            `"${selectedText}" official profile research interests research areas`,
+                            `${selectedText} authoritative technical definition`
+                        ],
+                        requiresCurrentEvidence: true
+                    }
+                    : { body: answer, claims: [], unresolvedClaims: [] };
+                return Response.json({
+                    model: "deepseek-v4-flash",
+                    choices: [ { message: { content: JSON.stringify(output) } } ],
+                    usage: {
+                        prompt_tokens: 800,
+                        completion_tokens: 120,
+                        total_tokens: 920
+                    }
+                });
+            }));
+            const result = await generateUnifiedReadWeaveAnswer({
+                ...request(`“${selectedText}”是什么？`),
+                fragments: [
+                    { id: "selected", role: "selected", text: selectedText },
+                    {
+                        id: "current-block",
+                        role: "section",
+                        text: `本文在当前段落解释${selectedText}的技术作用`
+                    },
+                    { id: "document", role: "document", text: article }
+                ]
+            });
+
+            expect(prompts).toHaveLength(2);
+            expect(result.body).toContain(answer);
+            expect(result.body).not.toMatch(/公开资料不足|身份、机构或职位|署名或相邻人名/u);
+            expect(result.domainProfile?.domains).not.toContain("identity");
+            expect(result.externalSearchDecision?.reason).not.toBe("identity");
+            expect(result.externalSearchDecision?.queries.join("\n"))
+                .not.toMatch(/官方主页|教授|official profile|research interests/iu);
+            expect(result.usage?.modelCalls).toBe(2);
+        });
+
     it("reports provider, model, stage and upstream reason for exhausted credit", async () => {
         vi.stubGlobal("fetch", vi.fn(async () => Response.json({
             error: { message: "Insufficient Balance" }
@@ -1968,6 +2041,47 @@ describe("ReadWeave one-pass workflow", () => {
             reason: "forced",
             queries: [ "如何工作? authoritative source" ]
         });
+    });
+
+    it.each([
+        "“异构”是什么？",
+        "“标准单元”是什么？",
+        "“SRAM 静态随机存取存储器（Static Random-Access Memory）”是什么？",
+        "“面对面混合键合”是什么？",
+        "“GDSII 图形设计系统二代格式（Graphic Design System II）”为什么叫第二代？"
+    ])("keeps article author cues out of technical search routing: %s", question => {
+        const context = [
+            "论文作者：Lingjun Zhu、Jiawei Hu、Sung Kyu Lim、David Z. Pan",
+            "David Z. Pan 是电子设计自动化领域的教授和研究者",
+            "正文讨论异构、标准单元、SRAM、面对面混合键合与 GDSII"
+        ].join("\n");
+        const decision = decideReadWeaveExternalSearch({
+            ...request(question),
+            answerPlan: {
+                version: 1,
+                reviewStatus: "approved",
+                normalizedQuestion: question,
+                answerType: "definition",
+                objective: "解释技术对象",
+                answerRequirements: [ "给出定义" ],
+                exclusions: [],
+                searchQueries: [
+                    `${question} 官方主页 大学 教授 研究方向`,
+                    `\"${question}\" official profile research interests research areas`,
+                    `${question} authoritative definition`
+                ],
+                steps: [ "给出定义" ],
+                summary: "给出定义",
+                autoApplied: false
+            }
+        }, question, context);
+
+        expect(decision.reason).not.toBe("identity");
+        expect(decision.queries).toHaveLength(1);
+        expect(decision.queries[0]).toContain("authoritative definition");
+        expect(decision.queries.join("\n")).not.toMatch(
+            /教授|official profile|research interests/iu
+        );
     });
 
     it("uses an unchecked answer-plan flow instead of blocking generation", async () => {

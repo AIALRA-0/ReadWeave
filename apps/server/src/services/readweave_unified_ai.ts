@@ -37,6 +37,10 @@ import { selectReadWeaveContext } from "./readweave_engine.js";
 import { READWEAVE_CONTEXT_RULES, readWeaveCompleteContext } from "./readweave_context.js";
 import { NonRetryableReadWeaveError, ReadWeaveOutputLimitError } from "./readweave_errors.js";
 import {
+    isReadWeavePersonProfileQuery,
+    readWeavePersonSubject
+} from "./readweave_question_intent.js";
+import {
     omitUnsupportedReadWeaveNaming,
     repairReadWeaveNamingEvidence
 } from "./readweave_evidence_quality.js";
@@ -687,29 +691,6 @@ function normalizeQuestion(request: ReadWeaveGenerateRequest): string {
     return title;
 }
 
-function personSubjectFromQuestion(question: string): string | undefined {
-    return question.match(/[“"'‘]([^”"'’\n]{2,120})[”"'’]/u)?.[1]?.trim()
-        ?? question.match(/([\p{Script=Han}·]{2,20})(?=\s*(?:是谁|是何人|人物|个人简介))/u)?.[1]?.trim()
-        // Names copied from papers are often lower-cased or concatenated by
-        // the surrounding editor.  Identity questions provide the semantic
-        // guard, so do not require title-case before entering disambiguation.
-        ?? question.match(/\b[A-Za-z][A-Za-z0-9'’._-]{1,40}(?:\s+[A-Za-z][A-Za-z0-9'’._-]{1,40}){1,5}(?=\s*(?:是谁|是何人|人物|个人简介|履历|背景))/iu)?.[0]?.trim()
-        ?? question.match(/\b[A-Za-z][A-Za-z0-9'’._-]{1,40}\b(?=\s*(?:是谁|是何人|人物|个人简介|履历|背景))/iu)?.[0]?.trim()
-        ?? question.match(/\b[A-Za-z][A-Za-z0-9'’._-]*(?:\s+[A-Za-z][A-Za-z0-9'’._-]*){1,5}\b/u)?.[0]?.trim();
-}
-
-function contextualPersonSubject(question: string, context = ""): string | undefined {
-    const candidate = personSubjectFromQuestion(question);
-    if (!candidate) return undefined;
-    if (/(?:谁|人物|个人简介|背景|履历|资料)|\bwho\s+is\b|\bbiograph(?:y|ical)\b/iu.test(question)) {
-        return candidate;
-    }
-    const normalizedContext = context.normalize("NFKC");
-    if (!normalizedContext.toLocaleLowerCase().includes(candidate.toLocaleLowerCase())) return undefined;
-    const personEvidence = /(?:教授|学者|研究者|科学家|工程师|任职|任教|院士|博士|人物|姓名|个人主页|\bprofessor\b|\bresearcher\b|\bscientist\b|\bengineer\b|\bfaculty\b)/iu;
-    return personEvidence.test(normalizedContext) ? candidate : undefined;
-}
-
 function deduplicateSearchQueries(queries: string[]): string[] {
     return Array.from(new Set(queries
         .map(query => query.normalize("NFKC").replace(/\s+/gu, " ").trim())
@@ -717,12 +698,16 @@ function deduplicateSearchQueries(queries: string[]): string[] {
         ;
 }
 
+function sanitizePersonProfileQueries(queries: string[], personIdentity: boolean): string[] {
+    return queries.filter(query => personIdentity || !isReadWeavePersonProfileQuery(query));
+}
+
 function automaticExternalSearchQueries(
     question: string,
     kind: ReadWeaveGenerateRequest["kind"],
     context = ""
 ): string[] {
-    const person = contextualPersonSubject(question, context);
+    const person = readWeavePersonSubject(question, context);
     if (person) {
         return deduplicateSearchQueries([
             `${person} 官方主页 机构 职位 研究方向`,
@@ -744,13 +729,19 @@ export function decideReadWeaveExternalSearch(
     normalizedQuestion: string,
     context = ""
 ): ReadWeaveExternalSearchDecision {
-    const explicitQueries = request.answerPlan?.searchQueries ?? [];
+    const normalized = normalizedQuestion.normalize("NFKC").trim();
+    const personIdentity = !!readWeavePersonSubject(normalized, context);
+    // Plans saved by older releases can contain synthetic person-profile
+    // queries. Do not let stale plan data re-enable person routing for a
+    // definition, method, product or acronym.
+    const explicitQueries = sanitizePersonProfileQueries(
+        request.answerPlan?.searchQueries ?? [],
+        personIdentity
+    );
     const active = request.activeExternalSearch === true;
     const automatic = request.autoExternalSearch !== false;
     const searchEnabled = getReadWeaveSearchRuntimeConfig().mode !== "off";
     const explicitlyDisabled = request.activeExternalSearch !== true && request.autoExternalSearch === false;
-    const normalized = normalizedQuestion.normalize("NFKC").trim();
-    const personIdentity = !!contextualPersonSubject(normalized, context);
     const backgroundRequest = /(?:所有|全部|完整|全面|详细|背景|履历|经历|资料|信息|介绍)/u.test(normalized);
     const freshnessRequest = /(?:现在|目前|现任|最新|当前|截至|today|current|latest|present)/iu
         .test(normalized);
@@ -915,7 +906,7 @@ function normalizeContract(payload: PlannerPayload, fallbackQuestion: string, se
                 ;
         }
     }
-    const personName = contextualPersonSubject(normalizedQuestion, selectedContext);
+    const personName = readWeavePersonSubject(normalizedQuestion, selectedContext);
     if (personName) {
         const directProfileQuery = /\p{Script=Han}/u.test(personName)
             ? `${personName} 官方主页 大学 教授 研究方向`
@@ -4190,7 +4181,7 @@ export async function generateUnifiedReadWeaveAnswer(
         true
     );
     const context = contextBlock(selected.fragments);
-    const requestedPersonSubject = contextualPersonSubject(originalQuestion, context);
+    const requestedPersonSubject = readWeavePersonSubject(originalQuestion, context);
     if (requestedPersonSubject) {
         budgetCny = Math.max(budgetCny, 0.10);
         budget.raiseLimit(budgetCny);
@@ -4307,9 +4298,12 @@ export async function generateUnifiedReadWeaveAnswer(
         context
     );
     if (externalSearchDecision.required && contextSearchQueries.length) {
-        externalSearchDecision.queries = Array.from(new Set([
-            ...contextSearchQueries, ...(request.answerPlan?.searchQueries ?? [])
-        ]));
+        externalSearchDecision.queries = deduplicateSearchQueries(
+            sanitizePersonProfileQueries([
+                ...contextSearchQueries,
+                ...(request.answerPlan?.searchQueries ?? [])
+            ], domainProfile.domains.includes("identity"))
+        );
     }
     contract.searchQueries = externalSearchDecision.queries;
     contract.requiresCurrentEvidence = externalSearchDecision.required;
@@ -4461,8 +4455,9 @@ export async function generateUnifiedReadWeaveAnswer(
         completedExternalSearchDecision.queries.length,
         external.warnings
     );
-    const personSubject = contextualPersonSubject(contract.normalizedQuestion, context)
-        ?? requestedPersonSubject;
+    const personSubject = domainProfile.domains.includes("identity")
+        ? readWeavePersonSubject(contract.normalizedQuestion, context) ?? requestedPersonSubject
+        : undefined;
     report("gathering-context", external.sources.length > 0
         ? `已合并 ${localSources.length} 个文章片段和 ${external.sources.length} 个外部来源`
         : `已准备 ${localSources.length} 个文章片段，未取得外部来源`);
