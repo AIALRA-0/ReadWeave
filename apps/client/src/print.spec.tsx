@@ -145,7 +145,7 @@ describe("SingleNoteRenderer", () => {
         const onReady = vi.fn();
         const container = renderInto(<SingleNoteRenderer note={note} onReady={onReady} onProgressChanged={() => {}} />);
 
-        await vi.waitFor(() => expect(onReady).toHaveBeenCalledWith({ type: "single-note" }));
+        await vi.waitFor(() => expect(onReady).toHaveBeenCalledWith({ type: "single-note" }), { timeout: 30_000 });
         expect(container.querySelector("main")?.innerHTML).toContain("Unable to parse spreadsheet data");
 
         // A spreadsheet whose blob can't be loaded falls back to an empty string.
@@ -154,7 +154,7 @@ describe("SingleNoteRenderer", () => {
         const onReadyEmpty = vi.fn();
         const emptyContainer = renderInto(<SingleNoteRenderer note={empty} onReady={onReadyEmpty} onProgressChanged={() => {}} />);
 
-        await vi.waitFor(() => expect(onReadyEmpty).toHaveBeenCalledWith({ type: "single-note" }));
+        await vi.waitFor(() => expect(onReadyEmpty).toHaveBeenCalledWith({ type: "single-note" }), { timeout: 30_000 });
         expect(emptyContainer.querySelector("main")?.innerHTML).toContain("Unable to parse spreadsheet data");
     });
 

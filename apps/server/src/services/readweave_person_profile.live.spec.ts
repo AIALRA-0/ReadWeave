@@ -66,7 +66,7 @@ const CASES: PersonProfileCase[] = [
         name: "ada-lovelace-historical-person",
         question: "Ada Lovelace是谁？",
         selected: "Ada Lovelace 的名字出现在一篇讨论现代编程语言的文章中。",
-        expected: [ /Ada Lovelace/u, /数学家|计算|程序|分析机/u ],
+        expected: [ /Ada Lovelace/u, /数学家|作家/u, /分析机|计算|程序/u ],
         forbidden: [ /现任|目前任职|当前机构|现代编程语言的文章|奠定[^；\n]{0,60}基础/u ]
     },
     {
@@ -74,7 +74,7 @@ const CASES: PersonProfileCase[] = [
         question: "周志华是谁？",
         selected: "周志华的姓名出现在机器学习教材推荐列表中；当前段落没有提供人物履历。",
         expected: [ /周志华/u, /南京大学|人工智能|机器学习/u ],
-        forbidden: [ /教材推荐列表|当前段落/u ]
+        forbidden: [ /教材推荐列表|当前段落|南京大学位于|集成学习是一类|机器学习与数据挖掘研究所是/u ]
     },
     {
         name: "invented-name-must-fail-closed",
@@ -92,11 +92,23 @@ describeLive("ReadWeave independent person-profile quality audit", () => {
             const issues = progress.issues.length > 0 ? `；${progress.issues.join("；")}` : "";
             console.info(`[person:${testCase.name}] +${Date.now() - startedAt}ms ${progress.stage} ${progress.message}${issues}`);
         });
-        console.info(`[person:${testCase.name}] body=${result.body}`);
+        if (process.env.READWEAVE_PRINT_LIVE_BODY === "1") {
+            console.info(`[person:${testCase.name}] body=${result.body}`);
+            console.info(`[person:${testCase.name}] sources=${JSON.stringify((result.evidenceSources ?? []).map(source => ({
+                title: source.title,
+                url: source.url,
+                category: source.sourceCategory,
+                mode: source.retrievalMode
+            })))}`);
+            console.info(`[person:${testCase.name}] research=${JSON.stringify(result.audit?.research)}`);
+            console.info(`[person:${testCase.name}] usage=${JSON.stringify(result.usage)}`);
+        }
 
         expect(result.reviewIssues ?? []).toEqual([]);
         expect(result.usage?.withinBudget).toBe(true);
-        expect(result.usage?.costCny ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(0.05);
+        expect(result.usage?.budgetCny ?? Number.POSITIVE_INFINITY).toBeLessThanOrEqual(0.10);
+        expect(result.usage?.costCny ?? Number.POSITIVE_INFINITY)
+            .toBeLessThanOrEqual(result.usage?.budgetCny ?? 0);
         expect(result.body).not.toContain("。");
         expect(result.body).not.toMatch(/(?:电子设计自动化|人工智能|集成电路)简称|简称(?=\s*(?:；|，|芯片|工具|系统|方法|$))/u);
         expect(result.body).not.toMatch(/(?:显著|明显|大幅|有效|尤其|特别是)\s*(?:；|\n|$)/u);

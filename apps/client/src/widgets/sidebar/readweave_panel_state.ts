@@ -11,7 +11,6 @@ import type {
 import { decodeReadWeaveText } from "./readweave_question_templates.js";
 
 export const READWEAVE_CANDIDATE_MIN_CONFIDENCE = 0.55;
-export const READWEAVE_CANDIDATE_LIMIT = 3;
 
 export type ReadWeaveGenerationVisualState = "running" | "unread" | "draft" | "paused" | "error";
 
@@ -76,8 +75,7 @@ export function calloutAfterKindChange(current: ReadWeaveCalloutType, nextKind: 
 export function visibleReadWeaveCandidates(candidates: ReadWeaveCandidate[]): ReadWeaveCandidate[] {
     return candidates
         .filter(candidate => candidate.confidence > READWEAVE_CANDIDATE_MIN_CONFIDENCE)
-        .toSorted((left, right) => right.confidence - left.confidence || left.title.localeCompare(right.title))
-        .slice(0, READWEAVE_CANDIDATE_LIMIT);
+        .toSorted((left, right) => right.confidence - left.confidence || left.title.localeCompare(right.title));
 }
 
 export function isReadWeaveGenerationDisabled(input: {

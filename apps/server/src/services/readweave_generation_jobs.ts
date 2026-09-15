@@ -68,6 +68,8 @@ interface EventRow {
 }
 
 const activeJobs = new Map<string, { attemptId: string; controller: AbortController }>();
+const reportedAutoSaveFailures = new Set<string>();
+let lastAutoSaveSweep = 0;
 let commitFaultForTests: "after-object" | "after-link" | "before-task-update" | undefined;
 const protectedSession = protectedSessionModule.default;
 // One user action runs one generation attempt. Transport failures are kept as
@@ -100,6 +102,9 @@ function requireReviewedAnswerPlan(request: ReadWeaveGenerateRequest) {
 }
 
 function validateExternalSearchSettings(request: ReadWeaveGenerateRequest): void {
+    if (request.autoSave !== undefined && typeof request.autoSave !== "boolean") {
+        throw new ValidationError("autoSave must be boolean.");
+    }
     if (request.quoteSelectedText !== undefined && typeof request.quoteSelectedText !== "boolean") {
         throw new ValidationError("quoteSelectedText must be boolean.");
     }
@@ -344,7 +349,9 @@ function publicJob(row: JobRow, includeProgress = true): ReadWeaveGenerationJob 
         activeExternalSearch: storedRequest?.activeExternalSearch,
         autoExternalSearch: storedRequest?.autoExternalSearch,
         quoteSelectedText: storedRequest?.quoteSelectedText,
+        autoSave: storedRequest?.autoSave === true,
         parentLinkId: storedRequest?.parentLinkId,
+        answerSelection: storedRequest?.answerSelection,
         title: decodeStoredValue(row.title, row.isProtected) ?? "",
         sourceExcerpt: decodeStoredValue(row.sourceExcerpt, row.isProtected) ?? "",
         sourceLocator: storedRequest?.sourceLocator,
@@ -537,6 +544,7 @@ function persistGeneratedResult(
         contentType,
         origin,
         parentLinkId: request.parentLinkId,
+        answerSelection: request.answerSelection,
         title,
         body: result.body,
         sourceExcerpt: sourceExcerpt(request),
@@ -746,6 +754,7 @@ function runJob(jobId: string) {
             message: resultWithMetadata.qualityState === "verified" ? "回答已通过格式检查，等待确认入库" : "回答已保存为待审核草稿",
             issues: unresolvedIssues
         });
+        if (request.autoSave === true) commitPendingAutoSave(jobId);
     }).catch(error => {
         let current: JobRow;
         try {
@@ -782,9 +791,9 @@ function runJob(jobId: string) {
 }
 
 function sourceExcerpt(request: ReadWeaveGenerateRequest): string {
-    return request.rootSourceExcerpt?.trim().slice(0, 10_000)
-        || request.fragments.find(fragment => fragment.role === "selected")?.text.trim().slice(0, 10_000)
-        || request.title.trim().slice(0, 10_000);
+    return request.rootSourceExcerpt?.trim()
+        || request.fragments.find(fragment => fragment.role === "selected")?.text.trim()
+        || request.title.trim();
 }
 
 export function initializeReadWeaveGenerationJobs() {
@@ -838,6 +847,7 @@ export function initializeReadWeaveGenerationJobs() {
     }
     sql.execute("UPDATE readweave_generation_jobs SET activeAttemptId = COALESCE(activeAttemptId, jobId) WHERE status = 'queued'");
     scheduleQueuedJobs();
+    sweepPendingAutoSaves();
     if (!schedulerStarted) {
         schedulerStarted = true;
         const scheduler = setInterval(() => {
@@ -859,6 +869,7 @@ export function initializeReadWeaveGenerationJobs() {
                 recordJobChange(row.jobId);
             }
             scheduleQueuedJobs();
+            if (Date.now() - lastAutoSaveSweep >= 60_000) sweepPendingAutoSaves();
         }, 5_000);
         scheduler.unref?.();
     }
@@ -1024,6 +1035,7 @@ interface ReadWeaveRegenerateRequest {
     title?: unknown;
     optimizeQuestion?: unknown;
     autoApplyPlan?: unknown;
+    autoSave?: unknown;
     activeExternalSearch?: unknown;
     autoExternalSearch?: unknown;
     quoteSelectedText?: unknown;
@@ -1070,6 +1082,12 @@ export function regenerateReadWeaveGenerationJob(jobId: string, inputValue: unkn
             throw new ValidationError("autoApplyPlan must be boolean.");
         }
         request.autoApplyPlan = input.autoApplyPlan as boolean | undefined;
+    }
+    if (Object.hasOwn(input, "autoSave")) {
+        if (input.autoSave !== undefined && typeof input.autoSave !== "boolean") {
+            throw new ValidationError("autoSave must be boolean.");
+        }
+        request.autoSave = input.autoSave as boolean | undefined;
     }
     if (Object.hasOwn(input, "quoteSelectedText")) {
         if (input.quoteSelectedText !== undefined && typeof input.quoteSelectedText !== "boolean") {
@@ -1228,6 +1246,42 @@ interface CommitGenerationJobInput {
     body?: unknown;
     calloutType?: unknown;
     termIdentity?: unknown;
+}
+
+function commitPendingAutoSave(jobId: string): void {
+    try {
+        const row = rowFor(jobId);
+        if (row.status !== "ready-for-review" || row.isProtected && !protectedSession.isProtectedSessionAvailable()) return;
+        if (requestFor(row).autoSave !== true) return;
+        const result = parseJson<ReadWeaveGenerateResponse>(decodeStoredValue(row.resultJson, row.isProtected));
+        if (result?.audit?.validationIssues?.some(issue =>
+            issue.startsWith("题目主对象未在回答中保留：") || issue.startsWith("后处理改动了复合名称：") ||
+            issue.startsWith("复合名称疑似被错误展开："))) {
+            throw new ValidationError("题目对象或复合名称需要人工确认");
+        }
+        commitReadWeaveGenerationJob(jobId, { expectedStateVersion: row.stateVersion });
+        reportedAutoSaveFailures.delete(jobId);
+    } catch (error) {
+        if (reportedAutoSaveFailures.has(jobId)) return;
+        reportedAutoSaveFailures.add(jobId);
+        try {
+            appendProgress(jobId, {
+                stage: "complete", round: 0,
+                message: "自动保存未完成，回答仍可手动审核和保存",
+                issues: [ error instanceof Error ? error.message : "自动保存暂不可用" ]
+            });
+        } catch { /* A removed or locked article must not interrupt the scheduler. */ }
+    }
+}
+
+function sweepPendingAutoSaves(): void {
+    lastAutoSaveSweep = Date.now();
+    for (const row of sql.getRows<Pick<JobRow, "jobId" | "isProtected">>(
+        "SELECT jobId, isProtected FROM readweave_generation_jobs WHERE status = 'ready-for-review'"
+    )) {
+        if (row.isProtected && !protectedSession.isProtectedSessionAvailable()) continue;
+        commitPendingAutoSave(row.jobId);
+    }
 }
 
 export function commitReadWeaveGenerationJob(jobId: string, inputValue: unknown): ReadWeaveGenerationJob {

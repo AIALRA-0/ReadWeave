@@ -330,7 +330,9 @@ export interface ReadWeaveGenerationJob {
     activeExternalSearch?: boolean;
     autoExternalSearch?: boolean;
     quoteSelectedText?: boolean;
+    autoSave?: boolean;
     parentLinkId?: string;
+    answerSelection?: ReadWeaveAnswerSelection;
     title: string;
     sourceExcerpt: string;
     sourceLocator?: ReadWeaveSourceLocator;
@@ -478,6 +480,8 @@ export interface ReadWeaveGenerateRequest {
     title: string;
     optimizeQuestion?: boolean;
     autoApplyPlan?: boolean;
+    /** Commit a completed, structurally valid draft without a manual click. */
+    autoSave?: boolean;
     /** User explicitly requests external evidence for this generation. */
     activeExternalSearch?: boolean;
     /** Whether automatically composed questions quote the selection; defaults to true. */

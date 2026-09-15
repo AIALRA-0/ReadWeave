@@ -98,7 +98,8 @@ import {
     recordReadWeaveTemplateUse,
     renderReadWeaveQuestionTemplate
 } from "./readweave_question_templates.js";
-import { ReadWeaveAnswer } from "./ReadWeaveAnswer.js";
+import { ReadWeaveAnswer, type ReadWeaveAnswerMarker } from "./ReadWeaveAnswer.js";
+import { hasReadWeaveQuestionMath, ReadWeaveQuestionText } from "./ReadWeaveQuestionText.js";
 import { ReadWeaveParentWindow } from "./ReadWeaveParentWindow.js";
 import { ReadWeaveChapterMap } from "./ReadWeaveChapterMap.js";
 import { buildReadWeaveChapterMap } from "./readweave_chapter_map.js";
@@ -144,6 +145,7 @@ interface Draft {
     questionTitle: string;
     optimizeQuestion: boolean;
     autoApplyPlan: boolean;
+    autoSave?: boolean;
     quoteSelectedText?: boolean;
     externalSearchDisabled?: boolean;
     /** Legacy fields kept so drafts created before the single switch remain readable. */
@@ -240,8 +242,10 @@ export default function ReadWeavePanel() {
     const [contentType, setContentType] = useState<ReadWeaveContentType>("problem");
     const [parentLinkId, setParentLinkId] = useState<string>();
     const [questionTitle, setQuestionTitle] = useState("");
+    const [editingMathQuestion, setEditingMathQuestion] = useState(false);
     const [optimizeQuestion, setOptimizeQuestion] = useState(() => readReadWeaveGenerationPreferences().optimizeQuestion);
     const [autoApplyPlan, setAutoApplyPlan] = useState(() => readReadWeaveGenerationPreferences().autoApplyPlan);
+    const [autoSave, setAutoSave] = useState(() => readReadWeaveGenerationPreferences().autoSave);
     const [externalSearchDisabled, setExternalSearchDisabled] = useState(() => readReadWeaveGenerationPreferences().externalSearchDisabled);
     const [quoteSelectedText, setQuoteSelectedText] = useState(() => readReadWeaveGenerationPreferences().quoteSelectedText);
     const [answerPlan, setAnswerPlan] = useState<ReadWeaveAnswerPlan>();
@@ -361,6 +365,7 @@ export default function ReadWeavePanel() {
         ?? (followUpContext?.parent.linkId === parentLinkId ? followUpContext.parent : undefined) : undefined;
     const suggestedTemplates = rankedReadWeaveQuestionTemplates(questionTemplates, questionTitle, questionTemplates.length);
     const activeTemplateId = activeReadWeaveQuestionTemplate(questionTemplates, questionTitle, selection?.excerpt ?? "", questionCaret, quoteSelectedText);
+    const showRenderedQuestion = hasReadWeaveQuestionMath(questionTitle) && !editingMathQuestion;
     const currentSourceExcerpt = selection
         ? resolveSourceExcerpt(selection, currentJob)
         : "";
@@ -435,6 +440,7 @@ export default function ReadWeavePanel() {
         setOptimizeQuestion(savedDraft?.optimizeQuestion ?? readReadWeaveGenerationPreferences().optimizeQuestion);
         setQuoteSelectedText(savedDraft?.quoteSelectedText ?? job.quoteSelectedText ?? readReadWeaveGenerationPreferences().quoteSelectedText);
         setAutoApplyPlan(savedDraft?.autoApplyPlan ?? job.answerPlan?.autoApplied ?? readReadWeaveGenerationPreferences().autoApplyPlan);
+        setAutoSave(savedDraft?.autoSave ?? job.autoSave ?? readReadWeaveGenerationPreferences().autoSave);
         setExternalSearchDisabled(readExternalSearchDisabled(savedDraft, job));
         setRegenerationFeedback(job.feedback ?? "");
         if (!job.result) return;
@@ -599,6 +605,7 @@ export default function ReadWeavePanel() {
         setOptimizeQuestion(matchingDraft?.optimizeQuestion ?? (confirmingPendingSelection ? optimizeQuestion : readReadWeaveGenerationPreferences().optimizeQuestion));
         setQuoteSelectedText(matchingDraft?.quoteSelectedText ?? matchingJob?.quoteSelectedText ?? (confirmingPendingSelection ? quoteSelectedText : readReadWeaveGenerationPreferences().quoteSelectedText));
         setAutoApplyPlan(matchingDraft?.autoApplyPlan ?? matchingJob?.answerPlan?.autoApplied ?? (confirmingPendingSelection ? autoApplyPlan : readReadWeaveGenerationPreferences().autoApplyPlan));
+        setAutoSave(matchingDraft?.autoSave ?? matchingJob?.autoSave ?? (confirmingPendingSelection ? autoSave : readReadWeaveGenerationPreferences().autoSave));
         setExternalSearchDisabled(confirmingPendingSelection && !matchingDraft && !matchingJob ? externalSearchDisabled : readExternalSearchDisabled(matchingDraft, matchingJob));
         setAnswerPlan(matchingDraft?.answerPlan ?? matchingJob?.answerPlan ?? matchingJob?.result?.answerPlan);
         const restoredFields = recoverReadWeaveGenerationFields({
@@ -623,6 +630,7 @@ export default function ReadWeavePanel() {
             optimizeQuestion: matchingDraft?.optimizeQuestion ?? (confirmingPendingSelection ? optimizeQuestion : defaults.optimizeQuestion),
             quoteSelectedText: matchingDraft?.quoteSelectedText ?? matchingJob?.quoteSelectedText ?? (confirmingPendingSelection ? quoteSelectedText : defaults.quoteSelectedText),
             autoApplyPlan: matchingDraft?.autoApplyPlan ?? matchingJob?.answerPlan?.autoApplied ?? (confirmingPendingSelection ? autoApplyPlan : defaults.autoApplyPlan),
+            autoSave: matchingDraft?.autoSave ?? matchingJob?.autoSave ?? (confirmingPendingSelection ? autoSave : defaults.autoSave),
             externalSearchDisabled: confirmingPendingSelection && !matchingDraft && !matchingJob ? externalSearchDisabled : readExternalSearchDisabled(matchingDraft, matchingJob),
             answerPlan: matchingDraft?.answerPlan ?? matchingJob?.answerPlan ?? matchingJob?.result?.answerPlan ?? (confirmingPendingSelection ? answerPlan : undefined),
             termIdentity: nextTermIdentity,
@@ -703,6 +711,7 @@ export default function ReadWeavePanel() {
         setQuestionTitle(defaultQuestionForExcerpt(nextSelection.questionExcerpt ?? nextSelection.excerpt, preferences.quoteSelectedText));
         setOptimizeQuestion(preferences.optimizeQuestion);
         setAutoApplyPlan(preferences.autoApplyPlan);
+        setAutoSave(preferences.autoSave);
         setExternalSearchDisabled(preferences.externalSearchDisabled);
         setQuoteSelectedText(preferences.quoteSelectedText);
         setAnswerPlan(undefined);
@@ -875,7 +884,7 @@ export default function ReadWeavePanel() {
     useEffect(() => {
         if (!noteId || !selection) return;
         const draft: Draft = {
-            kind, contentType, questionTitle, optimizeQuestion, autoApplyPlan, quoteSelectedText,
+            kind, contentType, questionTitle, optimizeQuestion, autoApplyPlan, autoSave, quoteSelectedText,
             externalSearchDisabled, answerPlan, termIdentity,
             termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId,
             contextDecision, generationJobId, reviewIssues, reviewIssueBaseline,
@@ -885,7 +894,7 @@ export default function ReadWeavePanel() {
         sessionStorage.setItem(draftKey(noteId, selection.anchorId, parentLinkId, isolatedDraftId), JSON.stringify(draft));
         sessionStorage.setItem(draftKey(noteId, selection.anchorId, parentLinkId), JSON.stringify(draft));
     }, [noteId, selection, kind, contentType, parentLinkId, questionTitle, optimizeQuestion,
-        autoApplyPlan, quoteSelectedText, externalSearchDisabled, answerPlan, termIdentity,
+        autoApplyPlan, autoSave, quoteSelectedText, externalSearchDisabled, answerPlan, termIdentity,
         termIdentityEdited, body, bodyEdited, calloutType, reuseObjectId, contextDecision,
         generationJobId, currentJob?.draftId, localDraftId, reviewIssues, reviewIssueBaseline,
         newQuestionDraft]);
@@ -1012,11 +1021,11 @@ export default function ReadWeavePanel() {
     }, [currentTitle, kind, termIdentity]);
 
     function currentGenerationForm(): GenerationForm {
-        return { kind, contentType, currentTitle, optimizeQuestion, autoApplyPlan, externalSearchDisabled, quoteSelectedText, answerPlan, termIdentity, calloutType };
+        return { kind, contentType, currentTitle, optimizeQuestion, autoApplyPlan, autoSave, externalSearchDisabled, quoteSelectedText, answerPlan, termIdentity, calloutType };
     }
 
     async function generate(confirmed?: ConfirmedGenerationSelection, {
-        kind, contentType, currentTitle, optimizeQuestion, autoApplyPlan,
+        kind, contentType, currentTitle, optimizeQuestion, autoApplyPlan, autoSave,
         externalSearchDisabled, quoteSelectedText, answerPlan, termIdentity, calloutType
     }: GenerationForm = confirmed?.form ?? currentGenerationForm()) {
         const selected = confirmed?.selection ?? selection;
@@ -1103,6 +1112,7 @@ export default function ReadWeavePanel() {
                 optimizeQuestion: kind === "question" ? optimizeQuestion : undefined,
                 quoteSelectedText,
                 autoApplyPlan,
+                autoSave,
                 activeExternalSearch: false,
                 autoExternalSearch: !externalSearchDisabled,
                 answerPlan: preparedPlan,
@@ -1396,6 +1406,7 @@ export default function ReadWeavePanel() {
                 contentType,
                 origin: readWeaveContentOriginForType(contentType),
                 autoApplyPlan,
+                autoSave,
                 activeExternalSearch: false,
                 autoExternalSearch: !externalSearchDisabled,
                 answerPlan: preparedPlan,
@@ -1621,6 +1632,7 @@ export default function ReadWeavePanel() {
         setQuestionTitle(defaultQuestionForExcerpt(selection.excerpt, preferences.quoteSelectedText));
         setOptimizeQuestion(preferences.optimizeQuestion);
         setAutoApplyPlan(preferences.autoApplyPlan);
+        setAutoSave(preferences.autoSave);
         setExternalSearchDisabled(preferences.externalSearchDisabled);
         setQuoteSelectedText(preferences.quoteSelectedText);
         setTermIdentity({});
@@ -1668,6 +1680,7 @@ export default function ReadWeavePanel() {
         writeReadWeaveGenerationPreference(key, value);
         if (key === "optimizeQuestion") setOptimizeQuestion(value);
         if (key === "autoApplyPlan") setAutoApplyPlan(value);
+        if (key === "autoSave") setAutoSave(value);
         if (key === "externalSearchDisabled") setExternalSearchDisabled(value);
         if (key === "quoteSelectedText") {
             const template = questionTemplateSource.current;
@@ -1687,10 +1700,12 @@ export default function ReadWeavePanel() {
         const replacement = renderReadWeaveQuestionTemplate(template, selection.excerpt, quoteSelectedText);
         questionTemplateSource.current = template;
         const textarea = questionTextareaRef.current;
-        const next = insertOrReplaceReadWeaveQuestion(questionTitle, replacement, textarea?.selectionStart ?? questionTitle.length);
+        const caret = showRenderedQuestion ? questionTitle.length : textarea?.selectionStart ?? questionTitle.length;
+        const next = insertOrReplaceReadWeaveQuestion(questionTitle, replacement, caret);
         setQuestionTitle(next);
         setQuestionTemplates(current => recordReadWeaveTemplateUse(current, template.id));
-        setQuestionCaret(Math.min(next.length, textarea?.selectionStart ?? 0));
+        setQuestionCaret(Math.min(next.length, caret));
+        setEditingMathQuestion(true);
         changeDraft();
         window.requestAnimationFrame(() => questionTextareaRef.current?.focus());
     }
@@ -1835,6 +1850,25 @@ export default function ReadWeavePanel() {
             Array.from(document.querySelectorAll<HTMLElement>(".readweave-entry[data-link-id]"))
                 .find(element => element.dataset.linkId === linkId)?.scrollIntoView({ block: "nearest" });
         }));
+    }
+
+    function openAnswerMarker(id: string) {
+        if (id.startsWith("entry:")) {
+            const linkId = id.slice("entry:".length);
+            const visible = Array.from(document.querySelectorAll<HTMLElement>(".readweave-entry[data-link-id]"))
+                .find(element => element.dataset.linkId === linkId);
+            if (visible) visible.scrollIntoView({ block: "nearest" });
+            else void openEntryFromChapterMap(linkId);
+            return;
+        }
+        if (!id.startsWith("job:")) return;
+        const job = generationJobs.find(candidate => candidate.jobId === id.slice("job:".length));
+        if (!job) return;
+        const parent = entries.find(entry => entry.linkId === job.parentLinkId)
+            ?? (followUpContext && followUpContext.parent.linkId === job.parentLinkId ? followUpContext.parent : undefined);
+        if (parent && job.answerSelection) setFollowUpContext({ parent, selected: job.answerSelection });
+        hydrateGenerationJob(job);
+        void markJobViewed(job);
     }
 
     const followUpSaveLock = useRef(false);
@@ -1998,6 +2032,8 @@ export default function ReadWeavePanel() {
                     onClose={() => setChapterMapOpen(false)}
                     onOpenEntry={linkId => void openEntryFromChapterMap(linkId)} />}
                 {followUpContext && <ReadWeaveParentWindow parent={followUpContext.parent} selection={followUpContext.selected}
+                    markers={answerMarkers(followUpContext.parent.linkId, followUpContext.parent.revision, entries, generationJobs)}
+                    onOpenMarker={openAnswerMarker}
                     onClose={closeFollowUp}
                     onAction={(selected, type) => beginFollowUp(followUpContext.parent, selected, type)} />}
                 {!selection ? (
@@ -2015,6 +2051,8 @@ export default function ReadWeavePanel() {
                             {entries.length === 0 && <p class="readweave-hint">{t("readweave.no_saved_items")}</p>}
                             <SavedEntryTree
                                 entries={entries}
+                                generationJobs={generationJobs}
+                                onOpenMarker={openAnswerMarker}
                                 busy={editorLocked}
                                 onEdit={beginEdit}
                                 onDelete={beginDelete}
@@ -2154,26 +2192,33 @@ export default function ReadWeavePanel() {
                                             <button type="button" class="btn btn-secondary" onClick={addCustomQuestionTemplate}>{t("readweave.add_template")}</button>
                                         </div>
                                     </div>
-                                    <label>{t("readweave.question_label")}
+                                    <label for="readweave-question-input">{t("readweave.question_label")}</label>
+                                    <div class="readweave-question-field">
                                         <textarea
+                                            id="readweave-question-input"
                                             ref={questionTextareaRef}
                                             rows={3}
                                             value={questionTitle}
+                                            hidden={showRenderedQuestion}
                                             disabled={editorLocked}
                                             onFocus={() => { if (selection.pending) void confirmPendingSelection("question", selection.excerpt).catch(error => {
                                                 setStatus(readableError(error, t("readweave.selection_sync_failed")));
                                                 setStatusTone("error");
                                             }); }}
+                                            onBlur={() => setEditingMathQuestion(false)}
                                             onInput={event => { questionTemplateSource.current = undefined; setQuestionTitle(event.currentTarget.value); setQuestionCaret(event.currentTarget.selectionStart); changeDraft(); }}
                                             onSelect={event => setQuestionCaret(event.currentTarget.selectionStart)}
                                             onKeyDown={handleQuestionKeyDown}
                                             data-testid="readweave-question"
                                         />
-                                    </label>
-                                    {questionTitle.includes("$") && <div class="readweave-question-math-preview" data-testid="readweave-question-math-preview">
-                                        <small>公式预览</small>
-                                        <ReadableBody body={questionTitle} />
-                                    </div>}
+                                        {showRenderedQuestion && <div class="readweave-question-rendered" data-testid="readweave-question-rendered">
+                                            <ReadWeaveQuestionText text={questionTitle} />
+                                            <button type="button" class="btn btn-sm btn-link" disabled={editorLocked} onClick={() => {
+                                                setEditingMathQuestion(true);
+                                                window.requestAnimationFrame(() => questionTextareaRef.current?.focus());
+                                            }}>编辑</button>
+                                        </div>}
+                                    </div>
                                     <label class="readweave-question-optimization" title={t("readweave.optimize_question_hint")}>
                                         <input type="checkbox" checked={optimizeQuestion} disabled={editorLocked} onChange={event => changeGenerationPreference("optimizeQuestion", event.currentTarget.checked)} data-testid="readweave-optimize-question" />
                                         <span><strong>{t("readweave.optimize_question")}</strong></span>
@@ -2222,6 +2267,13 @@ export default function ReadWeavePanel() {
                                         <input value={questionTitle} disabled={editorLocked} onInput={event => { setQuestionTitle(event.currentTarget.value); changeDraft(); }} />
                                     </label>
                                 </>
+                            )}
+
+                            {contentType !== "note" && (
+                                <label class="readweave-question-optimization" title="生成完成后自动保存，无需点击审核保存">
+                                    <input type="checkbox" checked={autoSave} disabled={editorLocked} onChange={event => changeGenerationPreference("autoSave", event.currentTarget.checked)} data-testid="readweave-auto-save" />
+                                    <span><strong>生成完成后自动保存</strong></span>
+                                </label>
                             )}
 
                             {contentType !== "note" && (
@@ -2286,10 +2338,9 @@ export default function ReadWeavePanel() {
                                                 class={job.jobId === generationJobId ? "active" : ""}
                                                 onClick={() => { hydrateGenerationJob(job); void markJobViewed(job); }}
                                                 key={job.jobId}
-                                                title={job.title}
                                             >
                                                 <span class={`readweave-generation-state ${generationJobStateClass(job)}`} />
-                                                <span>{job.title}</span>
+                                                <ReadWeaveQuestionText text={job.title} />
                                             </button>
                                         ))}
                                     </div>
@@ -2354,6 +2405,10 @@ export default function ReadWeavePanel() {
                                     labelledBy="readweave-draft-body-label"
                                     testId="readweave-answer"
                                     followUpLabel={currentJob?.savedLinkId ? "追问" : "保存并追问"}
+                                    markers={currentJob?.savedLinkId ? answerMarkers(currentJob.savedLinkId,
+                                        entries.find(entry => entry.linkId === currentJob.savedLinkId)?.revision ?? 0,
+                                        entries, generationJobs) : []}
+                                    onOpenMarker={openAnswerMarker}
                                     onAction={(selected, type) => void followUpFromDraft(selected, type)}
                                 />
                             )}
@@ -2445,7 +2500,7 @@ export default function ReadWeavePanel() {
                                     data-testid="readweave-save"
                                 >{contentType === "note" ? "保存" : t("readweave.review_and_save")}</button>
                             )}
-                            {currentJob?.savedLinkId && <p class="readweave-status">{t("readweave.saved")}</p>}
+                            {currentJob?.savedLinkId && <p class="readweave-status">{currentJob.autoSave ? "已自动保存 · " : ""}{t("readweave.saved")}</p>}
                             {currentJob && (
                                 <div class="readweave-review-actions">
                                     {!currentJob.savedLinkId && (
@@ -2582,10 +2637,34 @@ function ReadableBody(props: Parameters<typeof ReadWeaveAnswer>[0]) {
     return <ReadWeaveAnswer {...props} />;
 }
 
+export function answerMarkers(parentLinkId: string, revision: number, entries: ReadWeaveResolvedEntry[],
+    jobs: ReadWeaveGenerationJob[]): ReadWeaveAnswerMarker[] {
+    // Older saved follow-ups did not persist answerSelection on the link.
+    // Keep their job-backed marker visible until the link carries a locator.
+    const savedIds = new Set(entries.filter(entry => entry.answerSelection).map(entry => entry.linkId));
+    const saved = entries.filter(entry => entry.parentLinkId === parentLinkId && !entry.parentStale
+        && entry.answerSelection?.parentRevision === revision).map(entry => ({
+        id: `entry:${entry.linkId}`, parentRevision: revision,
+        startOffset: entry.answerSelection!.startOffset, endOffset: entry.answerSelection!.endOffset,
+        status: "saved" as const, title: entry.title
+    }));
+    const pending = jobs.filter(job => job.parentLinkId === parentLinkId && job.answerSelection?.parentRevision === revision
+        && job.status !== "cancelled" && (!job.savedLinkId || !savedIds.has(job.savedLinkId))).map(job => ({
+        id: `job:${job.jobId}`, parentRevision: revision,
+        startOffset: job.answerSelection!.startOffset, endOffset: job.answerSelection!.endOffset,
+        status: job.status === "ready-for-review" ? "ready" as const
+            : job.status === "failed" ? "failed" as const
+                : job.status === "paused" ? "paused" as const
+                    : job.status === "saved" ? "saved" as const : "running" as const,
+        title: job.title
+    }));
+    return [ ...saved, ...pending ];
+}
+
 function HoverEntry({ entry, onFollowUp }: { entry: ReadWeaveResolvedEntry; onFollowUp: (entry: ReadWeaveResolvedEntry, selected?: ReadWeaveAnswerSelection, contentType?: ReadWeaveContentType) => void }) {
     return (
         <article class={`${entry.kind === "question" ? "readweave-hover-question" : "readweave-hover-term"} readweave-callout-${entry.calloutType}`} tabindex={0}>
-            <div class="readweave-hover-title"><i class={CALLOUT_ICONS[entry.calloutType]} /><span>{entry.title}</span>{entry.kind === "question" && <i class="bx bx-chevron-down readweave-hover-chevron" />}</div>
+            <div class="readweave-hover-title"><i class={CALLOUT_ICONS[entry.calloutType]} /><span>{entry.kind === "question" ? <ReadWeaveQuestionText text={entry.title} /> : entry.title}</span>{entry.kind === "question" && <i class="bx bx-chevron-down readweave-hover-chevron" />}</div>
             <ReadableBody body={entry.body} revision={entry.revision} onAction={entry.depth < READWEAVE_MAX_FOLLOW_UP_DEPTH ? (selected, type) => onFollowUp(entry, selected, type) : undefined} className={entry.kind === "question" ? "readweave-hover-answer" : "readweave-hover-definition"} />
         </article>
     );
@@ -2629,12 +2708,16 @@ function EvidenceSources({
 
 function SavedEntryTree({
     entries,
+    generationJobs,
+    onOpenMarker,
     busy,
     onEdit,
     onDelete,
     onFollowUp
 }: {
     entries: ReadWeaveResolvedEntry[];
+    generationJobs: ReadWeaveGenerationJob[];
+    onOpenMarker: (id: string) => void;
     busy: boolean;
     onEdit: (entry: ReadWeaveResolvedEntry) => void;
     onDelete: (entry: ReadWeaveResolvedEntry) => void;
@@ -2648,6 +2731,8 @@ function SavedEntryTree({
             <div class="readweave-entry-tree-node" data-depth={entry.depth} key={entry.linkId}>
                 <SavedEntry
                     entry={entry}
+                    markers={answerMarkers(entry.linkId, entry.revision, entries, generationJobs)}
+                    onOpenMarker={onOpenMarker}
                     busy={busy}
                     onEdit={() => onEdit(entry)}
                     onDelete={() => onDelete(entry)}
@@ -2666,12 +2751,16 @@ function SavedEntryTree({
 
 function SavedEntry({
     entry,
+    markers,
+    onOpenMarker,
     busy,
     onEdit,
     onDelete,
     onFollowUp
 }: {
     entry: ReadWeaveResolvedEntry;
+    markers: ReadWeaveAnswerMarker[];
+    onOpenMarker: (id: string) => void;
     busy: boolean;
     onEdit: () => void;
     onDelete: () => void;
@@ -2680,7 +2769,7 @@ function SavedEntry({
     return (
         <article class={`readweave-entry readweave-callout-${entry.calloutType}`} tabindex={0} data-link-id={entry.linkId}>
             <div class="readweave-entry-title">
-                <span><i class={CALLOUT_ICONS[entry.calloutType]} /><span class="readweave-entry-type">{readWeaveContentTypeLabel(entry.contentType ?? (entry.kind === "term" ? "definition" : "problem"))}</span>{entry.title}</span>
+                <span><i class={CALLOUT_ICONS[entry.calloutType]} /><span class="readweave-entry-type">{readWeaveContentTypeLabel(entry.contentType ?? (entry.kind === "term" ? "definition" : "problem"))}</span>{entry.kind === "question" ? <ReadWeaveQuestionText text={entry.title} /> : entry.title}</span>
                 <span class="readweave-entry-heading-actions">
                     {entry.isDisplayOverride && <span class="readweave-badge">{t("readweave.local_display")}</span>}
                     {entry.parentStale && <span class="readweave-badge readweave-stale-badge">{t("readweave.parent_changed")}</span>}
@@ -2698,7 +2787,8 @@ function SavedEntry({
                 </span>
             </div>
             <div class="readweave-entry-detail">
-                <ReadableBody body={entry.body} revision={entry.revision} onAction={entry.depth < READWEAVE_MAX_FOLLOW_UP_DEPTH ? (selected, type) => onFollowUp(selected, type) : undefined} className="readweave-entry-body" />
+                <ReadableBody body={entry.body} revision={entry.revision} markers={markers} onOpenMarker={onOpenMarker}
+                    onAction={entry.depth < READWEAVE_MAX_FOLLOW_UP_DEPTH ? (selected, type) => onFollowUp(selected, type) : undefined} className="readweave-entry-body" />
                 <EvidenceSources sources={entry.evidenceSources} claims={entry.claims} />
             </div>
         </article>

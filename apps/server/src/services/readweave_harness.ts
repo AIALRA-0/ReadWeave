@@ -317,12 +317,14 @@ function normalizeCases(value: unknown): ReadWeaveHarnessCase[] {
             caseId,
             category: requireText(raw.category, "案例分类", 100),
             question: requireText(raw.question, "案例问题", 1_000),
-            context: typeof raw.context === "string" && raw.context.trim() ? raw.context.trim().slice(0, 20_000) : undefined,
+            context: typeof raw.context === "string" && raw.context.trim()
+                ? requireText(raw.context, "案例上下文", 20_000)
+                : undefined,
             expectedFacts: Array.isArray(raw.expectedFacts)
-                ? raw.expectedFacts.map(item => requireText(item, "预期事实", 500)).slice(0, 20)
+                ? raw.expectedFacts.map(item => requireText(item, "预期事实", 500))
                 : [],
             forbiddenClaims: Array.isArray(raw.forbiddenClaims)
-                ? raw.forbiddenClaims.map(item => requireText(item, "禁用断言", 500)).slice(0, 20)
+                ? raw.forbiddenClaims.map(item => requireText(item, "禁用断言", 500))
                 : [],
             critical: raw.critical === true,
             expectedIntent: raw.expectedIntent === "identity" || raw.expectedIntent === "definition"
@@ -332,10 +334,10 @@ function normalizeCases(value: unknown): ReadWeaveHarnessCase[] {
                 ? raw.expectedIntent
                 : undefined,
             badAnswer: typeof raw.badAnswer === "string" && raw.badAnswer.trim()
-                ? raw.badAnswer.trim().slice(0, 20_000)
+                ? requireText(raw.badAnswer, "错误答案", 20_000)
                 : undefined,
             referenceAnswer: typeof raw.referenceAnswer === "string" && raw.referenceAnswer.trim()
-                ? raw.referenceAnswer.trim().slice(0, 20_000)
+                ? requireText(raw.referenceAnswer, "参考答案", 20_000)
                 : undefined
         };
     });

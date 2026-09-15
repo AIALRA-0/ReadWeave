@@ -135,6 +135,74 @@ describe("bounded targeted research", () => {
         const text = `${"Preface ".repeat(1000)  }Lumen was named after a light unit`;
         expect(readWeaveEvidenceWindow(text, "Lumen origin")).toContain("named after a light unit");
     });
+    it("keeps every relevant profile fact while removing unrelated page furniture", () => {
+        const text = [
+            "Navigation Home News Contact",
+            "Wuxi Li is a principal engineer at AMD",
+            "His research interests include physical design automation",
+            "Cookie policy and newsletter archive",
+            "Wuxi Li previously studied electronic engineering"
+        ].join("\n");
+        const window = readWeaveEvidenceWindow(text, "Wuxi Li researcher profile current affiliation");
+        expect(window).toContain("principal engineer at AMD");
+        expect(window).toContain("physical design automation");
+        expect(window).toContain("previously studied electronic engineering");
+        expect(window).not.toContain("Cookie policy");
+        expect(window).not.toContain("Navigation Home");
+    });
+    it("continues person research until both current identity and professional field are evidenced", async () => {
+        search.mockResolvedValueOnce({ ...result("unused"), sources: [ {
+            url: "https://ait.example.edu/profile/mongkol",
+            title: "Mongkol Ekpanyapong - Faculty",
+            snippet: "Mongkol Ekpanyapong is an associate professor at Asian Institute of Technology",
+            provider: "Serper", score: 100, sourceCategory: "institution"
+        } ] }).mockResolvedValueOnce({ ...result("unused"), sources: [ {
+            url: "https://ait.example.edu/research/mongkol",
+            title: "Mongkol Ekpanyapong - Research",
+            snippet: "Mongkol Ekpanyapong research interests include computer architecture and embedded systems",
+            provider: "Serper", score: 100, sourceCategory: "official-profile"
+        } ] });
+        read.mockImplementation(async url => url.includes("research")
+            ? "Mongkol Ekpanyapong research interests include computer architecture and embedded systems"
+            : "Mongkol Ekpanyapong is an associate professor at Asian Institute of Technology");
+
+        const r = await researchReadWeaveEvidence({
+            ...contract,
+            normalizedQuestion: "Mongkol Ekpanyapong是谁？",
+            searchQueries: [
+                "Mongkol Ekpanyapong researcher profile current affiliation",
+                "Mongkol Ekpanyapong official profile research interests research areas"
+            ]
+        }, "", .02, false, () => {});
+
+        expect(search).toHaveBeenCalledTimes(2);
+        expect(r.audit.stopReason).toBe("sufficient");
+        expect(r.sources.map(source => source.excerpt).join("\n")).toMatch(/computer architecture/u);
+    });
+    it("uses two agreeing Latin profile titles to resolve a Chinese person without guessing", async () => {
+        search.mockResolvedValue({ ...result("unused"), sources: [ {
+            url: "https://example.edu/zhou", title: "Zhi-Hua Zhou's Homepage",
+            snippet: "Zhi-Hua Zhou, Professor of Computer Science and Artificial Intelligence",
+            provider: "Serper", score: 100, sourceCategory: "institution"
+        }, {
+            url: "https://openreview.net/profile?id=zhou", title: "Zhi-hua Zhou",
+            snippet: "Zhi-hua Zhou is a professor at Nanjing University; research interests include machine learning",
+            provider: "Exa", score: 95, sourceCategory: "registry"
+        } ] });
+        read.mockImplementation(async url => url.includes("openreview")
+            ? "Zhi-hua Zhou is a professor at Nanjing University; research interests include machine learning"
+            : "Zhi-Hua Zhou, Professor of Computer Science and Artificial Intelligence");
+
+        const r = await researchReadWeaveEvidence({
+            ...contract,
+            normalizedQuestion: "周志华是谁？",
+            searchQueries: [ "周志华 官方主页 大学 教授 研究方向" ]
+        }, "", .02, false, () => {});
+
+        expect(read).toHaveBeenCalledTimes(2);
+        expect(r.audit.stopReason).toBe("sufficient");
+        expect(r.sources.every(source => source.retrievalMode === "page-reader")).toBe(true);
+    });
     it("reads past a contents list and stops at an explicit naming decision", async () => {
         const text = `Why is it called Lumen? ${"Introduction ".repeat(2000)}`
             + `The inspiration was a light unit. ${"Context ".repeat(50)}`
@@ -175,7 +243,7 @@ describe("bounded targeted research", () => {
         expect(read.mock.calls[0][0]).toBe("https://lumen.org/about/name");
         expect(r.sources[0].url).toBe("https://lumen.org/about/name");
         expect(r.sources[0].authority).toBeUndefined();
-        expect(r.audit).toMatchObject({ queryCount:1,pageReadCount:2,stopReason:"sufficient" });
+        expect(r.audit).toMatchObject({ queryCount:1,pageReadCount:3,stopReason:"sufficient" });
     });
     it("does not infer an acronym from a publication title", () => {
         expect(

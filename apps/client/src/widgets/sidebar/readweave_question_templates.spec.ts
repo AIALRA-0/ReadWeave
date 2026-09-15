@@ -84,4 +84,15 @@ describe("ReadWeave question templates", () => {
         });
         expect(normalized.find(template => template.id === "custom-short")?.pattern).toBe("{selection}怎么回事？");
     });
+
+    it("preserves every valid custom template instead of keeping only the first forty", () => {
+        const custom = Array.from({ length: 45 }, (_, index) => ({
+            id: `custom-${index}`,
+            label: `模板${index}`,
+            pattern: `关于“{selection}”的第${index}个问题？`,
+            uses: index
+        }));
+        const normalized = normalizeReadWeaveQuestionTemplates(custom);
+        expect(custom.every(template => normalized.some(item => item.id === template.id))).toBe(true);
+    });
 });

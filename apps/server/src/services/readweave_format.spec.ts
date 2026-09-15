@@ -357,6 +357,15 @@ describe("versioned formatting contract", () => {
             "FMT-052：缩写必须置于中文全称和英文全称之前"
         );
     });
+
+    it("uses readable Chinese for dimensional and machine-learning modifiers instead of leaving bare abbreviations", () => {
+        expect(formatReadWeaveCanonicalEntities("3D 芯片采用3D堆叠ML加速器"))
+            .toBe("三维芯片采用三维堆叠机器学习加速器");
+        expect(formatReadWeaveCanonicalEntities("这里的 3D 表示沿垂直方向集成"))
+            .toBe("这里的三维表示沿垂直方向集成");
+        expect(formatReadWeaveCanonicalEntities("DPO-3D 与 3D-MAPS 是方法原名"))
+            .toBe("DPO-3D 与 3D-MAPS 是方法原名");
+    });
     it("does not resolve a slash-separated language name and introduced initialism as one abbreviation", async () => {
         const resolve = vi.fn();
         const body = "CUDA 统一计算设备架构（Compute Unified Device Architecture）用于计算；用 C++/CUDA 编写";
@@ -378,11 +387,17 @@ describe("versioned formatting contract", () => {
             "David Z. Pan"
         )).toBe("潘大卫（David Z. Pan）是研究者");
     });
-    it("preserves semantic heading depth and labels an orphan opening at its peer level", () => {
+    it("preserves semantic heading depth without inventing a panel-level answer heading", () => {
         expect(formatReadWeaveAnswerHeadings(
             "直接回答\n\n# 原理\n\n正文\n\n## 边界\n\n说明"
-        )).toBe("# 回答\n\n直接回答\n\n# 原理\n\n正文\n\n## 边界\n\n说明");
+        )).toBe("直接回答\n\n# 原理\n\n正文\n\n## 边界\n\n说明");
         expect(formatReadWeaveAnswerHeadings("只有一个连续语义块")).toBe("只有一个连续语义块");
+    });
+    it("removes only a leading heading that duplicates the visible question", () => {
+        const body = "# DAX 是什么\n\nDAX 直接访问（Direct Access）是内核机制\n\n## 如何运作\n\n它绕过页面缓存";
+        expect(formatReadWeaveAnswerHeadings(body, true, "DAX 是什么？"))
+            .toBe("DAX 直接访问（Direct Access）是内核机制\n\n## 如何运作\n\n它绕过页面缓存");
+        expect(formatReadWeaveAnswerHeadings(body, true, "DAX 有什么用途？")).toBe(body);
     });
     it("keeps formula section hierarchy, source headings and repeated formatting stable", () => {
         const body = "## 公式用途\n\n解释\n\n### 符号\n\n解释\n\n### 示例\n\n"

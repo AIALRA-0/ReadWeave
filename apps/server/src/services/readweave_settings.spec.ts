@@ -45,6 +45,40 @@ describe("ReadWeave settings", () => {
         });
     });
 
+    it("lets an explicit live-test provider override isolated database defaults", () => {
+        const previous = {
+            live: process.env.READWEAVE_LIVE_AI,
+            key: process.env.READWEAVE_API_KEY,
+            baseUrl: process.env.READWEAVE_API_BASE_URL,
+            model: process.env.READWEAVE_MODEL
+        };
+        try {
+            process.env.READWEAVE_LIVE_AI = "1";
+            process.env.READWEAVE_API_KEY = "placeholder";
+            process.env.READWEAVE_API_BASE_URL = "https://live.example/v1";
+            process.env.READWEAVE_MODEL = "live/model";
+            cls.init(() => {
+                updateReadWeaveAiSettings({ baseUrl: "https://api.deepseek.com", model: "deepseek-flash", clearApiKey: true });
+                expect(getReadWeaveRuntimeConfig()).toMatchObject({
+                    apiKey: "placeholder", baseUrl: "https://live.example/v1", model: "live/model"
+                });
+            });
+        } finally {
+            for (const [ name, value ] of Object.entries({
+                READWEAVE_LIVE_AI: previous.live,
+                READWEAVE_API_KEY: previous.key,
+                READWEAVE_API_BASE_URL: previous.baseUrl,
+                READWEAVE_MODEL: previous.model
+            })) {
+                if (value === undefined) delete process.env[name];
+                else process.env[name] = value;
+            }
+            cls.init(() => updateReadWeaveAiSettings({
+                baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash", clearApiKey: true
+            }));
+        }
+    });
+
     it("supports arbitrary compatible gateways, model aliases and independent pricing", () => {
         cls.init(() => {
             const settings = updateReadWeaveAiSettings({

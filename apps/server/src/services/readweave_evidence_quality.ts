@@ -201,7 +201,7 @@ export async function repairReadWeaveNamingEvidence(
     const entries = Array.isArray(evidence) ? [ ...evidence ] : [];
     const initial = checkReadWeaveNamingEvidence(original, entries, sources);
     const fragments = initial.issues.filter(text => text.length <= 600
-        && original.indexOf(text) === original.lastIndexOf(text)).slice(0, 2);
+        && original.indexOf(text) === original.lastIndexOf(text));
     let body = original;
     let rounds = 0;
     const warnings: string[] = [];

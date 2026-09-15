@@ -231,7 +231,15 @@ const TRAILING_ACRONYM_NAME = new RegExp(
 /** Reorder names whose complete fields are already present. No model knowledge
  * or lexical content is introduced by this operation. */
 export function formatReadWeaveCanonicalEntities(body: string): string {
-    return mapReadWeaveProse(body, text => text.replace(
+    return mapReadWeaveProse(body, text => text
+        .replace(/(?:水平)?并排\s*[（(]\s*2\.5D\s*[）)]/gu, "水平并排")
+        .replace(/垂直堆叠\s*[（(]\s*3D\s*[）)]/gu, "垂直堆叠")
+        .replace(/(?<![\p{Script=Latin}\p{N}_.-])3D\s+IC(?![\p{Script=Latin}\p{N}_-])/gu, "三维集成电路")
+        .replace(/(?<![\p{Script=Latin}\p{N}_.-])3D\s*(?=(?:芯片|集成|封装|堆叠|结构|器件|系统|布局|加速器))/gu, "三维")
+        .replace(/(?<![\p{Script=Latin}\p{N}_.-])3D(?![\p{Script=Latin}\p{N}_-])/gu, "三维")
+        .replace(/(?<=[\p{Script=Han}])\s*三维\s*(?=[\p{Script=Han}])/gu, "三维")
+        .replace(/(?<![\p{Script=Latin}\p{N}_.-])ML\s*(?=(?:模型|算法|方法|系统|加速器|工作负载))/gu, "机器学习")
+        .replace(
         /^([ \t]*(?:[-*+][ \t]+)?)([A-Z][A-Z0-9-]{1,15})[ \t]*(?:(?:的)?(?:官方|正式|完整|英文|中文)*全称(?:是|为)|即|是|指的是|表示)[ \t]*([\p{Script=Han}][\p{Script=Han} ]{1,49})（([A-Za-z][A-Za-z'’ .&+/#_-]*)）/gmu,
         (_original, prefix: string, abbreviation: string, chineseName: string, englishName: string) =>
             `${prefix}${abbreviation} ${chineseName.trim()}（${englishName.trim()}）`
@@ -254,15 +262,29 @@ export function formatReadWeaveCanonicalEntities(body: string): string {
 
 /** The renderer controls size; Markdown depth preserves semantic ownership.
  * Inspect actual headings, never heading-like source code or quotations. */
-export function formatReadWeaveAnswerHeadings(body: string, enabled = true): string {
+export function formatReadWeaveAnswerHeadings(body: string, enabled = true, answerTitle?: string): string {
     if (!enabled) return body;
     const tokens = Lexer.lex(body);
     const headings = tokens.filter((token): token is Tokens.Heading => token.type === "heading");
     if (!headings.length) return body;
-    const opening = tokens.slice(0, tokens.indexOf(headings[0]));
-    return opening.some(token => token.type !== "space")
-        ? `${"#".repeat(Math.min(...headings.map(token => token.depth)))} 回答\n\n${body}`
-        : body;
+    if (!answerTitle) return body;
+
+    const firstHeading = headings[0];
+    const firstIndex = tokens.indexOf(firstHeading);
+    if (tokens.slice(0, firstIndex).some(token => token.type !== "space")) return body;
+    const normalizeLabel = (value: string) => value.normalize("NFKC")
+        .replace(/[“”"'‘’]/gu, "")
+        .replace(/[？?：:。；;！!]+$/gu, "")
+        .replace(/\s+/gu, "")
+        .toLocaleLowerCase();
+    if (normalizeLabel(firstHeading.text) !== normalizeLabel(answerTitle)) return body;
+
+    // The panel already owns the answer title. A model-generated heading that
+    // merely repeats the question adds no semantic section and used to render
+    // as an oversized duplicate. Remove only that exact leading heading.
+    const start = body.indexOf(firstHeading.raw);
+    if (start < 0 || body.slice(0, start).trim()) return body;
+    return `${body.slice(0, start)}${body.slice(start + firstHeading.raw.length)}`.trimStart();
 }
 
 /** Mark explicit bilingual definitions; never infer a definition from prose. */
@@ -344,6 +366,24 @@ export function formatReadWeaveDefinitionBlock(body: string): string {
 /** FMT-003/008: never rewrite code, URLs, quotations, tables or formulae. */
 export function formatReadWeaveMarkdown(value: unknown): string {
     if (typeof value !== "string") return "";
+    const headingNormalized = Lexer.lex(value).map(token => {
+        if (token.type === "heading" && /\p{Script=Han}/u.test(token.text)) {
+            return token.raw.replace(/^#{1,6}[ \t]*/u, "## ");
+        }
+        if (token.type === "paragraph" && /^#{1,6}[ \t]*\p{Script=Han}/u.test(token.raw)) {
+            return token.raw.replace(/^#{1,6}[ \t]*/u, "## ");
+        }
+        if (token.type === "paragraph") {
+            const boldHeading = token.raw.trim().match(/^\*\*([^*\n]{1,30})\*\*$/u);
+            if (boldHeading && /\p{Script=Han}/u.test(boldHeading[1])) {
+                return `## ${boldHeading[1].trim()}\n\n`;
+            }
+            // A heading marker embedded in prose is malformed Markdown, not a
+            // heading. Remove only the marker and retain every surrounding word.
+            return token.raw.replace(/([^#\n])#{1,6}[ \t]+/gu, "$1");
+        }
+        return token.raw;
+    }).join("");
     const fullName = new RegExp(
         String.raw`\b([A-Z][A-Z0-9-]{1,15})\s*的(?:官方|完整|英文|中文)*全称(?:是|为)\s*`
         + String.raw`([A-Za-z][A-Za-z -]{3,100})[（(]([\p{Script=Han}][\p{Script=Han}\s]{1,50})[)）]`,
@@ -353,12 +393,13 @@ export function formatReadWeaveMarkdown(value: unknown): string {
         String.raw`^([ \t]*(?:[-*+] )?)([A-Za-z][A-Za-z -]{0,99})[（(]`
         + String.raw`([\p{Script=Han}][\p{Script=Han} ]{0,49})[)）][：:]`, "gmu"
     );
-    const normalized = formatReadWeaveCodeCopies(groupBilingualDefinitions(mapReadWeaveProse(formatReadWeaveNameParentheses(value), (text) =>
+    const normalized = formatReadWeaveCodeCopies(groupBilingualDefinitions(mapReadWeaveProse(formatReadWeaveNameParentheses(headingNormalized), (text) =>
         normalizeSimpleMathNotation(text)
             .replace(fullName, "$1 $3（$2）")
             .replace(englishFirst, "$1$3（$2）：")
             .replace(/。(?=[ \t]*(?:\n|$))/gu, "")
             .replace(/。/gu, "；")
+            .replace(/；{2,}/gu, "；")
             .replace(/；(?=[ \t]*(?:\n|$))/gu, "")
             .replace(/(?<=\p{Script=Han})[ \t]*:[ \t]*/gu, "：")
             .replace(/(?<=\p{Script=Han})[ \t]*,[ \t]*/gu, "，")
@@ -696,7 +737,8 @@ export async function repairReadWeaveConventionalTerms(
         context: ReadWeaveTermRepairContext
     ) => Promise<unknown>,
     signal?: AbortSignal,
-    articleContext?: string
+    articleContext?: string,
+    protectedNames: readonly string[] = []
 ) {
     original = formatReadWeaveCanonicalEntities(original);
     const occurrences = readWeaveProseRanges(original).flatMap(range => Array.from(
@@ -707,6 +749,14 @@ export async function repairReadWeaveConventionalTerms(
     const firstByToken = new Map<string, { token:string;start:number;before:string;after:string }>();
     const introduced = new Set<string>();
     for (const occurrence of occurrences) {
+        if (protectedNames.some(name => {
+            const normalizedName = name.normalize("NFKC");
+            for (let start = original.indexOf(normalizedName); start >= 0;
+                start = original.indexOf(normalizedName, start + normalizedName.length)) {
+                if (occurrence.start >= start && occurrence.start < start + normalizedName.length) return true;
+            }
+            return false;
+        })) continue;
         // Programming-language names are literal names, not initialisms.
         if (occurrence.token === "C++" || occurrence.token === "C#") continue;
         if (introduced.has(occurrence.token) || firstByToken.has(occurrence.token)) continue;

@@ -14,6 +14,25 @@ interface ReadWeaveRenderedUnit {
     positions?: number[];
 }
 
+export interface ReadWeaveAnswerMarker {
+    id: string;
+    parentRevision: number;
+    startOffset: number;
+    endOffset: number;
+    status: "running" | "ready" | "paused" | "failed" | "saved";
+    title: string;
+}
+
+interface ReadWeaveMarkerRect {
+    id: string;
+    status: ReadWeaveAnswerMarker["status"];
+    title: string;
+    left: number;
+    top: number;
+    width: number;
+    first: boolean;
+}
+
 function decodedSource(body: string) {
     const decoder = document.createElement("textarea");
     const positions: number[] = [];
@@ -128,6 +147,8 @@ export function ReadWeaveAnswer({
     followUpLabel = "追问",
     onFollowUp,
     onAction,
+    markers = [],
+    onOpenMarker,
 }: {
     body: string;
     className?: string;
@@ -138,12 +159,18 @@ export function ReadWeaveAnswer({
     followUpLabel?: string;
     onFollowUp?: (selection: ReadWeaveAnswerSelection) => void;
     onAction?: (selection: ReadWeaveAnswerSelection, contentType: ReadWeaveContentType) => void;
+    markers?: ReadWeaveAnswerMarker[];
+    onOpenMarker?: (id: string) => void;
 }) {
+    const container = useRef<HTMLDivElement>(null);
     const root = useRef<HTMLDivElement>(null);
     const toolbar = useRef<HTMLDivElement>(null);
     const selectionRect = useRef<DOMRect>();
     const [selected, setSelected] = useState<ReadWeaveAnswerSelection>();
     const [actionPosition, setActionPosition] = useState({ left: 8, top: 8 });
+    const [markerRects, setMarkerRects] = useState<ReadWeaveMarkerRect[]>([]);
+    const [mathRevision, setMathRevision] = useState(0);
+    const markerKey = JSON.stringify(markers);
     const html = useMemo(
         () =>
             DOMPurify.sanitize(markdown.parse(body) as string, {
@@ -173,7 +200,7 @@ export function ReadWeaveAnswer({
         if (!body.includes("$")) return;
         let cancelled = false;
         void import("../../services/math.js").then(({ renderMathInElement }) => {
-            if (!cancelled && container.isConnected)
+            if (!cancelled && container.isConnected) {
                 renderMathInElement(container, {
                     trust: false,
                     throwOnError: false,
@@ -183,11 +210,57 @@ export function ReadWeaveAnswer({
                         { left: "$", right: "$", display: false },
                     ],
                 });
+                setMathRevision(current => current + 1);
+            }
         });
         return () => {
             cancelled = true;
         };
     }, [html, body]);
+    useLayoutEffect(() => {
+        const answerRoot = root.current;
+        const answerContainer = container.current;
+        if (!answerRoot || !answerContainer || !markers.length) {
+            setMarkerRects([]);
+            return;
+        }
+        const update = () => {
+            const units = renderedUnits(answerRoot, body);
+            const origin = answerContainer.getBoundingClientRect();
+            const next: ReadWeaveMarkerRect[] = [];
+            for (const marker of markers) {
+                if (marker.parentRevision !== revision || marker.startOffset < 0 || marker.endOffset > body.length
+                    || marker.startOffset >= marker.endOffset) continue;
+                let first = true;
+                for (const unit of units) {
+                    if (unit.end <= marker.startOffset || unit.start >= marker.endOffset) continue;
+                    const range = document.createRange();
+                    if (unit.positions) {
+                        const start = unit.positions.findIndex(position => position >= marker.startOffset);
+                        const end = unit.positions.findIndex(position => position >= marker.endOffset);
+                        const length = unit.node.textContent?.length ?? 0;
+                        const from = start < 0 ? length : Math.max(0, start);
+                        const to = end < 0 ? length : Math.max(0, end);
+                        if (from >= to) continue;
+                        range.setStart(unit.node, from);
+                        range.setEnd(unit.node, to);
+                    } else range.selectNode(unit.node);
+                    for (const rect of Array.from(range.getClientRects())) {
+                        if (rect.width <= 0) continue;
+                        next.push({ id: marker.id, status: marker.status, title: marker.title,
+                            left: rect.left - origin.left, top: rect.bottom - origin.top, width: rect.width, first });
+                        first = false;
+                    }
+                }
+            }
+            setMarkerRects(next);
+        };
+        update();
+        const observer = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(update);
+        observer?.observe(answerRoot);
+        window.addEventListener("resize", update);
+        return () => { observer?.disconnect(); window.removeEventListener("resize", update); };
+    }, [body, html, revision, markerKey, mathRevision]);
     const capture = useCallback(() => {
         const selection = window.getSelection();
         if (!root.current || !selection?.rangeCount) {
@@ -228,7 +301,7 @@ export function ReadWeaveAnswer({
         };
     }, [capture]);
     return (
-        <div class="readweave-answer-container">
+        <div ref={container} class="readweave-answer-container">
             <div
                 ref={root}
                 id={id}
@@ -242,6 +315,12 @@ export function ReadWeaveAnswer({
                 // eslint-disable-next-line react/no-danger
                 dangerouslySetInnerHTML={{ __html: html }}
             />
+            {markerRects.map((rect, index) => <span key={`${rect.id}:${index}`} class={`readweave-answer-marker-line readweave-answer-marker-${rect.status}`}
+                aria-hidden="true" style={{ left: rect.left, top: rect.top, width: rect.width }} />)}
+            {markerRects.filter(rect => rect.first).map(rect => <button key={rect.id} type="button"
+                class={`readweave-answer-marker-dot readweave-answer-marker-${rect.status}`}
+                style={{ left: rect.left, top: rect.top }} title={rect.title} aria-label={`打开追问：${rect.title}`}
+                onClick={() => onOpenMarker?.(rect.id)}>{rect.status === "saved" ? "↳" : ""}</button>)}
             {selected && (onAction || onFollowUp) && createPortal(
                 <div ref={toolbar} class="readweave-answer-selection-actions readweave-selection-actions"
                     role="toolbar" aria-label="回答选区操作" style={actionPosition}>

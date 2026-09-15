@@ -139,6 +139,67 @@ describe("ReadWeave persisted generation jobs", () => {
         expect(generateMock).not.toHaveBeenCalled();
     });
 
+    it("defaults auto-save off and rejects a non-boolean setting before model work", () => {
+        expect(() => startReadWeaveGenerationJob({ ...request, autoSave: "yes" } as unknown as ReadWeaveGenerateRequest))
+            .toThrow("autoSave must be boolean");
+        expect(sql.getValue<number>("SELECT COUNT(*) FROM readweave_generation_jobs")).toBe(0);
+        expect(generateMock).not.toHaveBeenCalled();
+    });
+
+    it("auto-saves one generated answer and remains idempotent across repeated commits", async () => {
+        const started = startReadWeaveGenerationJob({ ...request, autoSave: true });
+        const saved = await waitForStatus(started.jobId, "saved");
+        expect(saved.autoSave).toBe(true);
+        expect(saved.savedLinkId).toBeTruthy();
+        expect(commitReadWeaveGenerationJob(started.jobId, { expectedStateVersion: 1 }).savedLinkId).toBe(saved.savedLinkId);
+        expect(getEntriesForAnchor(request.articleId, request.anchorId).filter(entry => entry.linkId === saved.savedLinkId)).toHaveLength(1);
+        expect(generateMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not auto-save a failed generation", async () => {
+        generateMock.mockRejectedValueOnce(new NonRetryableReadWeaveError("没有可交付正文"));
+        const started = startReadWeaveGenerationJob({ ...request, autoSave: true });
+        const paused = await waitForStatus(started.jobId, "paused");
+        expect(paused.savedLinkId).toBeUndefined();
+        expect(getEntriesForAnchor(request.articleId, request.anchorId)).toHaveLength(0);
+    });
+
+    it("keeps an answer with a detected subject mismatch available for manual review", async () => {
+        generateMock.mockResolvedValueOnce({ ...result(), audit: {
+            workflowVersion: "quality-closure-v2", questionContract: {} as NonNullable<ReadWeaveGenerateResponse["audit"]>["questionContract"],
+            searchQueries: [], unresolvedClaims: [], validationIssues: [ "题目主对象未在回答中保留：BigInt" ],
+            citationsVerified: false, generatedAt: new Date().toISOString()
+        } });
+        const started = startReadWeaveGenerationJob({ ...request, autoSave: true });
+        const ready = await waitForStatus(started.jobId, "ready-for-review");
+        expect(ready.savedLinkId).toBeUndefined();
+        expect(getEntriesForAnchor(request.articleId, request.anchorId)).toHaveLength(0);
+    });
+
+    it("does not auto-save a malformed expanded compound name", async () => {
+        generateMock.mockResolvedValueOnce({ ...result(), audit: {
+            workflowVersion: "quality-closure-v2", questionContract: {} as NonNullable<ReadWeaveGenerateResponse["audit"]>["questionContract"],
+            searchQueries: [], unresolvedClaims: [], validationIssues: [ "复合名称疑似被错误展开：IEEE 754" ],
+            citationsVerified: false, generatedAt: new Date().toISOString()
+        } });
+        const started = startReadWeaveGenerationJob({ ...request, autoSave: true });
+        const ready = await waitForStatus(started.jobId, "ready-for-review");
+        expect(ready.savedLinkId).toBeUndefined();
+        expect(getEntriesForAnchor(request.articleId, request.anchorId)).toHaveLength(0);
+    });
+
+    it("recovers an auto-save after a transactional failure without duplicating the answer", async () => {
+        setReadWeaveCommitFaultForTests("before-task-update");
+        const started = startReadWeaveGenerationJob({ ...request, autoSave: true });
+        const ready = await waitForStatus(started.jobId, "ready-for-review");
+        expect(ready.savedLinkId).toBeUndefined();
+        expect(getEntriesForAnchor(request.articleId, request.anchorId)).toHaveLength(0);
+        setReadWeaveCommitFaultForTests(undefined);
+        initializeReadWeaveGenerationJobs();
+        const saved = await waitForStatus(started.jobId, "saved");
+        expect(getEntriesForAnchor(request.articleId, request.anchorId).filter(entry => entry.linkId === saved.savedLinkId)).toHaveLength(1);
+    });
+
     it("rejects unsaved, stale, forged or fourth-level follow-ups before model work", () => {
         cls.init(() => {
             const base = { articleId:request.articleId,anchorId:request.anchorId,anchorType:"range" as const,kind:"question" as const,sourceExcerpt:"测试片段",title:"父问题",body:result().body,calloutType:"note" as const };
@@ -181,7 +242,9 @@ describe("ReadWeave persisted generation jobs", () => {
         const ready = await waitForStatus(job.jobId, "ready-for-review");
         const saved = commitReadWeaveGenerationJob(job.jobId, { expectedStateVersion: ready.stateVersion });
         const child = getEntriesForAnchor(request.articleId, request.anchorId).find(entry => entry.linkId === saved.savedLinkId);
-        expect(child).toMatchObject({ parentLinkId: parent.linkId, depth: 1 });
+        expect(child).toMatchObject({ parentLinkId: parent.linkId, depth: 1, answerSelection: {
+            parentRevision: parent.revision, startOffset: 0, endOffset: 4, text: parent.body.slice(0, 4)
+        } });
         expect(getAnchorSummaries(request.articleId).find(summary => summary.anchorId === request.anchorId)?.excerpt).toBe("测试片段");
         expect(generateMock).toHaveBeenCalledTimes(1);
     });

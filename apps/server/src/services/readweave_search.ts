@@ -635,8 +635,7 @@ const orcidEmploymentSearch: SearchAdapter = async (query, _config, fetcher) => 
         });
         orcidIds = (result.result ?? [])
             .map(item => item["orcid-identifier"]?.path?.toLocaleUpperCase())
-            .filter((value): value is string => Boolean(value && /^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/u.test(value)))
-            .slice(0, 2);
+            .filter((value): value is string => Boolean(value && /^\d{4}-\d{4}-\d{4}-\d{3}[\dX]$/u.test(value)));
     }
     if (orcidIds.length === 0) return [];
     const records = await Promise.all(orcidIds.map(async orcidId => ({
@@ -698,7 +697,7 @@ const orcidEmploymentSearch: SearchAdapter = async (query, _config, fetcher) => 
         }));
     }
     const officialProfileSources: ReadWeaveSearchSource[] = [];
-    for (const profileUrl of Array.from(officialProfileUrls).slice(0, 2)) {
+    for (const profileUrl of officialProfileUrls) {
         try {
             interface WordPressPage {
                 link?: string;
@@ -889,11 +888,8 @@ const jinaSearch: SearchAdapter = async (query, config, fetcher) => {
     });
 };
 
-/**
- * Read only a small number of already-selected pages. Jina is deliberately a
- * page reader here, not a second answer generator: the writer still receives
- * claims and source metadata rather than Jina's raw page as an instruction.
- */
+/** Jina is a page reader here, not a second answer generator: the writer still
+ * receives normalized evidence rather than treating page text as instructions. */
 export async function readReadWeavePageWithJina(
     url: string,
     options: { fetcher?: FetchLike; signal?: AbortSignal; anonymous?: boolean } = {}
@@ -983,7 +979,11 @@ export function buildFocusedGeneralSearchQuery(query: string): string {
     const personName = personProfile
         ? semanticQuery.match(/\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,5}\b/u)?.[0]
         : undefined;
-    const primaryAnchor = personName ? `"${personName}"` : latinAnchors[0];
+    const chinesePersonName = personProfile
+        ? semanticQuery.match(/^([\p{Script=Han}·]{2,6})(?=\s|是谁|是何人|现任|任职)/u)?.[1]
+        : undefined;
+    const primaryAnchor = personName ? `"${personName}"`
+        : chinesePersonName ? `"${chinesePersonName}"` : latinAnchors[0];
 
     let intent = "";
     if (personProfile) intent = "researcher profile current affiliation";
@@ -1012,16 +1012,21 @@ function deduplicateAndRank(sources: ReadWeaveSearchSource[], query: string): Re
     const latinPerson = personProfile
         ? query.match(/\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,5}\b/u)?.[0].toLocaleLowerCase()
         : undefined;
-    const personTokens = latinPerson?.split(/\s+/u).filter(Boolean) ?? [];
+    const chinesePerson = personProfile
+        ? query.match(/["“]?([\p{Script=Han}·]{2,6})["”]?(?=\s|是谁|是何人|现任|任职)/u)?.[1]
+        : undefined;
+    const personTokens = latinPerson?.split(/\s+/u).filter(Boolean)
+        ?? (chinesePerson ? [ chinesePerson ] : []);
     return sources
         .filter(item => item.title && item.url)
         .map((item, index) => {
             let authority = item.score;
             const evidenceText = `${item.title}\n${item.snippet}\n${item.publishedAt ?? ""}`;
-            if (latinPerson) {
+            if (personTokens.length > 0) {
                 const normalizedEvidence = evidenceText.toLocaleLowerCase();
-                const mentionsPerson = personTokens.every(token => normalizedEvidence.includes(token));
-                const titleMentionsPerson = personTokens.every(token => item.title.toLocaleLowerCase().includes(token));
+                const normalizedTokens = personTokens.map(token => token.toLocaleLowerCase());
+                const mentionsPerson = normalizedTokens.every(token => normalizedEvidence.includes(token));
+                const titleMentionsPerson = normalizedTokens.every(token => item.title.toLocaleLowerCase().includes(token));
                 if (mentionsPerson) {
                     authority += 70;
                     if (titleMentionsPerson) authority += 20;
@@ -1031,14 +1036,14 @@ function deduplicateAndRank(sources: ReadWeaveSearchSource[], query: string): Re
             }
             try {
                 const hostname = new URL(item.url).hostname;
-                if (/(?:doi\.org|crossref\.org|dblp\.org|openalex\.org|semanticscholar\.org|arxiv\.org|europepmc\.org|nih\.gov|\.edu|\.gov)$/iu.test(hostname)) authority += 12;
+                if (/(?:doi\.org|crossref\.org|dblp\.org|openalex\.org|semanticscholar\.org|arxiv\.org|europepmc\.org|nih\.gov|\.edu(?:\.[a-z]{2})?|\.gov(?:\.[a-z]{2})?)$/iu.test(hostname)) authority += 12;
                 if (/^(?:orcid\.org|www\.orcid\.org|ieee\.org|www\.ieee\.org|usb\.org|www\.usb\.org|riscv\.org|www\.riscv\.org|nodejs\.org|www\.acm\.org|acm\.org|dblp\.org|www\.dblp\.org|computeexpresslink\.org|www\.computeexpresslink\.org|api-docs\.deepseek\.com)$/iu.test(hostname)) {
                     authority += 24;
                 } else if (/\.org$/iu.test(hostname)) {
                     authority += 3;
                 }
                 if (personProfile) {
-                    if (/\.edu$/iu.test(hostname) && /(?:faculty|people|person|profile|directory|professor|homepage)/iu.test(item.url)) authority += 18;
+                    if (/\.edu(?:\.[a-z]{2})?$/iu.test(hostname) && /(?:faculty|people|person|profile|directory|professor|homepage)/iu.test(item.url)) authority += 18;
                     if (/^(?:orcid\.org|www\.orcid\.org)$/iu.test(hostname)) authority += 16;
                     if (/(?:crossref|dblp|openalex|semanticscholar|arxiv|europepmc)/iu.test(item.provider)) authority -= 28;
                     if (/(?:About\s+None|Experience\s+N\/A|Education\s+N\/A|Publications\s+N\/A){2,}/iu.test(evidenceText)) authority -= 140;
@@ -1334,7 +1339,7 @@ export function buildReadWeaveSearchVariants(query: string): string[] {
             `${abbreviation} acronym history official`
         );
     }
-    return Array.from(new Set(variants.map(item => normalizeQuery(item)).filter(Boolean))).slice(0, 5);
+    return Array.from(new Set(variants.map(item => normalizeQuery(item)).filter(Boolean)));
 }
 
 export async function searchReadWeaveEvidencePlan(

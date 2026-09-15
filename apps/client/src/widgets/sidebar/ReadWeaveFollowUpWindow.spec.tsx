@@ -41,7 +41,7 @@ describe("independent follow-up lifecycle", () => {
     it("reviews a complete editable plan before generating when the remembered automatic preference is off", async () => {
         await act(() => render(<ReadWeaveFollowUpWindow parent={parent}
             selection={{parentRevision:1,startOffset:0,endOffset:2,text:"选区"}}
-            generationPreferences={{autoApplyPlan:false,optimizeQuestion:false,quoteSelectedText:false,externalSearchDisabled:true}}
+            generationPreferences={{autoApplyPlan:false,optimizeQuestion:false,quoteSelectedText:false,externalSearchDisabled:true,autoSave:false}}
             onClose={() => {}} onOpen={() => {}} onJob={() => {}} />, host));
         const button = (text:string) => Array.from(document.querySelectorAll<HTMLButtonElement>(".readweave-follow-up-window button"))
             .find(item=>item.textContent===text)!;

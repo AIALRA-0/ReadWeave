@@ -2,12 +2,15 @@ import { READWEAVE_MAX_FOLLOW_UP_DEPTH, type ReadWeaveAnswerSelection, type Read
 import { createPortal } from "preact/compat";
 import { useState } from "preact/hooks";
 
-import { ReadWeaveAnswer } from "./ReadWeaveAnswer.js";
+import { ReadWeaveAnswer, type ReadWeaveAnswerMarker } from "./ReadWeaveAnswer.js";
+import { ReadWeaveQuestionText } from "./ReadWeaveQuestionText.js";
 
 /** The parent remains readable while the regular ReadWeave editor handles its child. */
-export function ReadWeaveParentWindow({ parent, selection, onClose, onAction }: {
+export function ReadWeaveParentWindow({ parent, selection, markers, onOpenMarker, onClose, onAction }: {
     parent: ReadWeaveResolvedEntry;
     selection: ReadWeaveAnswerSelection;
+    markers: ReadWeaveAnswerMarker[];
+    onOpenMarker: (id: string) => void;
     onClose: () => void;
     onAction: (selection: ReadWeaveAnswerSelection, contentType: ReadWeaveContentType) => void;
 }) {
@@ -35,9 +38,9 @@ export function ReadWeaveParentWindow({ parent, selection, onClose, onAction }: 
                 <button type="button" class="btn btn-sm" onClick={onClose} aria-label="关闭原回答浮窗">×</button>
             </header>
             <div class="readweave-follow-up-content">
-                <strong>{parent.title}</strong>
+                <strong><ReadWeaveQuestionText text={parent.title} /></strong>
                 <small>已选：{selection.text}</small>
-                <ReadWeaveAnswer body={parent.body} revision={parent.revision}
+                <ReadWeaveAnswer body={parent.body} revision={parent.revision} markers={markers} onOpenMarker={onOpenMarker}
                     onAction={parent.depth < READWEAVE_MAX_FOLLOW_UP_DEPTH ? onAction : undefined} />
             </div>
         </section>, document.body

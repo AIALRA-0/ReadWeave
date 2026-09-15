@@ -103,13 +103,13 @@ export function normalizeReadWeaveQuestionTemplates(value: unknown): ReadWeaveQu
     for (const builtin of DEFAULT_READWEAVE_QUESTION_TEMPLATES) {
         if (!seen.has(builtin.id)) result.push({ ...builtin });
     }
-    return result.length > 0 ? result.slice(0, 40) : DEFAULT_READWEAVE_QUESTION_TEMPLATES.map(template => ({ ...template }));
+    return result.length > 0 ? result : DEFAULT_READWEAVE_QUESTION_TEMPLATES.map(template => ({ ...template }));
 }
 
 export function rankedReadWeaveQuestionTemplates(
     templates: ReadWeaveQuestionTemplate[],
     question: string,
-    limit = 5
+    _limit = 5
 ): ReadWeaveQuestionTemplate[] {
     const normalizedQuestion = decodeReadWeaveText(question);
     const intentOrder = [
@@ -127,7 +127,6 @@ export function rankedReadWeaveQuestionTemplates(
             score: template.uses * 10 + (template.id === intentId ? 1000 : 0) - index
         }))
         .toSorted((left, right) => right.score - left.score)
-        .slice(0, Math.max(1, Math.min(40, limit)))
         .map(item => item.template);
 }
 

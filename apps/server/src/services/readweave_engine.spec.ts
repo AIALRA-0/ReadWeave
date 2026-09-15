@@ -63,7 +63,7 @@ describe("ReadWeave deterministic engine", () => {
         ]);
     });
 
-    it("returns at most three candidates above the semantic threshold", () => {
+    it("returns every candidate above the semantic threshold without semantic truncation", () => {
         const objects = Array.from({ length: 6 }, (_, index) => ({
             objectId: `question-${index}`,
             kind: "question",
@@ -73,7 +73,7 @@ describe("ReadWeave deterministic engine", () => {
         })) as ReadWeaveObject[];
 
         const candidates = findReadWeaveCandidates("“3D-MAPS”是什么？请给出通用、详细说明", "question", objects, 8);
-        expect(candidates).toHaveLength(3);
+        expect(candidates).toHaveLength(4);
         expect(candidates.every(candidate => candidate.confidence >= 0.55)).toBe(true);
         expect(candidates.every(candidate => candidate.title.includes("3D-MAPS"))).toBe(true);
     });

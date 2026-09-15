@@ -48,17 +48,42 @@ export default class SyncInstance {
 
     async stop() {
         const child = this.child;
-        if (!child || child.exitCode !== null) {
+        this.child = undefined;
+        if (!child || child.exitCode !== null || child.signalCode !== null) {
             return;
         }
 
         await new Promise<void>((resolve) => {
-            child.once("exit", () => resolve());
-            child.kill("SIGTERM");
-            // fallback if SIGTERM is ignored
-            setTimeout(() => {
-                if (child.exitCode === null) child.kill("SIGKILL");
-            }, 10_000).unref();
+            let settled = false;
+            let forceTimer: ReturnType<typeof setTimeout> | undefined;
+            let settleTimer: ReturnType<typeof setTimeout> | undefined;
+            const finish = () => {
+                if (settled) return;
+                settled = true;
+                if (forceTimer) clearTimeout(forceTimer);
+                if (settleTimer) clearTimeout(settleTimer);
+                child.removeListener("exit", finish);
+                child.removeListener("close", finish);
+                child.removeListener("error", finish);
+                resolve();
+            };
+
+            child.once("exit", finish);
+            child.once("close", finish);
+            child.once("error", finish);
+
+            if (!child.kill("SIGTERM") || child.exitCode !== null || child.signalCode !== null) {
+                finish();
+                return;
+            }
+
+            // Windows can reap a child between the exit-code check and listener setup,
+            // leaving no future event to settle the promise. Escalate once, then settle
+            // even when Node never reports the already-reaped process event.
+            forceTimer = setTimeout(() => {
+                if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+                settleTimer = setTimeout(finish, 2_000);
+            }, 10_000);
         });
     }
 

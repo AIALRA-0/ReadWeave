@@ -32,8 +32,21 @@ describe("ReadWeave domain policy framework", () => {
         expect(profile.primaryDomain).toBe("identity");
         expect(profile.domains).toEqual(expect.arrayContaining([ "identity", "current-status" ]));
         expect(profile.risk).toBe("high");
-        expect(profile.requiredEvidenceTypes).toEqual(expect.arrayContaining([ "current-role", "current-status" ]));
+        expect(profile.requiredEvidenceTypes).toEqual(expect.arrayContaining([
+            "current-role", "current-status", "professional-field"
+        ]));
         expect(profile.answerChecks).toContain("separate-role-education-and-authorship");
+    });
+
+    it("recognizes a person selected through the term action from article context", () => {
+        const profile = buildReadWeaveDomainProfile(
+            { kind: "term", title: "Sung Kyu Lim" },
+            "“Sung Kyu Lim”是什么？",
+            "Sung Kyu Lim 是电子设计自动化领域的教授和研究者"
+        );
+        expect(profile.domains).toContain("identity");
+        expect(profile.domains).toContain("current-status");
+        expect(profile.primaryDomain).toBe("identity");
     });
 
     it("keeps source authority, fact type and time scope explicit", () => {
@@ -51,6 +64,14 @@ describe("ReadWeave domain policy framework", () => {
         expect(education.claimTypes).toContain("education");
         expect(education.claimTypes).not.toContain("current-role");
         expect(education.timeScope).toBe("historical");
+    });
+
+    it("classifies a person's explicit research interests as professional-field evidence", () => {
+        const expertise = enrichReadWeaveEvidenceSource(source({
+            excerpt: "Research interests include computer architecture, embedded systems and machine learning"
+        }));
+
+        expect(expertise.claimTypes).toContain("professional-field");
     });
 
     it("preserves first-party personal evidence as self-reported instead of treating it as an independent employer source", () => {

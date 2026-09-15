@@ -39,6 +39,9 @@ function claimTypesForSource(source: ReadWeaveEvidenceSource): string[] {
     if (/(?:current|present|现任|当前|至今|principal|professor|职位|机构|任职)/iu.test(text)) types.add("current-role");
     if (/(?:ph\.d|博士|education|教育|毕业|学位)/iu.test(text)) types.add("education");
     if (/(?:author|作者|论文|publication|发表|doi)/iu.test(text)) types.add("authorship");
+    if (/(?:research interests?|research (?:areas?|focus(?:es)?)|works? (?:on|in)|专业领域|研究方向|研究领域|主要研究|从事[^。；\n]{0,80}研究|电子设计自动化|集成电路物理设计|机器学习|人工智能|计算机视觉|计算机体系结构|嵌入式系统|微电子|先进封装)/iu.test(text)) {
+        types.add("professional-field");
+    }
     if (/(?:definition|定义|是什么|means|指的是)/iu.test(text)) types.add("definition");
     if (/(?:mechanism|机制|原理|通过|输入|输出)/iu.test(text)) types.add("mechanism");
     if (types.size === 0) types.add("general");
@@ -56,9 +59,16 @@ export function enrichReadWeaveEvidenceSource(source: ReadWeaveEvidenceSource): 
 
 export function buildReadWeaveDomainProfile(
     request: Pick<ReadWeaveGenerateRequest, "kind" | "title">,
-    normalizedQuestion: string
+    normalizedQuestion: string,
+    context = ""
 ): ReadWeaveDomainProfile {
-    const text = `${normalizedQuestion}\n${request.title}`.normalize("NFKC").trim();
+    const requestText = `${normalizedQuestion}\n${request.title}`.normalize("NFKC").trim();
+    const candidatePerson = requestText.match(/[“"'‘]([^”"'’\n]{2,120})[”"'’]/u)?.[1]?.trim()
+        ?? requestText.match(/\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,5}\b/u)?.[0];
+    const contextualPerson = Boolean(candidatePerson
+        && context.toLocaleLowerCase().includes(candidatePerson.toLocaleLowerCase())
+        && /(?:教授|学者|研究者|科学家|工程师|任职|任教|院士|博士|个人主页|\bprofessor\b|\bresearcher\b|\bscientist\b|\bengineer\b|\bfaculty\b)/iu.test(context));
+    const text = `${requestText}\n${contextualPerson ? "人物 现任" : ""}`;
     const domains: ReadWeaveDomain[] = [];
     if (PERSON_PATTERN.test(text)) domains.push("identity");
     if (request.kind === "term" || DEFINITION_PATTERN.test(text)) domains.push("definition");
@@ -81,7 +91,7 @@ export function buildReadWeaveDomainProfile(
         [ "identity", "current-status", "bibliographic", "calculation" ].includes(domain)
     ) ? "high" : domains.some(domain => [ "definition", "procedure", "comparison" ].includes(domain)) ? "medium" : "low";
     const requiredEvidenceTypes = Array.from(new Set([
-        ...(domains.includes("identity") ? [ "current-role", "current-organization" ] : []),
+        ...(domains.includes("identity") ? [ "current-role", "current-organization", "professional-field" ] : []),
         ...(domains.includes("current-status") ? [ "current-status", "date" ] : []),
         ...(domains.includes("bibliographic") ? [ "title", "authorship", "publisher", "doi" ] : []),
         ...(domains.includes("definition") ? [ "definition" ] : []),
@@ -128,7 +138,7 @@ export function buildReadWeaveEvidencePackSummary(
         externalSourceIds: enriched.filter(source => source.sourceType === "external").map(source => source.sourceId),
         sourceCount: enriched.length,
         queryCount,
-        warnings: Array.from(new Set(warnings)).slice(0, 12)
+        warnings: Array.from(new Set(warnings))
     };
 }
 

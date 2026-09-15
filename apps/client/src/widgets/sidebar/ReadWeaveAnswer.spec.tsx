@@ -138,4 +138,23 @@ describe("selectable Markdown answers", () => {
         await act(() => toolbar.querySelectorAll("button")[3].click());
         expect(action).toHaveBeenCalledWith(expect.objectContaining({ text: "回答中的文字" }), "key-point");
     });
+    it("draws answer-local follow-up status without changing answer text", async () => {
+        const original = Range.prototype.getClientRects;
+        Range.prototype.getClientRects = () => [ new DOMRect(20, 20, 60, 20) ] as unknown as DOMRectList;
+        const open = vi.fn();
+        try {
+            await act(() => render(<ReadWeaveAnswer body="父回答中的文字" revision={3}
+                markers={[ { id:"child",parentRevision:3,startOffset:1,endOffset:4,status:"ready",title:"追问一" } ]}
+                onOpenMarker={open} />, host));
+            expect(host.querySelector(".readweave-answer-marker-line.readweave-answer-marker-ready")).toBeTruthy();
+            expect(host.querySelector(".readweave-readable-body")?.textContent?.trim()).toBe("父回答中的文字");
+            await act(() => host.querySelector<HTMLButtonElement>(".readweave-answer-marker-dot")!.click());
+            expect(open).toHaveBeenCalledWith("child");
+            await act(() => render(<ReadWeaveAnswer body="父回答中的文字" revision={4}
+                markers={[ { id:"child",parentRevision:3,startOffset:1,endOffset:4,status:"ready",title:"追问一" } ]} />, host));
+            expect(host.querySelector(".readweave-answer-marker-dot")).toBeNull();
+        } finally {
+            Range.prototype.getClientRects = original;
+        }
+    });
 });

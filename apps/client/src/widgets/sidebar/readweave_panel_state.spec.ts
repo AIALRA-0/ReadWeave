@@ -11,7 +11,6 @@ import {
     mergeReadWeaveGenerationJobSnapshot,
     normalizeReadWeaveReadableMath,
     normalizeReadWeaveTermIdentityForReview,
-    READWEAVE_CANDIDATE_LIMIT,
     READWEAVE_CANDIDATE_MIN_CONFIDENCE,
     readWeaveCalloutForContentType,
     readWeaveCompactStatusText,
@@ -67,7 +66,7 @@ describe("ReadWeave panel state", () => {
         expect(calloutAfterKindChange("caution", "term")).toBe("caution");
     });
 
-    it("shows only the three strongest relevant reuse candidates", () => {
+    it("shows every relevant reuse candidate in confidence order", () => {
         const visible = visibleReadWeaveCandidates([
             { objectId: "low", kind: "term", title: "low", confidence: READWEAVE_CANDIDATE_MIN_CONFIDENCE - 0.001, reuseRecommended: false },
             { objectId: "threshold", kind: "term", title: "threshold", confidence: READWEAVE_CANDIDATE_MIN_CONFIDENCE, reuseRecommended: false },
@@ -77,8 +76,8 @@ describe("ReadWeave panel state", () => {
             { objectId: "second", kind: "term", title: "second", confidence: 0.8, reuseRecommended: false }
         ]);
 
-        expect(visible).toHaveLength(READWEAVE_CANDIDATE_LIMIT);
-        expect(visible.map(candidate => candidate.objectId)).toEqual([ "first", "second", "third" ]);
+        expect(visible).toHaveLength(4);
+        expect(visible.map(candidate => candidate.objectId)).toEqual([ "first", "second", "third", "fourth" ]);
     });
 
     it("keeps completed and failed drafts retryable but blocks active jobs", () => {

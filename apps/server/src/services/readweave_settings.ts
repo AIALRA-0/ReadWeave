@@ -256,12 +256,19 @@ export function getReadWeaveRuntimeConfig(): ReadWeaveModelRuntimeConfig {
     if (!credential.value) {
         throw new NonRetryableReadWeaveError("ReadWeave API is not configured. Add an API key in Settings → AI / LLM → ReadWeave.");
     }
-    const baseUrl = optionService.getOptionOrNull("readWeaveBaseUrl")?.trim()
-        || process.env.READWEAVE_API_BASE_URL?.trim()
+    const storedBaseUrl = optionService.getOptionOrNull("readWeaveBaseUrl")?.trim();
+    const environmentBaseUrl = process.env.READWEAVE_API_BASE_URL?.trim();
+    const storedModel = optionService.getOptionOrNull("readWeaveModel")?.trim();
+    const environmentModel = process.env.READWEAVE_MODEL?.trim()
+        || process.env.READWEAVE_DEEPSEEK_MODEL?.trim();
+    // Live and benchmark suites run against an isolated database containing
+    // harmless defaults. Explicit process settings must select the intended
+    // provider instead of being shadowed by those defaults.
+    const preferEnvironment = process.env.READWEAVE_LIVE_AI === "1"
+        || process.env.READWEAVE_BENCHMARK_AI === "1";
+    const baseUrl = (preferEnvironment ? environmentBaseUrl || storedBaseUrl : storedBaseUrl || environmentBaseUrl)
         || DEFAULT_BASE_URL;
-    const model = optionService.getOptionOrNull("readWeaveModel")?.trim()
-        || process.env.READWEAVE_MODEL?.trim()
-        || process.env.READWEAVE_DEEPSEEK_MODEL?.trim()
+    const model = (preferEnvironment ? environmentModel || storedModel : storedModel || environmentModel)
         || DEFAULT_MODEL;
     const providerType = configuredProviderType(baseUrl);
     const pricing = configuredPricing(providerType, model);

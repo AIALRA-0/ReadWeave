@@ -239,6 +239,20 @@ describe("naming provenance, not a semantic truth certificate", () => {
         expect(result.check.issues).toEqual([ second ]);
         expect(result.warnings).toHaveLength(1);
     });
+    it("sends every independent naming issue through one repair batch", async () => {
+        const clauses = [
+            "Lumen 于 1987 年得名于光通量单位。",
+            "Nova 于 1988 年得名于新星。",
+            "Orbis 于 1989 年得名于轨道。"
+        ];
+        const repair = vi.fn(async (fragments: string[]) => fragments.map(fragment => ({
+            original: fragment,
+            replacement: fragment.replace(/于 19\d{2} 年/u, ""),
+            namingEvidence: []
+        })));
+        await repairReadWeaveNamingEvidence(clauses.join(""), [], [], repair);
+        expect(repair.mock.calls[0]?.[0]).toEqual(clauses);
+    });
     it("allows terminal punctuation differences in a complete repaired sentence", async () => {
         const original = "Lumen 于 1987 年得名于光通量单位。";
         const replacement = "Lumen 得名于光通量单位。";

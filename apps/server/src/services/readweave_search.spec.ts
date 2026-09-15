@@ -66,6 +66,13 @@ describe("ReadWeave free-source search", () => {
         expect(query).toContain("researcher profile current affiliation");
     });
 
+    it("keeps a Chinese person's full name as an exact search anchor", () => {
+        const query = buildFocusedGeneralSearchQuery("周志华 官方主页 大学 教授 研究方向");
+
+        expect(query).toMatch(/^"周志华"/u);
+        expect(query).toContain("researcher profile current affiliation");
+    });
+
     it("admits a first-party personal homepage instead of dropping non-edu domains", async () => {
         cls.init(() => {
             updateReadWeaveAiSettings({
@@ -225,6 +232,8 @@ describe("ReadWeave free-source search", () => {
                 "NPU official definition full name",
                 "NPU acronym history official"
             ]));
+        expect(buildReadWeaveSearchVariants("NPU Researcher professor profile"))
+            .toHaveLength(6);
     });
 
     it("identifies free-source requests with a contactable project URL", async () => {

@@ -1,308 +1,206 @@
 <div align="center">
-  <img src="assets/readme/readweave-hero.svg" alt="ReadWeave workflow from an article paragraph to a reviewed knowledge object" />
 
-# ReadWeave
+<h1>ReadWeave</h1>
 
-**Turn deliberate questions during reading into reviewed, reusable knowledge that remains stably connected to its source paragraph**
+<p><strong>Ask, verify, understand, and retain knowledge beside the source without interrupting reading or letting a model rewrite the article</strong></p>
 
-[![Privacy Gate](https://github.com/AIALRA-0/ReadWeave/actions/workflows/readweave-privacy.yml/badge.svg)](https://github.com/AIALRA-0/ReadWeave/actions/workflows/readweave-privacy.yml)
-[![CodeQL](https://github.com/AIALRA-0/ReadWeave/actions/workflows/codeql.yml/badge.svg)](https://github.com/AIALRA-0/ReadWeave/actions/workflows/codeql.yml)
-[![ReadWeave](https://img.shields.io/badge/ReadWeave-0.1.0-60A5FA)](docs/readlayer/10-IMPLEMENTATION-STATUS.md)
-[![TriliumNext](https://img.shields.io/badge/TriliumNext-0.104.0-2DD4BF)](docs/readlayer/research/UPSTREAM-BASELINE.md)
-[![License](https://img.shields.io/badge/License-AGPL--3.0--only-C084FC)](LICENSE)
+<p>
+  <a href="README.md">简体中文</a> ·
+  <a href="#2-core-experience">Core experience</a> ·
+  <a href="#4-quick-start">Quick start</a> ·
+  <a href="docs/readlayer/README.md">Design docs</a> ·
+  <a href="docs/readlayer/10-IMPLEMENTATION-STATUS.md">Implementation status</a> ·
+  <a href="https://github.com/AIALRA-0/ReadWeave/actions">Automated checks</a>
+</p>
 
-[中文](README.md) · [Core loop](#3-core-loop) · [Architecture](#5-architecture) · [Local validation](#11-local-validation) · [Implementation status](docs/readlayer/10-IMPLEMENTATION-STATUS.md)
+<img src="assets/readme/readweave-hero.svg" width="960" alt="ReadWeave flow from source selection through a reviewable draft to a saved knowledge object" />
+
+<sub>Figure 1. Select source text, generate from evidence, review the draft, and save reusable knowledge</sub>
+
 </div>
 
-<div align="center">
-  <sub>Figure 1. ReadWeave path across paragraph anchors, durable review drafts, and reusable knowledge objects</sub>
-</div>
+## 1 What ReadWeave is
 
-## 1 Project position
+ReadWeave is a personal web reading workflow built on TriliumNext `0.104.0`
 
-ReadWeave is a Web-first personal reading-workflow modification based on TriliumNext `v0.104.0`. It is not an official TriliumNext distribution [1][2]
+Select text in an editable or read-only article, then ask a question, generate a definition, add an explanatory annotation, condense a summary, or write a personal note. Generated content remains an editable sidecar draft until you explicitly save it as reusable knowledge
 
-The user reads in Trilium Web, selects a complete paragraph, and asks one question or defines one term. The system selects minimally sufficient context, calls an online model, persists the generation job and review draft on the server, and saves content as an immutable-identifier knowledge object only after explicit approval
+ReadWeave does not try to read on your behalf. It reduces the mechanical work of researching a question, assembling context, recording an answer, and finding that answer again
 
-ReadWeave does not predict questions in advance or learn preferences from behavior. The person decides what to ask, when to ask, whether to save, whether to reuse, and how to edit [3]
+It is not an official TriliumNext release, a multi-user collaboration product, an automatic question generator, or an unattended writing system
 
-## 2 Base interface
-
-<div align="center">
-  <img src="docs/app.png" alt="TriliumNext anonymous demo knowledge-base interface" />
-
-Figure 2.1. Anonymous TriliumNext base interface inherited by ReadWeave
-</div>
-
-Figure 2.1 is an upstream TriliumNext public demo screenshot. It illustrates the note tree, rich-text editor, and sidebar foundation. It is not a ReadWeave-panel screenshot and contains no personal note or deployment information
-
-The repository currently has no ReadWeave-panel screenshot that is approved for public use. This README uses a repository-owned hero and architecture diagrams instead of fabricating a product image. A real screenshot should be added only after validation in an anonymous isolated database
-
-## 3 Core loop
+## 2 Core experience
 
 <div align="center">
 
-```mermaid
-%% User loop from deliberate paragraph selection to reviewed persistence
-flowchart TB
-    Read[Read an article in Trilium Web] --> Select[Hover and select a complete paragraph]
-    Select --> Ask[Ask one question or define one term]
-    Ask --> Context[Select minimally sufficient context]
-    Context --> Provider[Call the online model from the server]
-    Provider --> Draft[Persist a server-side review draft]
-    Draft --> Review{Human review}
-    Review -->|Save| Candidate[Check similar knowledge objects]
-    Candidate --> Choice{Reuse, create, or article variant}
-    Choice --> Object[Create or link a canonical object]
-    Object --> Anchor[Connect by immutable identity to the source anchor]
-    Review -->|Not saved yet| Draft
-```
+Table 2.1. Five content types and how they are created
 
-Figure 3.1. Deliberate question, durable draft, human review, and stable-link workflow
+| Content | How it starts | Intended use | Model call |
+| --- | --- | --- | ---: |
+| Question | Type or assemble a question from templates | Answer a concrete reading question | Yes |
+| Definition | Select a name or concept | Explain identity, operation, and boundaries | Yes |
+| Annotation | Select a difficult passage | Expand the explanation without changing the source | Yes |
+| Summary | Select a passage | Condense it into reviewable knowledge points | Yes |
+| Note | Type directly | Preserve your own judgment, connection, or reminder | No |
 
 </div>
 
-<div align="center">
+- Editable and read-only articles share the same selection, preview, and sidecar-save behavior; read-only mode never writes back to the article body
+- Selection immediately reveals the lightweight action entry and question preview
+- The system can normalize informal questions and prepare an answer plan; turn off automatic adoption to edit that plan before writing
+- External research participates by default, while article context remains an important reference rather than the only asserted source; research can be disabled for one question
+- A generated result can be edited, locally rewritten, or regenerated; local rewrite replaces only the selected answer fragment
+- A saved answer can be selected for a follow-up in an independent window, up to three levels deep; the parent must be saved first
+- An unsaved result keeps its green reminder until a successful save clears it
 
-Table 3.1. Seven-step usage flow
-
-| Step | User action | System promise |
-| --- | --- | --- |
-| 1 | Hover and click a text paragraph | Select the complete paragraph and persist a stable anchor |
-| 2 | Enter one question or term | Keep every generation single-question and single-answer |
-| 3 | Request an answer | Select context within a deterministic budget and call the model only on the server |
-| 4 | Read or edit the draft | Persist it as `ready-for-review` so it survives restart without becoming canonical knowledge |
-| 5 | Inspect similar candidates | Highlight reusable objects while preserving create and variant choices |
-| 6 | Confirm save | Create a canonical object and anchor link without using titles as foreign keys |
-| 7 | Edit or export | Preview impact, then update globally, create a variant, override display, or export the index |
-
-</div>
-
-## 4 Product principles
-
-<div align="center">
-
-Table 4.1. Frozen boundaries
-
-| Principle | Current choice | Why it matters |
-| --- | --- | --- |
-| Human-initiated questions | No automatic bulk question generation | Preserve reading judgment and learner agency |
-| Review before persistence | Jobs move through `ready-for-review → saving → saved` only after an explicit commit | The model cannot write directly into canonical knowledge |
-| Identifier links | Article anchors reference immutable object IDs | Renames, homonyms, and global updates remain reliable |
-| Trilium as source of truth | Notes, relations, revisions, permissions, and backup remain native | Derived similarity indexes can be deleted and rebuilt |
-| Explicit preferences | Only the user can change behavioral settings | The same state and settings retain a deterministic workflow |
-| Web first | Initial delivery targets Trilium Server and browsers | Desktop is not a launch dependency |
-| Online model | DeepSeek is the first provider; local models are out of scope | Provider behavior stays behind a server adapter |
-| Personal use | Social, multi-user, and centralized cloud knowledge are out of scope | Permission and recovery boundaries stay controlled |
-
-</div>
-
-## 5 Architecture
+## 3 From reading to knowledge
 
 <div align="center">
 
 ```mermaid
-%% Boundary among Trilium Web, ReadWeave server modules, truth data, and the model provider
+%% Show the user journey from source selection to knowledge reuse
 flowchart TB
-    Browser[Trilium Web in the browser] --> Panel[Paragraph anchors and ReadWeave panel]
-    Panel --> API[ReadWeave server API]
-    API --> Engine[Deterministic context and similarity engine]
-    API --> Provider[Online-model server adapter]
-    API --> Domain[Knowledge-object domain service]
-    Domain --> Truth[Trilium notes, attributes, relations, and revisions]
-    Domain --> Derived[Rebuildable similarity index]
-    API --> Draft[Durable generation jobs and review drafts]
-    Truth --> Backup[Native Trilium backup]
-    Truth --> Export[Independent JSON index export]
+    Read[Read an editable or read-only article] --> Select[Select text that needs attention]
+    Select --> Type{Choose a content type}
+    Type -->|Question, definition, annotation, summary| Plan[Normalize the question and prepare an answer plan]
+    Type -->|Note| Manual[Write personal content directly]
+    Plan --> Evidence[Combine article context with external evidence]
+    Evidence --> Draft[Generate an editable draft]
+    Draft --> Review{Read and edit}
+    Manual --> Save[Confirm save]
+    Review -->|Continue editing| Draft
+    Review -->|Confirm| Save
+    Save --> Object[Create a stable knowledge object]
+    Object --> Anchor[Link it to the source range]
+    Anchor --> Reuse[Preview, reuse, or follow up later]
 ```
 
-Figure 5.1. Interface, server, Trilium truth data, and provider boundary
+<sub>Figure 3.1. ReadWeave keeps explicit human review between model generation and durable knowledge</sub>
 
 </div>
 
-The browser can call only the ReadWeave server API and never receives the model credential. Canonical knowledge exists only in Trilium truth data. Durable drafts survive restart but do not participate in similarity search, global references, or index export before explicit commit [4]
+The article retains its source text. Knowledge is stored in sidecar objects connected by stable identifiers. Titles, question text, and answer text are not link keys, so renaming and homonyms do not directly break references
 
-## 6 Data model
+Unsaved drafts can recover after a page refresh or service restart, and stale requests cannot overwrite newer edits
 
-<div align="center">
+## 4 Quick start
 
-Table 6.1. Stable identifiers and ownership
+### 4.1 Requirements
 
-| Entity | Identifier | Storage | Key semantics |
-| --- | --- | --- | --- |
-| Article | `articleId` | Native Trilium note | Uses `noteId`; title and path changes do not affect references |
-| Paragraph anchor | `anchorId` | Persistent CKEditor model attribute | Stable after creation; paragraph order and text hashes are not keys |
-| Knowledge object | `objectId` | Hidden Trilium object subtree | One reviewed Q&A or one term definition |
-| Article link | `linkId` | Hidden Trilium link subtree | Uniquely connects an article, anchor, and object |
-| Generation job and review draft | `jobId + draftId` | ReadWeave server database | Persists state version, active attempt, progress, and result; not canonical knowledge before commit |
-| Similar candidate | Derived index key | Rebuildable index | Discovery aid, never the source of truth |
+- Windows 10 or Windows 11
+- Node.js `24.18.0`
+- pnpm `11.11.0`, pinned by the repository `packageManager` field
 
-</div>
+### 4.2 First launch
 
-Canonical objects and links inherit the source article's protection state. Reads and exports pass through the current Trilium protected-session check. When an object is unreadable, its title, excerpt, and similarity score remain hidden [4]
+First, install the locked dependencies from the repository root
 
-## 7 Reuse and editing
+```powershell
+# Enable the declared package manager and install locked dependencies
+corepack enable
+pnpm install --frozen-lockfile
+```
 
-Similar-title candidates suggest reuse without blocking a distinct object or article-specific variant
+Second, double-click [`Start-ReadWeave.cmd`](Start-ReadWeave.cmd)
 
-Before editing an object, the UI presents its link count, article count, and article titles visible to the current session. The user then selects one of three semantics [5]
+The launcher builds the server, uses the isolated `apps/server/data-readweave` data directory, and opens the local page at `http://127.0.0.1:8082`
 
-<div align="center">
+Third, create this isolated database on first launch. Open “Options → AI / LLM → ReadWeave model settings,” save the writing-model and search configuration, and test the connection
 
-Table 7.1. Three editing semantics
+Fourth, open a text note and select text. A successful setup shows the Question/Definition action near the source and the five content types in the right sidebar
 
-| Operation | Changed entity | Result in other articles |
-| --- | --- | --- |
-| Global update | Latest revision of the original `objectId` | Every readable link receives the new content on its next read |
-| Article variant | New object, with the current `linkId` redirected | Other articles continue to reference the original object |
-| Display only | Display fields on the current link | Canonical body and other links remain unchanged |
+Double-click [`Stop-ReadWeave.cmd`](Stop-ReadWeave.cmd) to stop the local instance
 
-</div>
-
-Titles, questions, answers, term names, and abbreviations never serve as link keys. Homonyms can coexist as separate objects
-
-## 8 Context and generation
-
-Context always includes the user question and complete target paragraph. It can then draw from the heading path, adjacent paragraphs, current section, article metadata, relevant in-article sections, and user-approved linked sources [4]
-
-The goal is the smallest sufficient evidence set, not filling the budget. Unit tests prove that the selected paragraph is retained, the character budget is respected, unrelated paragraphs are not added merely to fill space, and relevant paragraphs can be selected [6]
-
-The same explicit settings and state follow the same application rules, while an online model can still vary wording. ReadWeave reduces variation through pinned workflow versions, explicit model configuration, low randomness, structured validation, bounded retry, and evaluation records
-
-## 9 Export and backup
-
-The article sidebar exports articles, anchors, canonical objects, and links as an independent JSON file. Protocol version `1.0` includes a SHA-256 integrity digest [7]
-
-Validation covers JSON syntax, JSON Schema 2020-12, identifier uniqueness, link foreign keys, article-anchor ownership, object types, term formatting, forbidden fields, secret patterns, and a normalized content digest
-
-Drafts, credentials, derived vectors, and model-internal reasoning never enter the export. The first release promises export but not safe import, and the export does not replace a native Trilium database backup
-
-## 10 Upstream capabilities
-
-ReadWeave retains the TriliumNext personal-knowledge-base foundation. The complete upstream overview, installation methods, community channels, and translations remain available in [`docs/README.md`](docs/README.md) and the [language directory](docs) [2]
-
-<div align="center">
-
-Table 10.1. Inherited TriliumNext capability groups
-
-| Group | Representative capabilities |
-| --- | --- |
-| Knowledge organization | Arbitrarily deep trees, cloning, attributes, relations, full-text search, and note hoisting |
-| Authoring | Rich text, tables, images, math, code, canvas, Mermaid, and mind maps |
-| Version safety | Note revisions, protected notes, native backup, and sync server |
-| Visualization | Relation maps, note maps, geographic maps, GPX tracks, and collection tables |
-| Automation | Scripts, REST API, Web Clipper, import/export, and customizable UI |
-| Multi-device access | Web, desktop, touch mobile UI, dark themes, and translated interfaces |
-| Scale | Upstream documentation describes knowledge bases beyond 100,000 notes |
-| Operations | Metrics endpoints and a Grafana dashboard |
-
-</div>
-
-## 11 Local validation
-
-The repository pins Node.js `24.18.0`, pnpm `11.11.0`, and TriliumNext `0.104.0` [8]
+On other platforms, prepare the dependencies using the [upstream environment guide](docs/Developer%20Guide/Developer%20Guide/Environment%20Setup.md), then start the development service
 
 ```bash
-corepack enable # Enable the pnpm release declared by the repository
-pnpm install --frozen-lockfile # Install workspace dependencies from the lockfile
-pnpm server:start # Start the local Trilium Server and Web interface
+# Start the development server and web interface
+pnpm server:start
 ```
 
-The local default is `http://localhost:8080`. This loopback address is for development and is not a production entry point
+The development service uses `http://localhost:8080` by default
 
-Run the ReadWeave-focused checks
+## 5 Generation, research, and cost
+
+The writing model is configured on the server. ReadWeave supports the official DeepSeek endpoint and compatible third-party DeepSeek endpoints. The browser receives masked configuration state, never the complete credential
+
+The research layer can combine general web results, person-oriented discovery, academic sources, and page extraction according to the question. The normal interface exposes the answer, sources, and cost summary instead of requiring readers to understand the internal routing
+
+Per-question budget reservations use two bands:
+
+- Routine questions reserve up to CNY 0.05
+- Difficult research reserves up to CNY 0.10
+
+Displayed cost is an estimate derived from reported token usage and configured rates, not a supplier invoice. When a third-party endpoint lacks complete rates, ReadWeave uses a conservative estimate instead of presenting unknown cost as zero
+
+A failed search does not turn an unsupported guess into a confirmed fact. Generated content still requires human reading, and an automated check does not prove factual acceptance
+
+## 6 Data and security boundaries
+
+- Model and search credentials remain in local server settings or server environment variables
+- Credentials must not enter browser content, notes, exports, logs, screenshots, or Git history
+- Questions, definitions, annotations, summaries, and notes remain drafts until confirmation
+- Read-only articles create sidecar locators and never invoke article-body save
+- Saved objects and links inherit source-note protection and remain subject to Trilium protected sessions
+- The independent JSON export contains articles, ranges, objects, and links, but excludes credentials, drafts, and model-internal work
+- Rehearse upgrade, restore, and rollback on a complete copy before connecting an important daily database
+- Trilium supports user scripts; untrusted scripts can access personal data, so install only extensions you understand and trust
+
+Report vulnerabilities through the repository’s [private security advisory form](https://github.com/AIALRA-0/ReadWeave/security/advisories/new)
+
+Do not paste the following into public issues:
+
+- Credentials
+- Databases
+- Logs
+- Real article content
+
+## 7 Development and validation
+
+Start with the checks directly related to ReadWeave
 
 ```bash
-pnpm run readweave:privacy # Scan every ReadWeave change relative to the upstream baseline
-pnpm run --filter server test # Run server domain and storage tests
-pnpm run --filter client test # Run client tests
-pnpm run --filter server e2e # Run browser E2E against an anonymous isolated database
-pnpm client:build # Create the production client build
-pnpm server:build # Create the production server build
+# Scan ReadWeave changes for credentials and personal paths
+pnpm readweave:privacy
+
+# Run server and client tests
+pnpm --filter server test --run
+pnpm --filter client test --run
+
+# Build the production client and server
+pnpm client:build
+pnpm server:build
 ```
 
-Development and tests must use an anonymous isolated database. Before connecting a daily database for the first time, rehearse upgrade, backup, restoration, and rollback on a complete copy [9]
+Browser regression uses an anonymous isolated database. It should not connect to personal daily data or call paid production providers
 
-## 12 Security and privacy
+```bash
+# Run the server browser end-to-end suite
+pnpm --filter server e2e
+```
 
-- Model credentials enter only through server-side secret management. Real values must not appear in browsers, notes, exports, logs, screenshots, or Git
+Current scope, executed evidence, and known limits are tracked in:
 
-- Treat every credential previously transferred through an uncontrolled channel as compromised, revoke it at the provider, and create a replacement
+- [Implementation and acceptance status](docs/readlayer/10-IMPLEMENTATION-STATUS.md)
+- [Quality verification record](docs/readlayer/2026-09-quality-verification.md)
+- [Writing-contract verification](docs/readlayer/writing-contract-v2.md)
+- [Upstream baseline](docs/readlayer/research/UPSTREAM-BASELINE.md)
 
-- The anonymous test provider runs only in the in-memory database test mode. Automated tests neither read personal notes nor call the internet
+## 8 Repository entry points
 
-- `_readweaveObjects` and `_readweaveLinks` inherit source protection. Linking from an open article cannot lower a protected object's permissions
+- [`packages/commons/src/lib/readweave.ts`](packages/commons/src/lib/readweave.ts) — shared ReadWeave types
+- [`apps/client/src/widgets/sidebar/ReadWeavePanel.tsx`](apps/client/src/widgets/sidebar/ReadWeavePanel.tsx) — ReadWeave sidebar interface
+- [`apps/server/src/services/readweave_unified_ai.ts`](apps/server/src/services/readweave_unified_ai.ts) — unified generation flow
+- [`apps/server/src/services/readweave_research.ts`](apps/server/src/services/readweave_research.ts) — cross-domain research flow
+- [`apps/server/src/services/readweave_search.ts`](apps/server/src/services/readweave_search.ts) — search-provider adapters
+- [`apps/server/src/services/readweave_repository.ts`](apps/server/src/services/readweave_repository.ts) — ReadWeave repository layer
+- [`apps/server/e2e/readweave.spec.ts`](apps/server/e2e/readweave.spec.ts) — core browser regression
+- [`docs/readlayer`](docs/readlayer) — ReadWeave design and verification documents
 
-- Commit hooks, push hooks, and GitHub Actions scan for secrets, personal paths, and ReadWeave changes relative to the upstream baseline [10]
+## 9 Upstream, contribution, and license
 
-- Public issues and screenshots must contain no deployment origin, server path, real article body, user identifier, database file, account, token, or model-usage record
+ReadWeave is a long-lived TriliumNext modification. It keeps reading-specific behavior in isolated modules where practical so upstream fixes can continue to be integrated. The [upstream documentation](docs/README.md) retains the full Trilium feature set, installation routes, contributor history, and community links
 
-## 13 Current status
+Before submitting a change, run the tests and privacy checks that match its scope. Issue reports should use reproducible steps and anonymous data, never a personal database or real model response
 
-ReadWeave version `0.1.0` has implemented the core personal Web reading loop and is in release acceptance [9]
-
-Validated areas include client and server production builds, domain and storage tests, browser E2E, JSON Schema export validation, target-project type checks, dark-theme and sidebar layout, the privacy gate, and CodeQL
-
-<div align="center">
-
-Table 13.1. Manual gates before release
-
-| Gate | Completion condition | Current boundary |
-| --- | --- | --- |
-| Credential rotation | Configure a new server credential and revoke every former one | The service owner must complete this at the provider |
-| Live provider contract | Use an anonymous public article to check billing, timeout, and errors | Offline automation cannot replace a real-provider check |
-| Database recovery | Rehearse upgrade, backup, restoration, and rollback on a full copy | Never point a first upgrade at the only daily database |
-| Reading acceptance | The product owner reviews at least three articles in a real reading routine | Preferences become explicit settings, never implicit learning |
-
-</div>
-
-## 14 Repository map
-
-<div align="center">
-
-Table 14.1. ReadWeave maintainer entry points
-
-| Path | Responsibility |
-| --- | --- |
-| [`packages/commons/src/lib/readweave.ts`](packages/commons/src/lib/readweave.ts) | Versioned object, link, context, and export domain types |
-| [`packages/ckeditor5/src/plugins/readweave_anchor.ts`](packages/ckeditor5/src/plugins/readweave_anchor.ts) | Stable paragraph anchors in the editor model |
-| [`apps/server/src/services/readweave_engine.ts`](apps/server/src/services/readweave_engine.ts) | Deterministic context budget and similar-title candidates |
-| [`apps/server/src/services/readweave_repository.ts`](apps/server/src/services/readweave_repository.ts) | Permissions, objects, links, impact, variants, and export |
-| [`apps/server/src/services/readweave_ai.ts`](apps/server/src/services/readweave_ai.ts) | Online-model server adapter and anonymous test substitute |
-| [`apps/server/e2e/readweave.spec.ts`](apps/server/e2e/readweave.spec.ts) | Browser regression for review, reuse, edit propagation, and export |
-| [`docs/readlayer`](docs/readlayer) | Product, UX, architecture, risk, traceability, and release evidence |
-| [`scripts/readweave`](scripts/readweave) | Privacy scanning and Git-hook installation |
-
-</div>
-
-## 15 Upstream and license
-
-ReadWeave follows TriliumNext under GNU Affero General Public License v3.0 only. See [`LICENSE`](LICENSE) for the complete terms [11]
-
-The original Trilium concept came from zadam, and the community project is maintained by Elian Doran and many contributors. ReadWeave preserves upstream authorship, contributor, third-party component, translation, and sponsorship information in the upstream documentation and repository history [2]
-
-ReadWeave is intended as a long-lived, upstream-mergeable modification. Every upstream merge should record the baseline, conflicts, database version, dependency changes, and regression evidence
-
-## 16 References
-
-[1] AIALRA-0, “ReadWeave quick guide,” [`README_READWEAVE.md`](README_READWEAVE.md), 2026
-
-[2] TriliumNext, “Trilium Notes project documentation,” [`docs/README.md`](docs/README.md), 2026
-
-[3] AIALRA-0, “ReadWeave product overview,” [`docs/readlayer/README.md`](docs/readlayer/README.md), 2026
-
-[4] AIALRA-0, “ReadWeave technical architecture,” [`docs/readlayer/03-ARCHITECTURE.md`](docs/readlayer/03-ARCHITECTURE.md), 2026
-
-[5] AIALRA-0, “ReadWeave interaction specification,” [`docs/readlayer/02-UX-SPEC.md`](docs/readlayer/02-UX-SPEC.md), 2026
-
-[6] AIALRA-0, “Deterministic context engine tests,” [`apps/server/src/services/readweave_engine.spec.ts`](apps/server/src/services/readweave_engine.spec.ts), 2026
-
-[7] AIALRA-0, “ReadWeave index export protocol,” [`docs/readlayer/08-INDEX-EXPORT.md`](docs/readlayer/08-INDEX-EXPORT.md), 2026
-
-[8] TriliumNext and AIALRA-0, “Workspace runtime metadata,” [`.nvmrc`](.nvmrc) and [`package.json`](package.json), 2026
-
-[9] AIALRA-0, “ReadWeave implementation and acceptance status,” [`docs/readlayer/10-IMPLEMENTATION-STATUS.md`](docs/readlayer/10-IMPLEMENTATION-STATUS.md), 2026
-
-[10] AIALRA-0, “ReadWeave privacy workflow,” [`.github/workflows/readweave-privacy.yml`](.github/workflows/readweave-privacy.yml), 2026
-
-[11] Free Software Foundation, “GNU Affero General Public License version 3,” [`LICENSE`](LICENSE), 2007
+This repository continues under the GNU Affero General Public License v3.0 only. See [`LICENSE`](LICENSE) for the complete terms

@@ -5,7 +5,6 @@ export function readWeaveQuestionStackFromText(value: string): ReadWeaveQuestion
         .split(/\r?\n/gu)
         .map(text => text.trim())
         .filter(Boolean)
-        .slice(0, 12)
         .map((text, index) => ({ id: `question-${index + 1}`, text }));
 }
 

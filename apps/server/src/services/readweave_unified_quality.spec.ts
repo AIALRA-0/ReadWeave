@@ -867,8 +867,8 @@ describe("ReadWeave unified QA and definition quality contract", () => {
             expect(questionPrompt, `question prompt missing: ${rule}`).toContain(rule);
             expect(termPrompt, `term prompt missing: ${rule}`).toContain(rule);
         }
-        expect(questionPrompt).toMatch(/2—5 段|1—5 个自然段/);
-        expect(termPrompt).toContain("复杂时最多 3 段");
+        expect(questionPrompt).toContain("不得用固定段落数或字符数截断必要内容");
+        expect(termPrompt).toContain("不得用固定段落数或字符数截断必要内容");
         expect(termPrompt).toContain("termIdentity");
     });
 
@@ -1378,6 +1378,18 @@ describe("ReadWeave unified QA and definition quality contract", () => {
                 englishName: "Electronic Design Automation"
             }
         })).toEqual([]);
+    });
+
+    it("accepts a direct definition whose object category is a process stage", () => {
+        expect(findReadWeaveQualityIssues(
+            "- MOL 中段制程（Middle of Line）：集成电路制造中连接晶体管前端工序与后端金属互连的一段工艺环节；它形成器件接触与局部互连",
+            "MOL 是什么？",
+            {
+                kind: "term",
+                subject: "MOL",
+                termIdentity: { abbreviation: "MOL", chineseName: "中段制程", englishName: "Middle of Line" }
+            }
+        )).toEqual([]);
     });
 
     it("rejects a body that merely mentions but does not define the structured term identity", () => {

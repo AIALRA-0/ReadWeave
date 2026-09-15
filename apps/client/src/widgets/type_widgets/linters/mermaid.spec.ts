@@ -1,8 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { trimIndentation } from "@triliumnext/commons";
 import { getMermaidDiagnostics } from "./mermaid.js";
 
 describe("Mermaid linter", () => {
+    // Mermaid's first import initializes every diagram parser. Under the full Windows
+    // test matrix that one-time setup can exceed the ordinary assertion timeout even
+    // though parsing itself takes milliseconds. Keep the product path lazy and isolate
+    // dependency startup from the behavior assertions.
+    beforeAll(async () => {
+        await import("mermaid");
+    }, 30_000);
 
     it("reports correctly bad diagram type", async () => {
         const input = trimIndentation`\

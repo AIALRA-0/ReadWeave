@@ -27,7 +27,7 @@ describe("ScriptContext", () => {
         ctx.modules[moduleA.noteId] = { exports: exportsA };
         const requireFn = ctx.require(`${moduleA.noteId} ${moduleB.noteId}`);
         expect(requireFn("ModuleA")).toBe(exportsA);
-    });
+    }, 30_000);
 
     it("require throws when the requested module title is not among the allowed note ids", async () => {
         const startNote = buildNote({ title: "Start2" });

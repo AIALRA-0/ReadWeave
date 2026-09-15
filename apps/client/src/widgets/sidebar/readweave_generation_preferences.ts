@@ -3,10 +3,11 @@ export interface ReadWeaveGenerationPreferences {
     autoApplyPlan: boolean;
     externalSearchDisabled: boolean;
     quoteSelectedText: boolean;
+    autoSave: boolean;
 }
 
 export const DEFAULT_READWEAVE_GENERATION_PREFERENCES: ReadWeaveGenerationPreferences = {
-    optimizeQuestion: true, autoApplyPlan: true, externalSearchDisabled: false, quoteSelectedText: true
+    optimizeQuestion: true, autoApplyPlan: true, externalSearchDisabled: false, quoteSelectedText: true, autoSave: false
 };
 
 // localStorage already separates origins; pathname separates hosted instances.

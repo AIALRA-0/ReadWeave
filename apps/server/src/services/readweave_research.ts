@@ -4,7 +4,7 @@ import type {
     ReadWeaveResearchAudit,
 } from "@triliumnext/commons";
 
-import { READWEAVE_RESEARCH_ACTION_LIMIT,ReadWeaveBudget } from "./readweave_budget.js";
+import { ReadWeaveBudget } from "./readweave_budget.js";
 import {
     READWEAVE_ORIGIN_ASSERTION,
     normalizeReadWeaveEvidenceText,
@@ -13,8 +13,122 @@ import {
 } from "./readweave_evidence_quality.js";
 import { readReadWeavePageWithJina, searchReadWeaveEvidence } from "./readweave_search.js";
 
-export function readWeaveEvidenceWindow(text: string, _question: string, _limit = 1800): string {
-    return normalizeReadWeaveEvidenceText(text);
+export function readWeaveEvidenceWindow(text: string, question: string, _limit = 1800): string {
+    const cleaned = text.normalize("NFC")
+        .replace(/\[\[\d+\]\]\(https?:\/\/[^\s]*#cite_note[^\s]*\)/gu, "")
+        .replace(/\[([^\]\n]+)\]\(https?:\/\/[^\s]*(?:\s+"[^"\n]*")?\)/gu, "$1")
+        .replace(/\[([^\]\n]+)\]\[[^\]\n]*\]/gu, "$1")
+        .replace(/(?<!\w)[*_]{1,2}|[*_]{1,2}(?!\w)/gu, "")
+        .replace(/[‘’]/gu, "'")
+        .replace(/[“”]/gu, '"')
+        .replace(/[ \t]+/gu, " ")
+        .replace(/\n{3,}/gu, "\n\n")
+        .trim();
+    if (!cleaned) return "";
+    const person = requiresPersonIdentity(question);
+    const subject = person
+        ? question.match(/\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,5}\b/u)?.[0]
+            ?? readWeaveResearchSubject(question)
+        : readWeaveResearchSubject(question);
+    const subjectTokens = Array.from(subject.toLocaleLowerCase()
+        .matchAll(/[\p{L}\p{N}][\p{L}\p{N}'’._-]{1,}/gu), match => match[0]);
+    const queryTokens = Array.from(new Set(Array.from(question.toLocaleLowerCase()
+        .matchAll(/[\p{L}\p{N}][\p{L}\p{N}+._\/-]{1,}/gu), match => match[0])
+        .filter(token => !/^(?:what|who|when|where|why|how|is|are|the|and|or|official|profile|current|affiliation|researcher|是谁|什么|如何|为什么|官方|主页|大学|教授|研究方向)$/u.test(token))));
+    const units = cleaned.split(/(?<=[.!?。！？；;])\s+|\n+/gu)
+        .map(unit => unit.trim()).filter(Boolean);
+    const wholeLower = cleaned.toLocaleLowerCase();
+    const pageNamesSubject = subjectTokens.length > 0
+        && subjectTokens.every(token => wholeLower.includes(token));
+    const profileCue = /(?:现任|目前|任职|任教|教授|学者|研究者|科学家|工程师|讲席|主任|创始人|研究方向|工作领域|专注于|主要研究|贡献|数学家|作家|程序员|\bprofessor\b|\bresearcher\b|\bscientist\b|\bengineer\b|\bfaculty\b|\bdirector\b|\bfounder\b|\bresearch interests?\b|\bworks? (?:on|in|at)\b|\bknown for\b)/iu;
+    const bibliographyOnly = /(?:^|\s)(?:references?|publications?|selected papers?|citations?)\s*[：:]?$|\bdoi\b|\bvol\.?\s*\d|\bpp\.?\s*\d|发表于|期刊|会议论文集|出版物列表/iu;
+    const factCue = /(?:是指|是一个|是一种|用于|负责|通过|工作原理|机制|定义|表示|全称|缩写|得名|命名|stands for|named after|means|defined as|is a|refers to|works by|used for)/iu;
+    const selected = units.filter(unit => {
+        const lower = unit.toLocaleLowerCase();
+        const namesSubject = subjectTokens.length > 0
+            && subjectTokens.every(token => lower.includes(token));
+        if (person) {
+            if (bibliographyOnly.test(unit) && !profileCue.test(unit)) return false;
+            return namesSubject || pageNamesSubject && profileCue.test(unit);
+        }
+        const overlap = queryTokens.some(token => lower.includes(token));
+        return namesSubject || overlap && factCue.test(unit)
+            || READWEAVE_ORIGIN_ASSERTION.test(unit)
+            || /(?:inspiration|inspired|来源|灵感|缘由)/iu.test(unit)
+            || /stands for|abbreviation (?:of|for)|acronym (?:of|for)|全称(?:为|是)|(?:简称|缩写)(?:为|是)/iu.test(unit);
+    });
+    if (selected.length === 0) return normalizeReadWeaveEvidenceText(cleaned);
+    const seen = new Set<string>();
+    return selected.filter(unit => {
+        const fingerprint = normalizeReadWeaveEvidenceText(unit).toLocaleLowerCase();
+        if (!fingerprint || seen.has(fingerprint)) return false;
+        seen.add(fingerprint);
+        return true;
+    }).join("\n");
+}
+
+function requiresPersonIdentity(question: string): boolean {
+    return /(?:是谁|是何人|人物|个人简介|现任机构|任职)|\bwho\s+is\b|\bbiograph(?:y|ical)\b|\bcurrent affiliation\b/iu
+        .test(question);
+}
+
+const PERSON_ROLE_PATTERN = /(?:教授|学者|研究者|科学家|工程师|任职|任教|院士|讲席|主任|创始人|数学家|作家|程序员|\bprofessor\b|\bresearcher\b|\bscientist\b|\bengineer\b|\bfaculty\b|\bdirector\b|\bfounder\b|\bmathematician\b|\bwriter\b)/iu;
+const PERSON_EXPERTISE_PATTERN = /(?:专业领域|研究方向|研究领域|主要研究|从事[^。；\n]{0,80}研究|代表性工作|核心工作|贡献|电子设计自动化|集成电路物理设计|机器学习|人工智能|计算机视觉|计算机体系结构|嵌入式系统|微电子|先进封装|分析机|计算程序|\bresearch interests?\b|\bresearch (?:areas?|focus(?:es)?)\b|\bworks? (?:on|in)\b|\bknown for\b|\belectronic design automation\b|\bphysical design\b|\bmachine learning\b|\bartificial intelligence\b|\bcomputer vision\b|\bcomputer architecture\b|\bembedded systems?\b|\bmicroelectronics\b|\badvanced packaging\b|\banalytical engine\b|\bcomput(?:ing|ation|er programming)\b)/iu;
+
+function personLatinAliasFromTitle(title: string): { fingerprint: string } | undefined {
+    const leading = title.normalize("NFKC").split(/\s+(?:[|–—]|-\s)\s*|['’]s\b/iu)[0].trim();
+    const display = leading.match(/^([A-Z][A-Za-z'’-]{1,}(?:[-\s]+[A-Z][A-Za-z'’-]{1,}){1,5})\b/u)?.[1];
+    if (!display || /^(?:University|Institute|School|College|Department|Professor)\b/iu.test(display)) return undefined;
+    const fingerprint = display.toLocaleLowerCase().replace(/[^a-z]+/gu, "");
+    return fingerprint.length >= 5 ? { fingerprint } : undefined;
+}
+
+function personLatinAliasConsensus(sources: ReadWeaveEvidenceSource[], subject: string): Set<string> {
+    if (!/^\p{Script=Han}{2,8}$/u.test(subject.trim())) return new Set<string>();
+    const aliases = new Map<string, Set<string>>();
+    for (const source of sources) {
+        const alias = personLatinAliasFromTitle(source.title);
+        if (!alias || !PERSON_ROLE_PATTERN.test(`${source.title}\n${source.excerpt}`)) continue;
+        const sourceIds = aliases.get(alias.fingerprint) ?? new Set<string>();
+        sourceIds.add(source.sourceId);
+        aliases.set(alias.fingerprint, sourceIds);
+    }
+    return new Set([ ...aliases ].filter(([, sourceIds ]) => sourceIds.size >= 2)
+        .map(([ fingerprint ]) => fingerprint));
+}
+
+function sourceNamesSubject(
+    source: ReadWeaveEvidenceSource, subject: string, sources: ReadWeaveEvidenceSource[] = [ source ]
+): boolean {
+    const normalizedSubject = subject.normalize("NFKC").toLocaleLowerCase().trim();
+    const latinTokens = Array.from(normalizedSubject.matchAll(/[a-z][a-z0-9'’._-]{1,}/gu), match => match[0]);
+    const text = `${source.title}\n${source.excerpt}`.normalize("NFKC").toLocaleLowerCase();
+    if (latinTokens.length > 0) return latinTokens.every(token => text.includes(token));
+    const normalizedTitle = source.title.normalize("NFKC").toLocaleLowerCase();
+    const leadingExcerpt = source.excerpt.normalize("NFKC").toLocaleLowerCase().slice(0, 600);
+    const titleNamesAnotherPerson = Boolean(personLatinAliasFromTitle(source.title))
+        || /^[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,5}\s*[（(]/u.test(source.title.normalize("NFKC"));
+    return normalizedTitle.includes(normalizedSubject)
+        || !titleNamesAnotherPerson
+            && leadingExcerpt.indexOf(normalizedSubject) >= 0
+            && leadingExcerpt.indexOf(normalizedSubject) <= 160
+            && PERSON_ROLE_PATTERN.test(leadingExcerpt)
+        || Boolean(personLatinAliasFromTitle(source.title)?.fingerprint
+            && personLatinAliasConsensus(sources, subject).has(personLatinAliasFromTitle(source.title)?.fingerprint ?? ""));
+}
+
+function sourceSupportsPersonIdentity(
+    source: ReadWeaveEvidenceSource, subject: string, sources: ReadWeaveEvidenceSource[] = [ source ]
+): boolean {
+    const text = `${source.title}\n${source.excerpt}`.normalize("NFKC").toLocaleLowerCase();
+    return sourceNamesSubject(source, subject, sources) && PERSON_ROLE_PATTERN.test(text);
+}
+
+function sourceSupportsPersonExpertise(
+    source: ReadWeaveEvidenceSource, subject: string, sources: ReadWeaveEvidenceSource[] = [ source ]
+): boolean {
+    const text = `${source.title}\n${source.excerpt}`.normalize("NFKC").toLocaleLowerCase();
+    return sourceNamesSubject(source, subject, sources) && PERSON_EXPERTISE_PATTERN.test(text);
 }
 
 /** A subject-owned-looking domain is a reading priority, not proof of ownership
@@ -30,7 +144,8 @@ function namingReadingPriority(
 }
 
 /** A cited homepage/history page is a navigation lead, not authority by itself.
- * Read at most two such links per question, before stripping Markdown links. */
+ * Keep every distinct safe subject-owned reference; semantic completion and
+ * the request budget decide when research stops. */
 export function readWeaveNamingReferences(
     text: string, subject: string
 ): Array<{ title:string;url:string }> {
@@ -50,7 +165,7 @@ export function readWeaveNamingReferences(
             // Malformed or unrelated page links are not navigation targets.
         }
     }
-    return [ ...references.values() ].toSorted((a,b)=>b.priority-a.priority).slice(0,2)
+    return [ ...references.values() ].toSorted((a,b)=>b.priority-a.priority)
         .map(({ title,url })=>({ title,url }));
 }
 
@@ -170,8 +285,8 @@ export async function researchReadWeaveEvidence(
     const seenUrls = new Set<string>();
     const readUrls = new Set<string>();
     const seenQueries = new Set<string>();
-    let followedReferences = 0;
     const subject = readWeaveResearchSubject(contract.normalizedQuestion, selectedSubject);
+    const personIdentityRequired = requiresPersonIdentity(contract.normalizedQuestion);
     const requirements = readWeaveNamingRequirements(contract.normalizedQuestion);
     const originSubject = /\s/u.test(subject) ? `"${subject}"` : subject;
     const targeted = [
@@ -197,10 +312,7 @@ export async function researchReadWeaveEvidence(
     const started = Date.now();
     for (let index = 0; index < queries.length; index++) {
         signal?.throwIfAborted();
-        if (
-            audit.queryCount + audit.pageReadCount >= READWEAVE_RESEARCH_ACTION_LIMIT ||
-            Date.now() - started > 60_000
-        ) {
+        if (Date.now() - started > 60_000) {
             audit.stopReason = "limit";
             break;
         }
@@ -269,19 +381,23 @@ export async function researchReadWeaveEvidence(
         }
         // Read relevant public pages, not only biography pages. Anonymous Jina
         // basic Reader does not consume the user's paid tokens (20 RPM limit).
-        const candidates = sources
-            .filter((s) => s.url && !readUrls.has(s.url))
-            .toSorted((a, b) => namingRequired
-                ? namingReadingPriority(b, subject) - namingReadingPriority(a, subject)
-                : 0)
-            .slice(0, namingRequired ? 2 : 1);
+        const unread = sources.filter((source) => source.url && !readUrls.has(source.url));
+        const bestScore = unread.reduce((best, source) => Math.max(best, source.rerankScore ?? 0), 0);
+        const candidates = unread
+            .filter(source => personIdentityRequired
+                ? sourceNamesSubject(source, subject, sources)
+                : namingRequired
+                    ? true
+                    : (source.rerankScore ?? 0) >= bestScore - 12)
+            .toSorted((a, b) => personIdentityRequired
+                ? Number(sourceSupportsPersonIdentity(b, subject, sources)) - Number(sourceSupportsPersonIdentity(a, subject, sources))
+                    || Number(sourceSupportsPersonExpertise(b, subject, sources)) - Number(sourceSupportsPersonExpertise(a, subject, sources))
+                    || (b.rerankScore ?? 0) - (a.rerankScore ?? 0)
+                : namingRequired
+                    ? namingReadingPriority(b, subject) - namingReadingPriority(a, subject)
+                    : (b.rerankScore ?? 0) - (a.rerankScore ?? 0));
         for (const source of candidates) {
-            if (
-                audit.pageReadCount >= 6 ||
-                audit.queryCount + audit.pageReadCount >= READWEAVE_RESEARCH_ACTION_LIMIT ||
-                Date.now() - started > 60_000
-            )
-                break;
+            if (Date.now() - started > 60_000) break;
             readUrls.add(source.url!);
             signal?.throwIfAborted();
             audit.pageReadCount++;
@@ -295,10 +411,9 @@ export async function researchReadWeaveEvidence(
                     source.retrievalMode = "page-reader";
                     const completeDirect = namingReadingPriority(source, subject) > 0
                         && !readWeaveMissingNamingFacts([ source ], subject, requirements).length;
-                    if (namingRequired && !completeDirect && followedReferences < 2) {
-                        const link = readWeaveNamingReferences(content, subject)
-                            .find(item => !readUrls.has(item.url));
-                        if (link) {
+                    if (namingRequired && !completeDirect) {
+                        for (const link of readWeaveNamingReferences(content, subject)
+                            .filter(item => !readUrls.has(item.url))) {
                             let reference = sources.find(item => item.url === link.url);
                             if (!reference) {
                                 reference = {
@@ -314,7 +429,6 @@ export async function researchReadWeaveEvidence(
                             const queued = candidates.indexOf(reference);
                             if (queued >= 0) candidates.splice(queued,1);
                             candidates.splice(candidates.indexOf(source)+1,0,reference);
-                            followedReferences++;
                         }
                     }
                 }
@@ -324,9 +438,17 @@ export async function researchReadWeaveEvidence(
                     `页面提取失败：${error instanceof Error ? error.message : "未知错误"}`,
                 );
             }
+            // One plausible profile is not enough to end page reading. Continue
+            // through every relevant candidate that fits the shared time budget
+            // so a stale university page cannot hide a newer first-party role.
         }
         audit.missingFacts = namingRequired ? readWeaveMissingNamingFacts(sources, subject, requirements) : [];
-        if (sources.length && (!namingRequired || audit.missingFacts.length === 0)) {
+        const personIdentitySatisfied = !personIdentityRequired
+            || sources.some(source => sourceSupportsPersonIdentity(source, subject, sources));
+        const personExpertiseSatisfied = !personIdentityRequired
+            || sources.some(source => sourceSupportsPersonExpertise(source, subject, sources));
+        if (sources.length && personIdentitySatisfied && personExpertiseSatisfied
+            && (!namingRequired || audit.missingFacts.length === 0)) {
             const completeReads = sources.filter(source => source.retrievalMode === "page-reader"
                 && !readWeaveMissingNamingFacts([ source ], subject, requirements).length);
             if (namingRequired && requirements.includes("origin") && index === 0

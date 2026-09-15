@@ -367,13 +367,11 @@ function normalizeObjectInput(request: Pick<ReadWeaveSaveRequest, "kind" | "cont
         .filter(source => source && typeof source.sourceId === "string" && typeof source.title === "string" && typeof source.excerpt === "string")
         .filter(source => !source.url || (() => {
             try { return [ "http:", "https:" ].includes(new URL(source.url).protocol); } catch { return false; }
-        })())
-        .slice(0, 30) : undefined;
+        })()) : undefined;
     const sourceIds = new Set(evidenceSources?.map(source => source.sourceId) ?? []);
     const claims = Array.isArray(request.claims) ? request.claims
         .filter(claim => claim && typeof claim.claimId === "string" && typeof claim.text === "string" && Array.isArray(claim.sourceIds))
-        .map(claim => ({ ...claim, sourceIds: claim.sourceIds.filter(sourceId => sourceIds.has(sourceId)).slice(0, 12) }))
-        .slice(0, 50) : undefined;
+        .map(claim => ({ ...claim, sourceIds: claim.sourceIds.filter(sourceId => sourceIds.has(sourceId)) })) : undefined;
     const provenance = request.audit ? {
         evidenceSources,
         claims,

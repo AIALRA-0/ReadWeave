@@ -1,7 +1,8 @@
 import { render } from "preact";
 import { act } from "preact/test-utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import ReadWeavePanel from "./ReadWeavePanel.js";
+import ReadWeavePanel, { answerMarkers } from "./ReadWeavePanel.js";
+import type { ReadWeaveGenerationJob, ReadWeaveResolvedEntry } from "@triliumnext/commons";
 import { readReadWeaveGenerationPreferences } from "./readweave_generation_preferences.js";
 
 const state = vi.hoisted(() => ({ root: null as HTMLElement | null, noteContext: null as unknown, job: null as unknown, post: vi.fn(), get: vi.fn() }));
@@ -15,9 +16,20 @@ vi.mock("../react/hooks.js", () => ({
 }));
 vi.mock("./RightPanelWidget.js", () => ({ default: ({ children }: { children: unknown }) => children }));
 vi.mock("./ReadWeaveAnswer.js", () => ({ ReadWeaveAnswer: () => null }));
+vi.mock("../../services/math.js", () => ({ renderMathInElement: vi.fn() }));
 vi.mock("./ReadWeaveFollowUpWindow.js", () => ({ ReadWeaveFollowUpWindow: () => null }));
 
 describe("ReadWeave panel generation actions", () => {
+    it("keeps follow-up markers bound to the exact parent revision and avoids saved duplicates", () => {
+        const selected = { parentRevision:2,startOffset:4,endOffset:9,text:"回答内容" };
+        const saved = { linkId:"child",parentLinkId:"parent",revision:1,title:"已保存追问",answerSelection:selected } as ReadWeaveResolvedEntry;
+        const pending = { jobId:"pending",parentLinkId:"parent",answerSelection:selected,status:"ready-for-review",title:"待保存追问" } as ReadWeaveGenerationJob;
+        const savedJob = { ...pending,jobId:"saved-job",savedLinkId:"child",status:"saved" } as ReadWeaveGenerationJob;
+        expect(answerMarkers("parent",2,[saved],[pending,savedJob]).map(marker => marker.status)).toEqual(["saved","ready"]);
+        expect(answerMarkers("parent",2,[{ ...saved,answerSelection:undefined }],[savedJob]).map(marker => marker.id))
+            .toEqual(["job:saved-job"]);
+        expect(answerMarkers("parent",3,[saved],[pending,savedJob])).toHaveLength(0);
+    });
     let host: HTMLDivElement;
     const button = () => host.querySelector<HTMLButtonElement>('[data-testid="readweave-generate"]')!;
     const checkbox = (name: string) => host.querySelector<HTMLInputElement>(`[data-testid="readweave-${name}"]`)!;
@@ -71,18 +83,27 @@ describe("ReadWeave panel generation actions", () => {
         await act(() => { button().click(); button().click(); });
         expect(button().getAttribute("aria-busy")).toBe("true");
         await vi.waitFor(() => expect(state.post).toHaveBeenCalledTimes(1));
-        expect(state.post.mock.calls[0][1]).toMatchObject({ rootSourceExcerpt: "First selection", quoteSelectedText: true });
+        expect(state.post.mock.calls[0][1]).toMatchObject({ rootSourceExcerpt: "First selection", quoteSelectedText: true, autoSave: false });
         expect(state.post.mock.calls[0][1].fragments).toContainEqual({ id: "current-block", role: "section", text: "<p>First selection</p>", distance: 0 });
         await act(() => reject(new Error("Provider unavailable")));
         await vi.waitFor(() => expect(host.textContent).toContain("Provider unavailable"));
         expect(button().disabled).toBe(false);
         expect(state.post).toHaveBeenCalledTimes(1);
     });
+    it("captures the auto-save choice in the generated job request", async () => {
+        await select("First selection");
+        await toggle("auto-save");
+        await act(() => { button().click(); });
+        await vi.waitFor(() => expect(state.post).toHaveBeenCalledTimes(1));
+        expect(state.post.mock.calls[0][1]).toMatchObject({ autoSave: true });
+    });
     it("persists checkbox defaults across selections and reload, preserving manually typed quotes", async () => {
         await select("First selection");
         await toggle("optimize-question");
         await toggle("auto-apply-plan");
         await toggle("disable-external-search");
+        expect(checkbox("auto-save").checked).toBe(false);
+        await toggle("auto-save");
         await toggle("quote-selected-text");
         expect(question().value).toBe("First selection是什么意思？");
         await act(() => {
@@ -96,13 +117,29 @@ describe("ReadWeave panel generation actions", () => {
         expect(checkbox("optimize-question").checked).toBe(false);
         expect(checkbox("auto-apply-plan").checked).toBe(false);
         expect(checkbox("disable-external-search").checked).toBe(true);
+        expect(checkbox("auto-save").checked).toBe(true);
         expect(checkbox("quote-selected-text").checked).toBe(false);
         await act(() => render(null, host));
         await act(() => render(<ReadWeavePanel />, host));
         await new Promise(resolve => setTimeout(resolve, 60));
         await select("First selection");
-        expect(readReadWeaveGenerationPreferences()).toEqual({ optimizeQuestion: false, autoApplyPlan: false, externalSearchDisabled: true, quoteSelectedText: false });
+        expect(readReadWeaveGenerationPreferences()).toEqual({ optimizeQuestion: false, autoApplyPlan: false, externalSearchDisabled: true, quoteSelectedText: false, autoSave: true });
         expect(checkbox("quote-selected-text").checked).toBe(false);
+    });
+    it("shows a selected formula as the question, then restores its exact TeX for editing", async () => {
+        state.root!.innerHTML = "<p>公式 $x_i$</p>";
+        await select("公式 $x_i$");
+        const raw = question().value;
+        expect(raw).toContain("$x_i$");
+        expect(question().hidden).toBe(true);
+        const rendered = host.querySelector<HTMLElement>('[data-testid="readweave-question-rendered"]')!;
+        expect(rendered.textContent).toContain("$x_i$");
+        await act(() => rendered.querySelector<HTMLButtonElement>("button")!.click());
+        expect(question().hidden).toBe(false);
+        expect(question().value).toBe(raw);
+        await vi.waitFor(() => expect(document.activeElement).toBe(question()));
+        await act(() => question().blur());
+        expect(question().hidden).toBe(true);
     });
     it("does not turn a confirmed definition back into a question when the editor restores its range", async () => {
         await select("First selection");

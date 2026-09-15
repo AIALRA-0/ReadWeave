@@ -12,6 +12,7 @@ import server from "../../services/server.js";
 import { readReadWeaveGenerationPreferences, type ReadWeaveGenerationPreferences } from "./readweave_generation_preferences.js";
 import { DEFAULT_READWEAVE_QUESTION_TEMPLATES, renderReadWeaveQuestionTemplate } from "./readweave_question_templates.js";
 import { ReadWeaveAnswer } from "./ReadWeaveAnswer.js";
+import { hasReadWeaveQuestionMath, ReadWeaveQuestionText } from "./ReadWeaveQuestionText.js";
 import { createEditableReadWeaveAnswerPlan, normalizeEditableReadWeaveAnswerPlan, splitPlanLines } from "./readweave_answer_plan.js";
 
 export function ReadWeaveFollowUpWindow({
@@ -34,6 +35,8 @@ export function ReadWeaveFollowUpWindow({
     const key = `readweave:follow-up:${parent.linkId}:${parent.revision}:${selection.startOffset}:${selection.endOffset}`;
     const [preferences] = useState(() => generationPreferences ?? readReadWeaveGenerationPreferences());
     const [title, setTitle] = useState(() => renderReadWeaveQuestionTemplate(DEFAULT_READWEAVE_QUESTION_TEMPLATES[0], selection.text, preferences.quoteSelectedText));
+    const [editingMathQuestion, setEditingMathQuestion] = useState(false);
+    const questionInputRef = useRef<HTMLTextAreaElement>(null);
     const [job, setJob] = useState<ReadWeaveGenerationJob>();
     const [answerPlan, setAnswerPlan] = useState<ReadWeaveAnswerPlan>();
     const [error, setError] = useState("");
@@ -47,6 +50,7 @@ export function ReadWeaveFollowUpWindow({
     const mounted = useRef(true);
     const active =
         job?.status === "queued" || job?.status === "running" || job?.status === "saving";
+    const showRenderedQuestion = hasReadWeaveQuestionMath(title) && !editingMathQuestion;
     const onJobRef = useRef(onJob);
     onJobRef.current = onJob;
     const accept = useCallback((next: ReadWeaveGenerationJob) => {
@@ -135,6 +139,7 @@ export function ReadWeaveFollowUpWindow({
                     ? await server.post<{ job: ReadWeaveGenerationJob }>(
                         `readweave/generation-jobs/${encodeURIComponent(job.jobId)}/regenerate`,
                         { title, answerPlan:preparedPlan, autoApplyPlan:preferences.autoApplyPlan,
+                            autoSave: preferences.autoSave,
                             quoteSelectedText: job.quoteSelectedText ?? preferences.quoteSelectedText },
                     )
                     : await server.post<{ job: ReadWeaveGenerationJob }>(
@@ -151,6 +156,7 @@ export function ReadWeaveFollowUpWindow({
                             title,
                             optimizeQuestion: preferences.optimizeQuestion,
                             autoApplyPlan: preferences.autoApplyPlan,
+                            autoSave: preferences.autoSave,
                             answerPlan: preparedPlan,
                             quoteSelectedText: preferences.quoteSelectedText,
                             autoExternalSearch: !searchDisabled,
@@ -245,12 +251,22 @@ export function ReadWeaveFollowUpWindow({
                 <label>
                     问题
                     <textarea
+                        ref={questionInputRef}
                         value={title}
                         rows={2}
+                        hidden={showRenderedQuestion}
                         disabled={busy || active}
+                        onBlur={() => setEditingMathQuestion(false)}
                         onInput={(event) => { setTitle(event.currentTarget.value); setAnswerPlan(undefined); }}
                     />
                 </label>
+                {showRenderedQuestion && <div class="readweave-question-rendered" data-testid="readweave-follow-up-question-rendered">
+                    <ReadWeaveQuestionText text={title} />
+                    <button type="button" class="btn btn-sm btn-link" disabled={busy || active} onClick={() => {
+                        setEditingMathQuestion(true);
+                        window.requestAnimationFrame(() => questionInputRef.current?.focus());
+                    }}>编辑</button>
+                </div>}
                 {!preferences.autoApplyPlan && answerPlan && (
                     <details data-testid="readweave-follow-up-plan" open={!job}>
                         <summary>回答流程</summary>

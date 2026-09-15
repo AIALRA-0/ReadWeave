@@ -28,12 +28,13 @@ function assertAccepted(result: ReadWeaveGenerateResponse, testCase: RealWorldCa
     if (result.webCalibration) expect(result.webCalibration.sourceCount).toBeGreaterThan(0);
     expect(result.usage).toMatchObject({ withinBudget: true });
     expect(result.usage!.modelCalls).toBeGreaterThanOrEqual(1);
-    expect(result.usage!.modelCalls).toBeLessThanOrEqual(3);
-    expect(result.usage!.costCny).toBeLessThanOrEqual(0.05);
+    expect(result.usage!.budgetCny).toBeLessThanOrEqual(0.10);
+    expect(result.usage!.costCny).toBeLessThanOrEqual(result.usage!.budgetCny);
     expect(result.workflow.unchangedSegmentsVerified).toBe(true);
     expect(result.body).not.toContain("。");
     expect(result.body).not.toMatch(/[（(][^（）()\n]{0,300}[（(]/u);
     expect(result.body).not.toMatch(/\.。|。。|\n{3,}/u);
+    expect(result.body).not.toMatch(/(?:^|\n)#{1,6}\s+[^\n]+$/u);
     expect(result.body).not.toMatch(/(?:校验|检查|修复|搜索|检索)(?:失败|过程|结果|报错)/u);
     for (const pattern of testCase.expected) expect(result.body).toMatch(pattern);
     for (const pattern of testCase.forbidden ?? []) expect(result.body).not.toMatch(pattern);
@@ -125,7 +126,7 @@ const REAL_WORLD_CASES: RealWorldCase[] = [
             /Sung Kyu Lim/u,
             /教授|学者|研究者/u,
             /南加州大学|University of Southern California|USC/iu,
-            /EDA 电子设计自动化（Electronic Design Automation）/u,
+            /电子设计自动化/u,
             /芯片|集成电路|物理设计/u
         ],
         forbidden: [

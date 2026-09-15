@@ -268,6 +268,47 @@ test("ReadWeave passes the whole article, remembers checkboxes and generates dir
     expect(errors).toEqual([]);
 });
 
+test("ReadWeave auto-saves one completed answer without a review click", async ({ page, context }) => {
+    test.setTimeout(120_000);
+    const app = new App(page, context);
+    const errors: string[] = [];
+    const starts: Record<string, unknown>[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    page.on("request", request => {
+        if (request.method() === "POST" && new URL(request.url()).pathname === "/api/readweave/generation-jobs") starts.push(request.postDataJSON());
+    });
+    await gotoReadWeave(app, page);
+    const source = "The kernel computes wirelength gradients for chip placement.";
+    const title = uniqueTitle("ReadWeave E2E · Auto save");
+    const editor = await createTextNote(app, title, source);
+    const noteId = await page.evaluate(() => (window as unknown as TestAppWindow).glob.appContext.tabManager.getActiveContext().noteId);
+    await selectTextRange(page, editor.locator("p").first(), "kernel");
+    const panel = app.sidebar.locator("#readweave-panel");
+    await expect(panel.getByTestId("readweave-auto-save")).not.toBeChecked();
+    await panel.getByTestId("readweave-auto-save").check();
+    await panel.getByTestId("readweave-generate").click();
+    await expect.poll(async () => (await panel.locator(".readweave-status").allTextContents()).join(" | "),
+        { timeout: 30_000 }).toContain("Reviewed item saved");
+    expect(starts).toHaveLength(1);
+    expect(starts[0]).toMatchObject({ autoSave:true });
+    await expect(panel.getByTestId("readweave-save")).toHaveCount(0);
+    await expect(panel.locator(".readweave-entry")).toHaveCount(1);
+    expect(await editor.innerText()).toBe(source);
+    const origin = new URL(page.url()).origin;
+    const savedAnchors = await page.request.get(`${origin}/api/readweave/articles/${encodeURIComponent(noteId)}/anchors`);
+    expect(savedAnchors.ok()).toBe(true);
+    expect((await savedAnchors.json()).anchors).toHaveLength(1);
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(app.currentNoteSplitTitle).toHaveValue(title, { timeout: 20_000 });
+    const savedAnchor = app.currentNoteSplit.locator('[data-readweave-range-anchor-id]').first();
+    await expect(savedAnchor).toHaveCount(1);
+    await savedAnchor.click();
+    await expect(panel.getByTestId("readweave-auto-save")).toBeChecked();
+    await expect(panel.locator(".readweave-entry")).toHaveCount(1);
+    expect(starts).toHaveLength(1);
+    expect(errors).toEqual([]);
+});
+
 test("ReadWeave follows selected answers through the same editor and a separate parent window", async ({ page, context }) => {
     test.setTimeout(120_000);
     const errors: string[] = [];
@@ -338,6 +379,8 @@ test("ReadWeave follows selected answers through the same editor and a separate 
         await panel.getByTestId("readweave-generate").click();
         const answer = panel.locator('.readweave-readable-body[data-testid="readweave-answer"]');
         await expect(answer).toBeVisible();
+        await expect(floating.locator(".readweave-answer-marker-dot")).toBeVisible();
+        await expect(floating.locator(".readweave-answer-marker-line").first()).toBeVisible();
         await expect(panel.locator(".readweave-follow-up-context")).toContainText(`Level ${level} follow-up`);
         if (level === 1) {
             await panel.getByTestId("readweave-open-chapter-map").click();
@@ -355,6 +398,8 @@ test("ReadWeave follows selected answers through the same editor and a separate 
         }
         else {
             await ensureGeneratedItemSaved(panel);
+            await expect.poll(async () => floating.locator(".readweave-answer-marker-dot")
+                .evaluateAll(nodes => nodes.map(node => node.className))).toContain("readweave-answer-marker-dot readweave-answer-marker-saved");
         }
     }
     expect(starts).toHaveLength(4);
@@ -913,7 +958,12 @@ test("ReadWeave copies rendered article math as one editable TeX formula", async
     const question = await panel.getByTestId("readweave-question").inputValue();
     expect(question).toContain(formula);
     expect(question.match(/f\(\\phi\(x_i;w\),y_i\)/gu)).toHaveLength(1);
-    await expect(panel.getByTestId("readweave-question-math-preview").locator(".katex-html")).toBeVisible();
+    await expect(panel.getByTestId("readweave-question-rendered").locator(".katex-html")).toBeVisible();
+    await expect(panel.getByTestId("readweave-question")).toBeHidden();
+    await panel.getByTestId("readweave-question-rendered").getByRole("button", { name: "编辑" }).click();
+    await expect(panel.getByTestId("readweave-question")).toBeVisible();
+    await panel.getByTestId("readweave-question").evaluate(element => (element as HTMLTextAreaElement).blur());
+    await expect(panel.getByTestId("readweave-question-rendered").locator(".katex-html")).toBeVisible();
     const after = await page.request.get(`${origin}/api/notes/${encodeURIComponent(noteId)}/blob`);
     expect(((await after.json()) as { content: string }).content).toBe(html);
 });

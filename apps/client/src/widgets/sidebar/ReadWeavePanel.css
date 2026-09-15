@@ -400,6 +400,49 @@
     overflow-wrap: anywhere;
 }
 
+.readweave-answer-container {
+    position: relative;
+}
+
+.readweave-answer-marker-line {
+    position: absolute;
+    z-index: 2;
+    height: 2px;
+    background: var(--readweave-answer-marker-color, #67b7e8);
+    pointer-events: none;
+}
+
+.readweave-answer-marker-dot {
+    position: absolute;
+    z-index: 3;
+    width: 13px;
+    height: 13px;
+    padding: 0;
+    transform: translate(-40%, -45%);
+    border: 2px solid var(--main-background-color);
+    border-radius: 50%;
+    background: var(--readweave-answer-marker-color, #67b7e8);
+    cursor: pointer;
+}
+
+.readweave-answer-marker-ready { --readweave-answer-marker-color: #28a745; }
+.readweave-answer-marker-running { --readweave-answer-marker-color: #d99a00; }
+.readweave-answer-marker-paused { --readweave-answer-marker-color: #e89425; }
+.readweave-answer-marker-failed { --readweave-answer-marker-color: #d04444; }
+.readweave-answer-marker-saved { --readweave-answer-marker-color: #67b7e8; }
+
+.readweave-answer-marker-dot.readweave-answer-marker-saved {
+    width: 18px;
+    height: 18px;
+    transform: translate(-35%, -55%);
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: #67b7e8;
+    font-size: 16px;
+    line-height: 18px;
+}
+
 .readweave-readable-body p {
     margin: 0;
     white-space: pre-wrap;
@@ -803,6 +846,51 @@
     border-radius: 6px;
     background: var(--input-background-color);
     color: var(--main-text-color);
+}
+
+.readweave-question-field > textarea[hidden] {
+    display: none;
+}
+
+.readweave-follow-up-content textarea[hidden] {
+    display: none;
+}
+
+.readweave-question-rendered {
+    display: flex;
+    min-height: 4.5rem;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+    box-sizing: border-box;
+    width: 100%;
+    padding: 7px;
+    border: 1px solid var(--main-border-color);
+    border-radius: 6px;
+    background: var(--input-background-color);
+    color: var(--main-text-color);
+}
+
+.readweave-rendered-question-text {
+    min-width: 0;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+.readweave-question-rendered > .readweave-rendered-question-text {
+    flex: 1;
+}
+
+.readweave-rendered-question-text .katex-display {
+    max-width: 100%;
+    margin: 0.35em 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.readweave-question-rendered > button {
+    flex: 0 0 auto;
+    padding: 2px 4px;
 }
 
 .readweave-body-heading {

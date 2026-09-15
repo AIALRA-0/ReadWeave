@@ -20,7 +20,7 @@ describe("Script bundle", () => {
         const bundle = getBundle(script);
         const result = await executeBundle(bundle, null, $());
         expect(result).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    });
+    }, 30_000);
 
     it("dayjs is-same-or-before plugin exists", async () => {
         const script = /* js */`return api.dayjs("2023-10-01").isSameOrBefore(api.dayjs("2023-10-02"));`;

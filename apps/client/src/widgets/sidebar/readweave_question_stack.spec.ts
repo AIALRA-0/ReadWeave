@@ -25,4 +25,9 @@ describe("ReadWeave question stack", () => {
             { id: "question-2", text: "第二问？" }
         ]);
     });
+
+    it("keeps every question instead of silently dropping later entries", () => {
+        const questions = Array.from({ length: 20 }, (_, index) => `第 ${index + 1} 问？`);
+        expect(readWeaveQuestionStackFromText(questions.join("\n")).map(item => item.text)).toEqual(questions);
+    });
 });

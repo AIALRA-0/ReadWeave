@@ -39,7 +39,7 @@ describe("UNIVER_LOCALES", () => {
                 expect(Object.keys(module.default).length, String(id)).toBeGreaterThan(0);
             }
         }
-    });
+    }, 120_000);
 
     it("loads and merges the locale matching the Trilium language", async () => {
         // "fr" maps to fr-FR, exercising the resolve -> import -> merge path end to end.

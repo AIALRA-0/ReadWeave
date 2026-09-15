@@ -170,7 +170,7 @@ export function findReadWeaveCandidates(
     title: string,
     kind: ReadWeaveObjectKind,
     objects: ReadWeaveObject[],
-    limit = 3,
+    _limit = 3,
     termIdentity?: Partial<ReadWeaveTermIdentity>
 ): ReadWeaveCandidate[] {
     return objects
@@ -195,8 +195,7 @@ export function findReadWeaveCandidates(
             } satisfies ReadWeaveCandidate;
         })
         .filter(candidate => candidate.confidence >= (kind === "question" ? 0.55 : 0.45))
-        .toSorted((left, right) => right.confidence - left.confidence || left.title.localeCompare(right.title))
-        .slice(0, Math.min(Math.max(limit, 1), 3));
+        .toSorted((left, right) => right.confidence - left.confidence || left.title.localeCompare(right.title));
 }
 
 function termIdentitySimilarity(

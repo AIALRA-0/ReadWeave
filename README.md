@@ -1,320 +1,206 @@
 <div align="center">
-  <img src="assets/readme/readweave-hero.svg" alt="ReadWeave 织读从文章段落到审核知识对象的工作流" />
 
-# ReadWeave 织读
+<h1>ReadWeave 织读</h1>
 
-**以人的真实问题为主线，把阅读中的主动提问转化为可审核、可复用、与原文稳定关联的知识**
+<p><strong>在原文旁完成提问、查证、理解与沉淀，不打断阅读，也不让模型直接改写你的文章</strong></p>
 
-[![Privacy Gate](https://github.com/AIALRA-0/ReadWeave/actions/workflows/readweave-privacy.yml/badge.svg)](https://github.com/AIALRA-0/ReadWeave/actions/workflows/readweave-privacy.yml)
-[![CodeQL](https://github.com/AIALRA-0/ReadWeave/actions/workflows/codeql.yml/badge.svg)](https://github.com/AIALRA-0/ReadWeave/actions/workflows/codeql.yml)
-[![ReadWeave](https://img.shields.io/badge/ReadWeave-0.1.0-60A5FA)](docs/readlayer/10-IMPLEMENTATION-STATUS.md)
-[![TriliumNext](https://img.shields.io/badge/TriliumNext-0.104.0-2DD4BF)](docs/readlayer/research/UPSTREAM-BASELINE.md)
-[![License](https://img.shields.io/badge/License-AGPL--3.0--only-C084FC)](LICENSE)
+<p>
+  <a href="README.en.md">English</a> ·
+  <a href="#2-核心体验">核心体验</a> ·
+  <a href="#4-快速开始">快速开始</a> ·
+  <a href="docs/readlayer/README.md">设计文档</a> ·
+  <a href="docs/readlayer/10-IMPLEMENTATION-STATUS.md">实现状态</a> ·
+  <a href="https://github.com/AIALRA-0/ReadWeave/actions">自动检查</a>
+</p>
 
-[English](README.en.md) · [核心闭环](#3-核心闭环) · [系统结构](#5-系统结构) · [本地验证](#11-本地验证) · [实现状态](docs/readlayer/10-IMPLEMENTATION-STATUS.md)
+<img src="assets/readme/readweave-hero.svg" width="960" alt="ReadWeave 从选择原文、生成审核草稿到保存知识对象的工作流" />
+
+<sub>图 1　选择原文、依据证据生成草稿、人工审核后保存为可复用知识</sub>
+
 </div>
 
-<div align="center">
-  <sub>图 1　段落锚点、持久审核草稿和可复用知识对象之间的织读主链路</sub>
-</div>
+## 1 ReadWeave 是什么
 
-## 1 项目定位
+ReadWeave 是基于 TriliumNext `0.104.0` 的个人网页阅读工作流
 
-ReadWeave 是基于 TriliumNext `v0.104.0` 的 Web 优先个人阅读工作流修改版，不是 TriliumNext 官方发行版 [1][2]
+你可以在可编辑文章或只读文章中选择一段文字，立即提出问题、生成定义、补充注解、浓缩总结或写下笔记；生成内容先作为可编辑草稿留在原文旁，只有你确认保存后才成为可复用知识
 
-用户在 Trilium Web 中阅读，选择完整段落并主动提出一个问题或术语
+ReadWeave 解决的不是“让模型替你读完”，而是减少阅读过程中查资料、整理上下文、记录答案和再次找到答案的机械工作
 
-系统选择最小充分上下文并调用联网模型，同时把生成任务和待审核草稿持久化到服务端；只有用户显式确认后，内容才会保存为由稳定标识符连接的知识对象
+它不是 TriliumNext 官方发行版，也不面向多人协作、自动批量出题或无人审核的自动写入
 
-ReadWeave 不预先猜测问题，也不根据行为自动学习偏好，人始终决定问什么、何时问、是否保存、是否复用和怎样修改 [3]
-
-## 2 基础界面
-
-<div align="center">
-  <img src="docs/app.png" alt="TriliumNext 匿名演示知识库基础界面" />
-
-图 2.1　ReadWeave 继承的 TriliumNext 匿名演示基础界面
-</div>
-
-图 2.1 是上游 TriliumNext 的公开演示截图，用于说明树形笔记、富文本编辑器和侧栏基础，不是 ReadWeave 面板截图，也不包含个人笔记或部署信息
-
-当前仓库没有可安全公开的 ReadWeave 面板截图，因此 README 使用仓库自有主视觉和结构图表达功能
-
-真实产品截图只有在匿名隔离数据库中完成视觉验收后才会加入
-
-## 3 核心闭环
+## 2 核心体验
 
 <div align="center">
 
-```mermaid
-%% 从主动选择段落到审核后保存的用户闭环
-flowchart TB
-    Read[阅读 Trilium Web 文章] --> Select[悬停并选择完整段落]
-    Select --> Ask[提出一个问题或术语]
-    Ask --> Context[选择最小充分上下文]
-    Context --> Provider[服务端调用联网模型]
-    Provider --> Draft[答案进入服务端持久审核草稿]
-    Draft --> Review{用户审核}
-    Review -->|保存| Candidate[检查相似知识对象]
-    Candidate --> Choice{复用、新建或本文变体}
-    Choice --> Object[创建或连接规范对象]
-    Object --> Anchor[稳定标识符关联原文锚点]
-    Review -->|暂不保存| Draft
-```
+表 2.1　五种内容及其保存方式
 
-图 3.1　主动提问、持久草稿、人工审核和稳定连接流程
+| 内容 | 怎样得到 | 适合处理什么 | 是否调用模型 |
+| --- | --- | --- | ---: |
+| 问题 | 输入或从模板组合问题 | 直接回答阅读中的疑问 | 是 |
+| 定义 | 选择一个名称或概念 | 解释它是什么、怎样运作及边界 | 是 |
+| 注解 | 选择晦涩片段 | 在不改原文的前提下扩写解释 | 是 |
+| 总结 | 选择一段内容 | 压缩为便于回看的知识点 | 是 |
+| 笔记 | 直接输入 | 保存自己的判断、联想和提醒 | 否 |
 
 </div>
 
-<div align="center">
+- 编辑模式与只读模式使用同一套选择、预览和旁路保存行为；只读模式不会写回文章正文
+- 选择完成后立即出现轻量操作入口，问题预览不需要再次点击才能显示
+- 系统可以规范口语问题并生成回答结构；关闭自动采用后，你可以先修改结构，再生成答案
+- 外部搜索默认参与生成，文章上下文是重要参考但不是唯一事实来源；不需要联网时可以为当前问题关闭搜索
+- 生成结果可以编辑、局部改写或重新生成；局部改写只替换选中的答案片段
+- 已保存回答可以继续选择并追问，最多形成三层独立浮窗；创建追问前必须先保存上级回答
+- 未保存的生成结果保持绿色提醒，保存成功后提醒消失
 
-表 3.1　七步使用流程
-
-| 步骤 | 用户动作 | 系统承诺 |
-| --- | --- | --- |
-| 1 | 悬停并点击文本段落 | 选择完整段落并持久化稳定锚点 |
-| 2 | 输入一个问题或术语 | 每次生成保持单问单答，不建立多轮聊天 |
-| 3 | 请求回答 | 按确定性预算选择最小充分上下文，模型只在服务端调用 |
-| 4 | 阅读或编辑草稿 | 草稿以 `ready-for-review` 状态持久化并可在重启后恢复，但不进入规范知识对象 |
-| 5 | 查看相似候选 | 突出可复用对象，同时始终允许新建和本文变体 |
-| 6 | 确认保存 | 创建规范对象和锚点连接，标题不充当外键 |
-| 7 | 修改或导出 | 先预览影响范围，再全局修改、创建变体、只改显示或导出索引 |
-
-</div>
-
-## 4 产品原则
-
-<div align="center">
-
-表 4.1　已冻结的边界
-
-| 原则 | 当前选择 | 为什么重要 |
-| --- | --- | --- |
-| 人主动提问 | 不自动批量生成用户可能问的问题 | 保留阅读判断和学习主动性 |
-| 审核后保存 | 生成任务按 `ready-for-review → saving → saved` 流转，必须显式提交 | 模型不能直接污染正式知识库 |
-| 标识符连接 | 文章锚点只保存不可变对象标识符 | 标题重命名、同名对象和全局更新保持可靠 |
-| Trilium 为真相源 | 笔记、关系、修订、权限和备份留在 Trilium | 派生相似索引可以删除并重建 |
-| 显式偏好 | 用户设置只能由用户明确修改 | 相同状态和设置保持确定性工作流 |
-| Web 优先 | 首发面向 Trilium Server 和浏览器 | 桌面端不是首发依赖 |
-| 联网模型 | 首个提供方为 DeepSeek，不支持本地模型 | 提供方经服务端适配器隔离 |
-| 个人自用 | 首发不包含社交、多人和中心化云知识库 | 权限与恢复范围保持可控 |
-
-</div>
-
-## 5 系统结构
+## 3 从阅读到知识
 
 <div align="center">
 
 ```mermaid
-%% ReadWeave 在 Trilium Web、服务端、数据和模型之间的边界
+%% 展示从原文选择到知识复用的用户闭环
 flowchart TB
-    Browser[浏览器中的 Trilium Web] --> Panel[段落锚点与 ReadWeave 面板]
-    Panel --> API[ReadWeave 服务端接口]
-    API --> Engine[确定性上下文与相似候选引擎]
-    API --> Provider[联网模型服务端适配器]
-    API --> Domain[知识对象领域服务]
-    Domain --> Truth[Trilium 笔记、属性、关系与修订]
-    Domain --> Derived[可重建的相似候选索引]
-    API --> Draft[服务端持久生成任务与审核草稿]
-    Truth --> Backup[Trilium 原生备份]
-    Truth --> Export[独立 JSON 索引导出]
+    Read[阅读可编辑或只读文章] --> Select[选择需要理解的文字]
+    Select --> Type{选择内容类型}
+    Type -->|问题、定义、注解、总结| Plan[规范问题并准备回答结构]
+    Type -->|笔记| Manual[直接编写个人内容]
+    Plan --> Evidence[组合文章上下文与外部证据]
+    Evidence --> Draft[生成可编辑草稿]
+    Draft --> Review{人工阅读与修改}
+    Manual --> Save[确认保存]
+    Review -->|继续修改| Draft
+    Review -->|确认| Save
+    Save --> Object[建立稳定知识对象]
+    Object --> Anchor[连接到原文位置]
+    Anchor --> Reuse[在后续阅读中预览、复用或追问]
 ```
 
-图 5.1　界面、服务端、Trilium 真相数据和模型提供方边界
+<sub>图 3.1　ReadWeave 的用户闭环；模型生成与正式保存之间始终保留人工确认</sub>
 
 </div>
 
-浏览器只能调用 ReadWeave 服务端接口，不能获得模型密钥；正式知识只存在于 Trilium 真相数据。持久草稿可以跨重启恢复，但在显式提交前不参与相似搜索、全局引用或索引导出 [4]
+文章保存原文，知识内容保存在旁路对象中，两者通过稳定标识连接；标题、问题文字和答案文字都不充当连接键，因此重命名或同名概念不会直接破坏关联
 
-## 6 数据模型
+刷新页面或重启服务后，未保存草稿仍可恢复；旧生成请求不能覆盖较新的编辑结果
 
-<div align="center">
+## 4 快速开始
 
-表 6.1　稳定标识符和数据归属
+### 4.1 环境
 
-| 对象 | 标识符 | 保存位置 | 关键语义 |
-| --- | --- | --- | --- |
-| 文章 | `articleId` | Trilium 原生笔记 | 直接使用 `noteId`，标题和路径变化不影响引用 |
-| 段落锚点 | `anchorId` | CKEditor 模型中的持久属性 | 创建后稳定，段落序号和文本哈希不是主键 |
-| 知识对象 | `objectId` | Trilium 隐藏对象子树 | 一个已审核问答或一个术语定义 |
-| 文章连接 | `linkId` | Trilium 隐藏连接子树 | 唯一关联文章、锚点和对象 |
-| 生成任务与审核草稿 | `jobId + draftId` | ReadWeave 服务端数据库 | 保存状态版本、活动尝试、进度和结果；显式提交前不是规范知识 |
-| 相似候选 | 派生索引键 | 可重建索引 | 只用于发现候选，不是真相源 |
+- Windows 10 或 Windows 11
+- Node.js `24.18.0`
+- pnpm `11.11.0`，由仓库的 `packageManager` 字段固定
 
-</div>
+### 4.2 第一次启动
 
-规范对象和连接继承来源文章的保护状态
+第一步，在仓库根目录安装依赖
 
-读取和导出都经过当前 Trilium 受保护会话的可读性检查，无权读取对象时不能泄露标题、摘要或相似度 [4]
+```powershell
+# 依次启用仓库声明的包管理器并安装锁定依赖
+corepack enable
+pnpm install --frozen-lockfile
+```
 
-## 7 复用修改
+第二步，双击 [`Start-ReadWeave.cmd`](Start-ReadWeave.cmd)
 
-保存前，相似标题候选只提示复用，不阻止创建独立对象或本文变体
+启动器会构建服务端，使用独立的 `apps/server/data-readweave` 数据目录，并打开本机页面；默认地址为 `http://127.0.0.1:8082`
 
-修改已有对象前，界面先显示连接数、文章数和当前会话可访问的文章标题，用户再从三种语义中选择 [5]
+第三步，首次打开时创建这套独立数据库，再进入“设置 → AI / LLM → ReadWeave 模型设置”，保存写作模型与搜索服务配置并测试连接
 
-<div align="center">
+第四步，打开文本笔记并选择文字；正常结果是原文附近出现“提问／定义”入口，右侧显示当前选区和五种内容类型
 
-表 7.1　三种修改语义
+需要停止时双击 [`Stop-ReadWeave.cmd`](Stop-ReadWeave.cmd)
 
-| 操作 | 修改对象 | 其他文章的结果 |
-| --- | --- | --- |
-| 全局修改 | 更新原 `objectId` 的最新修订 | 所有可读连接下次读取时获得新内容 |
-| 本文变体 | 创建新对象，并把当前 `linkId` 指向新对象 | 其他文章继续引用原对象 |
-| 只改显示 | 只修改当前连接的显示字段 | 规范对象正文和其他连接保持不变 |
-
-</div>
-
-标题、问题文本、答案、术语名称和缩写都不能充当连接键，同名不同义对象可以并存
-
-## 8 上下文生成
-
-上下文选择固定包含用户问题和完整目标段落，再从标题路径、相邻段落、当前小节、文章元数据、文章内相关小节和用户允许的链接来源逐层选择 [4]
-
-系统目标是用最少片段达到可回答条件，不会因为预算还有空余就把无关全文发送给模型
-
-现有单元测试验证目标段始终保留、预算上限有效、无关段落不会被填充、相关段落可以进入上下文 [6]
-
-同一显式设置和同一状态会走相同规则，但联网模型的措辞仍可能变化
-
-ReadWeave 通过固定工作流版本、显式模型配置、低随机度、结构校验、有限重试和评测记录降低波动
-
-## 9 导出备份
-
-文章侧栏可以导出文章、锚点、规范对象和连接组成的独立 JSON 文件，协议版本为 `1.0`，完整性摘要使用 SHA-256 [7]
-
-导出依次检查 JSON 语法、JSON Schema 2020-12、标识符唯一性、连接外键、锚点文章归属、对象类型、术语格式、禁止字段、秘密模式和规范化内容摘要
-
-草稿、服务密钥、派生向量和模型内部推理不进入导出，首发只承诺导出，不承诺安全导入，导出文件也不能替代 Trilium 原生数据库备份
-
-## 10 上游能力
-
-ReadWeave 保留 TriliumNext 的个人知识库基础能力，详细上游说明、安装方式、社区入口和多语言文档仍可从 [`docs/README.md`](docs/README.md) 与 [`docs/README-ZH_CN.md`](docs/README-ZH_CN.md) 查阅 [2]
-
-<div align="center">
-
-表 10.1　继承的 TriliumNext 能力组
-
-| 能力组 | 代表功能 |
-| --- | --- |
-| 知识组织 | 任意深度笔记树、克隆、属性、关系、全文搜索和笔记提升 |
-| 内容创作 | 富文本、表格、图片、数学公式、代码、画布、Mermaid 和思维导图 |
-| 版本安全 | 笔记修订、受保护笔记、原生备份和同步服务器 |
-| 可视化 | 关系图、笔记图、地理图、GPX 轨迹和集合表格 |
-| 自动化 | 脚本、REST API、Web Clipper、导入导出和可定制界面 |
-| 多端访问 | Web、桌面、触屏移动界面、暗色主题和多语言界面 |
-| 规模 | 上游说明支持超过 100,000 条笔记的知识库使用场景 |
-| 运营观察 | 指标端点和 Grafana 仪表板支持 |
-
-</div>
-
-## 11 本地验证
-
-仓库固定 Node.js `24.18.0`、pnpm `11.11.0` 和 TriliumNext `0.104.0` [8]
+其他平台可以按[上游环境设置文档](docs/Developer%20Guide/Developer%20Guide/Environment%20Setup.md)准备依赖，再运行开发服务
 
 ```bash
-corepack enable # 启用仓库声明的 pnpm 版本
-pnpm install --frozen-lockfile # 按锁文件安装工作区依赖
-pnpm server:start # 启动本地 Trilium Server 与 Web 界面
+# 启动开发服务器和网页界面
+pnpm server:start
 ```
 
-本地默认入口为 `http://localhost:8080`，该回环地址只用于开发，不代表正式部署入口
+开发服务默认使用 `http://localhost:8080`
 
-ReadWeave 定向检查如下
+## 5 生成、搜索与费用
+
+写作模型通过服务端配置，支持 DeepSeek 官方接口和兼容的第三方 DeepSeek 接口；浏览器只获得掩码状态，不会收到完整密钥
+
+搜索层按问题需要组合通用搜索、人物检索、学术来源和页面正文提取；正常界面只展示结果、来源和费用摘要，不要求读者理解内部搜索路由
+
+每题的费用控制分为两个区间：
+
+- 普通问题预留上限为 ¥0.05
+- 困难查证预留上限为 ¥0.10
+
+界面费用来自模型返回用量和已配置费率的估算，不等同于供应商账单；第三方接口没有完整费率时使用保守估算，避免把未知费用显示成零
+
+搜索失败不会把未经支持的猜测包装成确定事实；生成内容仍需要用户阅读，自动检查通过不代表事实已经由人工确认
+
+## 6 数据与安全边界
+
+- 模型和搜索密钥只保存在服务端本地设置或服务端环境变量中
+- 密钥不得进入浏览器正文、笔记、导出、日志、截图或 Git 历史
+- 问题、定义、注解、总结和笔记在确认前都只是草稿
+- 只读文章只创建旁路位置记录，不调用正文保存
+- 正式对象和连接继承来源文章的保护状态，并继续服从 Trilium 的受保护会话
+- 独立的 `JSON` 导出文件包含文章、位置、对象和连接，不包含密钥、草稿或模型内部过程
+- 第一次连接重要日常数据库前，应先在完整副本上演练升级、恢复和回滚
+- Trilium 支持用户脚本，运行不可信脚本可能访问个人数据；只安装你理解并信任的扩展
+
+安全问题请使用仓库的[私密安全报告入口](https://github.com/AIALRA-0/ReadWeave/security/advisories/new)
+
+公开问题中不要粘贴以下内容：
+
+- 密钥
+- 数据库
+- 日志
+- 真实文章内容
+
+## 7 开发与验证
+
+先运行与 ReadWeave 直接相关的检查
 
 ```bash
-pnpm run readweave:privacy # 扫描相对上游基线的全部 ReadWeave 改动
-pnpm run --filter server test # 运行服务端领域与存储测试
-pnpm run --filter client test # 运行客户端测试
-pnpm run --filter server e2e # 在匿名隔离数据库中运行浏览器端到端测试
-pnpm client:build # 生成客户端生产构建
-pnpm server:build # 生成服务端生产构建
+# 检查 ReadWeave 差异中的秘密和个人路径
+pnpm readweave:privacy
+
+# 运行服务端和客户端测试
+pnpm --filter server test --run
+pnpm --filter client test --run
+
+# 构建生产客户端和服务端
+pnpm client:build
+pnpm server:build
 ```
 
-开发和测试必须使用匿名隔离数据库，第一次连接日常数据库前，需要在完整副本上完成升级、备份、恢复和回滚演练 [9]
+浏览器回归使用匿名隔离数据库，不应连接个人日常数据，也不应调用真实付费接口
 
-## 12 安全隐私
+```bash
+# 运行服务端浏览器端到端测试
+pnpm --filter server e2e
+```
 
-- 模型密钥只通过 Web 服务端秘密管理注入，浏览器、笔记、导出、日志、截图和仓库都不能保存真实值
+当前实现范围、已执行证据和已知限制分别记录在：
 
-- 任何曾通过非受控渠道传输的密钥都应先在提供方控制台吊销，再创建替代密钥
+- [实现与验收状态](docs/readlayer/10-IMPLEMENTATION-STATUS.md)
+- [质量验证记录](docs/readlayer/2026-09-quality-verification.md)
+- [写作合同验证](docs/readlayer/writing-contract-v2.md)
+- [上游基线](docs/readlayer/research/UPSTREAM-BASELINE.md)
 
-- 匿名测试模型只允许在内存数据库测试模式下启用，自动化测试不读取个人笔记或访问互联网
+## 8 仓库入口
 
-- `_readweaveObjects` 和 `_readweaveLinks` 继承来源内容的保护边界，开放文章不能降低受保护对象权限
+- [`packages/commons/src/lib/readweave.ts`](packages/commons/src/lib/readweave.ts) — ReadWeave 共享类型
+- [`apps/client/src/widgets/sidebar/ReadWeavePanel.tsx`](apps/client/src/widgets/sidebar/ReadWeavePanel.tsx) — ReadWeave 侧栏界面
+- [`apps/server/src/services/readweave_unified_ai.ts`](apps/server/src/services/readweave_unified_ai.ts) — 统一生成主流程
+- [`apps/server/src/services/readweave_research.ts`](apps/server/src/services/readweave_research.ts) — 跨领域查证流程
+- [`apps/server/src/services/readweave_search.ts`](apps/server/src/services/readweave_search.ts) — 搜索来源适配层
+- [`apps/server/src/services/readweave_repository.ts`](apps/server/src/services/readweave_repository.ts) — ReadWeave 数据仓库层
+- [`apps/server/e2e/readweave.spec.ts`](apps/server/e2e/readweave.spec.ts) — 核心浏览器回归
+- [`docs/readlayer`](docs/readlayer) — ReadWeave 设计与验证文档
 
-- Git 提交钩子、推送钩子和 GitHub Actions 会扫描秘密、个人路径和 ReadWeave 相对上游的变更 [10]
+## 9 上游、贡献与许可
 
-- 公开问题和截图不得包含正式网址、服务器路径、真实文章正文、用户标识、数据库文件、账户、令牌或模型用量记录
+ReadWeave 是 TriliumNext 的长期修改版，尽量把阅读能力保留在独立模块中，便于继续吸收上游修复；完整的上游功能、安装方式、贡献者和社区入口保留在[上游文档](docs/README.md)
 
-## 13 当前状态
+提交改动前请先运行与改动范围对应的测试和隐私检查；问题报告应包含可复现步骤和匿名数据，不要上传个人数据库或真实模型响应
 
-产品版本为 `0.1.0`，核心个人 Web 阅读闭环已实现并进入发布验收 [9]
-
-已验证范围包括客户端和服务端生产构建、领域与存储测试、浏览器端到端、JSON Schema 导出校验、目标项目类型检查、暗色主题与侧栏布局、隐私门禁和 CodeQL
-
-<div align="center">
-
-表 13.1　发布前人工门槛
-
-| 门槛 | 完成条件 | 当前边界 |
-| --- | --- | --- |
-| 密钥轮换 | 服务端配置新密钥，旧密钥完成吊销 | 必须由服务所有者在提供方控制台执行 |
-| 真实提供方契约 | 使用匿名公开文章验证计费、超时和错误提示 | 自动化测试不代替真实提供方检查 |
-| 数据库恢复 | 在日常数据库完整副本上完成升级、备份、恢复和回滚 | 禁止首次升级指向唯一日常数据库 |
-| 真实阅读验收 | 产品所有者使用至少三篇文章核对阅读习惯 | 偏好只能转为显式设置，不启用隐式学习 |
-
-</div>
-
-## 14 仓库地图
-
-<div align="center">
-
-表 14.1　ReadWeave 维护入口
-
-| 路径 | 职责 |
-| --- | --- |
-| [`packages/commons/src/lib/readweave.ts`](packages/commons/src/lib/readweave.ts) | 版本化对象、连接、上下文和导出领域类型 |
-| [`packages/ckeditor5/src/plugins/readweave_anchor.ts`](packages/ckeditor5/src/plugins/readweave_anchor.ts) | 把稳定段落锚点持久化到编辑器模型 |
-| [`apps/server/src/services/readweave_engine.ts`](apps/server/src/services/readweave_engine.ts) | 确定性上下文预算和相似标题候选 |
-| [`apps/server/src/services/readweave_repository.ts`](apps/server/src/services/readweave_repository.ts) | 权限、对象、连接、影响范围、变体和导出 |
-| [`apps/server/src/services/readweave_ai.ts`](apps/server/src/services/readweave_ai.ts) | 服务端联网模型适配和匿名测试替身 |
-| [`apps/server/e2e/readweave.spec.ts`](apps/server/e2e/readweave.spec.ts) | 审核、复用、修改传播和导出浏览器回归 |
-| [`docs/readlayer`](docs/readlayer) | 产品需求、交互、架构、风险、追溯和发布证据 |
-| [`scripts/readweave`](scripts/readweave) | 隐私扫描和 Git 钩子安装 |
-
-</div>
-
-## 15 上游许可
-
-ReadWeave 延续 TriliumNext 的 GNU Affero General Public License v3.0 only，完整许可文本见 [`LICENSE`](LICENSE) [11]
-
-TriliumNext 的原始概念来自 zadam，社区项目由 Elian Doran 和其他贡献者持续维护
-
-ReadWeave 保留上游作者、贡献者、第三方组件、翻译和赞助信息，完整署名可在上游说明和仓库历史中查阅 [2]
-
-ReadWeave 是长期可合并的修改版，后续合并上游时需要记录基线、冲突、数据库版本、依赖变化和回归证据
-
-## 16 参考资料
-
-[1] AIALRA-0, “ReadWeave quick guide,” [`README_READWEAVE.md`](README_READWEAVE.md), 2026
-
-[2] TriliumNext, “Trilium Notes project documentation,” [`docs/README.md`](docs/README.md), 2026
-
-[3] AIALRA-0, “ReadWeave product overview,” [`docs/readlayer/README.md`](docs/readlayer/README.md), 2026
-
-[4] AIALRA-0, “ReadWeave technical architecture,” [`docs/readlayer/03-ARCHITECTURE.md`](docs/readlayer/03-ARCHITECTURE.md), 2026
-
-[5] AIALRA-0, “ReadWeave interaction specification,” [`docs/readlayer/02-UX-SPEC.md`](docs/readlayer/02-UX-SPEC.md), 2026
-
-[6] AIALRA-0, “Deterministic context engine tests,” [`apps/server/src/services/readweave_engine.spec.ts`](apps/server/src/services/readweave_engine.spec.ts), 2026
-
-[7] AIALRA-0, “ReadWeave index export protocol,” [`docs/readlayer/08-INDEX-EXPORT.md`](docs/readlayer/08-INDEX-EXPORT.md), 2026
-
-[8] TriliumNext and AIALRA-0, “Workspace runtime metadata,” [`.nvmrc`](.nvmrc) and [`package.json`](package.json), 2026
-
-[9] AIALRA-0, “ReadWeave implementation and acceptance status,” [`docs/readlayer/10-IMPLEMENTATION-STATUS.md`](docs/readlayer/10-IMPLEMENTATION-STATUS.md), 2026
-
-[10] AIALRA-0, “ReadWeave privacy workflow,” [`.github/workflows/readweave-privacy.yml`](.github/workflows/readweave-privacy.yml), 2026
-
-[11] Free Software Foundation, “GNU Affero General Public License version 3,” [`LICENSE`](LICENSE), 2007
+本仓库沿用 GNU Affero General Public License v3.0 only，完整条款见 [`LICENSE`](LICENSE)

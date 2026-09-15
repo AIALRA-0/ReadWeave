@@ -100,7 +100,8 @@ test("Layers listing works", async ({ page, context }) => {
     await expect(firstLayer).toContainText("Tongue out");
     await expect(firstLayer).toContainClass("hidden");
     await firstLayer.click();
-    await expect(firstLayer).not.toContainClass("visible");
+    await expect(firstLayer).toContainClass("visible");
+    await expect(firstLayer).not.toContainClass("hidden");
 
     await app.clickNoteOnNoteTreeByTitle("Dacia Logan.pdf");
     await expect(layersList.locator(".pdf-layer-item")).toHaveCount(0);

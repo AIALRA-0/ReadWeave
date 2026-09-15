@@ -10,7 +10,7 @@ describe("generation preferences and automatic quotes", () => {
         for (const key of Object.keys(DEFAULT_READWEAVE_GENERATION_PREFERENCES) as (keyof typeof DEFAULT_READWEAVE_GENERATION_PREFERENCES)[]) {
             writeReadWeaveGenerationPreference(key, !DEFAULT_READWEAVE_GENERATION_PREFERENCES[key], "/first/");
         }
-        expect(readReadWeaveGenerationPreferences("/first/")).toEqual({ optimizeQuestion: false, autoApplyPlan: false, externalSearchDisabled: true, quoteSelectedText: false });
+        expect(readReadWeaveGenerationPreferences("/first/")).toEqual({ optimizeQuestion: false, autoApplyPlan: false, externalSearchDisabled: true, quoteSelectedText: false, autoSave: true });
         expect(readReadWeaveGenerationPreferences("/second/")).toEqual(DEFAULT_READWEAVE_GENERATION_PREFERENCES);
     });
     it("ignores invalid values and unavailable storage", () => {
