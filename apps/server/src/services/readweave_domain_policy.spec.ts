@@ -121,7 +121,7 @@ describe("ReadWeave domain policy framework", () => {
         expect(enriched.sourceCategory).toBe("first-party-personal");
     });
 
-    it("labels claims from the cited evidence instead of inferring current role from education", () => {
+    it("labels cited education provenance without verifying the claim or inferring a current role", () => {
         const profile = buildReadWeaveDomainProfile(request("wuxili 是谁？"), "wuxili 是谁？");
         const education = enrichReadWeaveEvidenceSource(source({
             sourceId: "S2",
@@ -140,7 +140,8 @@ describe("ReadWeave domain policy framework", () => {
 
         expect(enriched.claimType).toBe("general");
         expect(enriched.timeScope).toBe("historical");
-        expect(enriched.status).toBe("supported");
+        expect(enriched.sourceIds).toEqual([ "S2" ]);
+        expect(enriched.status).toBe("not-checked");
     });
 
     it("builds a separate local/external evidence pack summary with warnings", () => {

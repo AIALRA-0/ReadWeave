@@ -1,19 +1,21 @@
-import { describe, expect, it } from "vitest";
+import type { ReadWeaveGenerateRequest } from "@triliumnext/commons";
+import { describe, expect, it, vi } from "vitest";
 
 import {
     acceptReadWeaveAiQuestionOptimization,
     applyReadWeaveSegmentPatches,
-    buildReadWeaveSystemPrompt,
     buildDirectSelectedMechanismQuestionFallback,
     buildKnownCxlIoShapeQuestionFallback,
     buildKnownDirectAccessQuestionFallback,
     buildMutuallyExclusiveProxyQuestionFallback,
+    buildReadWeaveSystemPrompt,
     calculateReadWeaveUsageSummary,
     contradictsSuccessfulWebCalibration,
     decodeReadWeaveEntities,
     findReadWeaveQualityIssues,
     flattenReadWeaveParentheses,
     formatReadWeaveTermIdentity,
+    generateReadWeaveAnswer,
     joinReadWeaveAnswerSegments,
     mergeReadWeaveTermIdentity,
     mergeRepairInstructions,
@@ -23,6 +25,7 @@ import {
     segmentReadWeaveAnswer,
     validateReadWeaveTermIdentity
 } from "./readweave_ai.js";
+import * as unifiedAi from "./readweave_unified_ai.js";
 
 function professionalAnswer(definition: string): string {
     return `${[
@@ -38,6 +41,132 @@ function professionalAnswer(definition: string): string {
 }
 
 describe("ReadWeave AI quality harness", () => {
+    const daxFormulaContext = "Power BI 中的 DAX（Data Analysis Expressions）是一种公式语言，用于度量值、计算列和筛选上下文。";
+    const daxFormulaBody = "DAX 数据分析表达式（Data Analysis Expressions）是一种公式语言，用于在商业智能数据模型中定义度量值和计算列，并根据筛选上下文计算结果";
+    const daxFormulaIdentity = {
+        abbreviation: "DAX", chineseName: "数据分析表达式", englishName: "Data Analysis Expressions"
+    };
+
+    it.each([daxFormulaContext, ""])("does not infer a Linux meaning from DAX in open-domain context %s", articleContext => {
+        const options = { openDomain: true, articleContext, subject: "DAX" };
+        expect(findReadWeaveQualityIssues(daxFormulaBody, "DAX 是什么意思？", {
+            ...options, kind: "question"
+        })).toEqual([]);
+        expect(findReadWeaveQualityIssues(daxFormulaBody, "DAX", {
+            ...options, kind: "term", termIdentity: daxFormulaIdentity
+        })).not.toContain("结构化名词身份与已核验规范名称不一致");
+    });
+
+    it("retains generic grammar and abbreviation checks in open-domain quality", () => {
+        const options = { openDomain: true, articleContext: daxFormulaContext, kind: "question" as const };
+        expect(findReadWeaveQualityIssues(`${daxFormulaBody}（）`, "DAX 是什么意思？", options))
+            .toContain("答案包含空括号");
+        expect(findReadWeaveQualityIssues("DAX 是一种公式语言，用于计算度量值", "DAX 是什么意思？", options))
+            .toContain("缩写 DAX 未使用“缩写 中文全称（英文全称）”格式");
+    });
+
+    it("does not require a catalog meaning for another article-defined abbreviation", () => {
+        const body = "GPU 地质剖面单元（Geological Profile Unit）是文章定义的一段地层记录，用于按采样位置整理岩性观察结果";
+        const issues = findReadWeaveQualityIssues(body, "GPU", {
+            openDomain: true, articleContext: body, kind: "term", subject: "GPU",
+            termIdentity: { abbreviation: "GPU", chineseName: "地质剖面单元", englishName: "Geological Profile Unit" }
+        });
+        expect(issues).not.toContain("定义遗漏了所选术语的核心区别特征");
+        expect(issues).not.toContain("结构化名词身份与已核验规范名称不一致");
+    });
+
+    it.each(["question", "term"] as const)("keeps requested history and bibliographic details in open-domain %s answers", kind => {
+        const body = "星桥研讨会是研究者交流测量方法的学术活动；历届主办城市包括青川和海岭，赞助机构与主席名单记载于会议档案；论文《测量方法》于2001年发表于会议论文集";
+        const originalQuestion = "星桥研讨会是什么？请列出历届主办城市、赞助机构、主席名单及论文出版年份";
+        const options = { openDomain: true, originalQuestion, articleContext: body, kind, subject: "星桥研讨会", knowledgeScope: "general" as const };
+        const issues = findReadWeaveQualityIssues(body, "星桥研讨会是什么？", options);
+        expect(issues.filter(issue => /范围外|书目|履历|题目未要求|用户未要求|劫持/u.test(issue))).toEqual([]);
+        expect(findReadWeaveQualityIssues(`${body}（）`, "星桥研讨会是什么？", options)).toContain("答案包含空括号");
+    });
+
+    it("does not apply the generic-person biography rubric to explicitly requested Faraday history", () => {
+        const originalQuestion = "法拉第是谁？请说明他的家庭背景、1831年电磁感应实验及历史贡献";
+        const body = "法拉第是研究电磁现象的实验科学家；他的父亲是铁匠，家庭经济条件有限；1831年的电磁感应实验揭示了变化磁场与感应电流的关系，为发电技术奠定基础";
+        const issues = findReadWeaveQualityIssues(body, "法拉第是谁？", {
+            openDomain: true, originalQuestion, articleContext: body, kind: "question", subject: "法拉第",
+            knowledgeScope: "general", entityType: "person"
+        });
+        expect(issues).toEqual([]);
+    });
+
+    it("permits context-grounded unresolved meanings instead of demanding an invented unique sense", () => {
+        const body = "星桥是原文对两种对象共用的名称；候选义项包括采样程序和记录格式，但文章没有提供足够线索确定唯一义项；若指程序，应检查输入接口，若指格式，应检查字段定义";
+        const options = { openDomain: true, kind: "term" as const, subject: "星桥", articleContext: body };
+        const issues = findReadWeaveQualityIssues(body, "星桥", options);
+        expect(issues).not.toContain("定义仍保留多个可能义项，尚未完成当前语境消歧");
+        expect(issues).not.toContain("通用知识回答错误收缩为当前文档中的局部用法");
+        expect(findReadWeaveQualityIssues(body, "星桥", { ...options, openDomain: false }))
+            .toContain("定义仍保留多个可能义项，尚未完成当前语境消歧");
+    });
+
+    it.each(["P/E", "MRNA", "TLS", "REST", "CBT", "NMR", "GDPR", "MIDI"])(
+        "does not derive mandatory facts from the bare catalog token %s", subject => {
+            const identity = { abbreviation: subject, chineseName: "采样步骤", englishName: "Sampling Step" };
+            const body = `${subject} 采样步骤（Sampling Step）是文章为采样流程指定的局部名称，用于记录输入位置并按顺序保存测量结果`;
+            const options = { openDomain: true, kind: "term" as const, subject, termIdentity: identity, articleContext: body };
+            expect(findReadWeaveQualityIssues(body, subject, options)
+                .filter(issue => /遗漏|实体类别或义项不一致|已核验规范名称不一致/u.test(issue))).toEqual([]);
+        }
+    );
+
+    it("retains convergence wording but checks an explicit statistical-evidence contradiction", () => {
+        const options = { openDomain: true, originalQuestion: "解释迭代数列趋于稳定的原因", articleContext: "未进行统计检验；数列按确定的递推公式收敛。" };
+        const body = "随着迭代推进，相邻两次结果的差值逐渐缩小，因此结果趋于稳定；这里描述的是数列的收敛行为，并未进行统计推断";
+        expect(findReadWeaveQualityIssues(body, "解释结果", options)).not.toContain("回答在没有统计检验或稳定性证据时声称结果显著或稳定");
+        const contradiction = "原问题或文章明确未进行统计检验，回答却断言具有统计显著性";
+        expect(findReadWeaveQualityIssues("两组差异具有统计显著性", "解释结果", options)).toContain(contradiction);
+        expect(findReadWeaveQualityIssues("不能断言两组差异具有统计显著性", "解释结果", options)).not.toContain(contradiction);
+    });
+
+    it("keeps original-request comparison and modality obligations plus substantive term checks", () => {
+        const body = "样品甲的读数为十二，样品乙的读数为九；两组均按照同一测量程序采样，记录中没有更多环境信息";
+        expect(findReadWeaveQualityIssues(body, "解释样品", {
+            openDomain: true, originalQuestion: "比较两组读数的高低"
+        })).toContain("定量比较未明确说明对象之间的方向");
+        expect(findReadWeaveQualityIssues("该方法实现比另一种方法更高的性能", "解释方法", {
+            openDomain: true, originalQuestion: "该方法在什么条件下可能更快？"
+        })).toContain("问题只询问可能性，但答案把有条件的比较写成了无条件必然结论");
+        expect(findReadWeaveQualityIssues("", "星桥", { openDomain: true, kind: "term", subject: "星桥" })).toContain("答案为空");
+        expect(findReadWeaveQualityIssues("星桥是一种概念", "星桥", { openDomain: true, kind: "term", subject: "星桥" }))
+            .toContain("定义只是同义反复，没有说明对象角色或边界");
+        expect(findReadWeaveQualityIssues("另一个对象用于记录采样位置并整理测量结果", "星桥", { openDomain: true, kind: "term", subject: "星桥" }))
+            .toContain("定义正文未明确指向所选术语");
+    });
+
+    it.each(["question", "term"] as const)("uses open-domain quality through the real %s wrapper for Power BI DAX", async kind => {
+        // Stop at the writer boundary: this verifies the real wrapper's checker,
+        // without claiming a live provider or semantic evaluation.
+        const writerBoundary = new Error("writer boundary fixture");
+        const unified = vi.spyOn(unifiedAi, "generateUnifiedReadWeaveAnswer").mockRejectedValue(writerBoundary);
+        vi.stubEnv("READWEAVE_TEST_AI", "");
+        vi.stubEnv("READWEAVE_ENABLE_LEGACY_REPLAY", "");
+        try {
+            const request: ReadWeaveGenerateRequest = {
+                articleId: "dax-formulas", anchorId: "dax-selected", anchorType: "range", kind,
+                title: kind === "term" ? "DAX" : "DAX 是什么意思？",
+                fragments: [{ id: "selected", role: "selected", text: `${daxFormulaContext} A&amp;B` }]
+            };
+            const original = structuredClone(request);
+            await expect(generateReadWeaveAnswer(request)).rejects.toBe(writerBoundary);
+            const [normalized, , checker, , , execution] = unified.mock.calls[0];
+            expect(execution?.originalRequest).toEqual(original);
+            expect(normalized.fragments[0].text).toContain("A&B");
+            expect(request).toEqual(original);
+            const issues = checker!(daxFormulaBody, request.title, kind, daxFormulaIdentity);
+            expect(issues.some(issue => /DAX 定义|结构化名词身份与已核验规范名称不一致/u.test(issue))).toBe(false);
+            expect(checker!(`${daxFormulaBody}（）`, request.title, kind, daxFormulaIdentity))
+                .toContain("答案包含空括号");
+        } finally {
+            unified.mockRestore();
+            vi.unstubAllEnvs();
+        }
+    });
+
     it("decodes single and repeated editor entities before generation", () => {
         expect(decodeReadWeaveEntities("10.1109&#x2F;TEST.2015.7342405"))
             .toBe("10.1109/TEST.2015.7342405");
@@ -425,7 +554,7 @@ describe("ReadWeave AI quality harness", () => {
         )).toContain("回答在没有统计检验或稳定性证据时声称结果显著或稳定");
     });
 
-    it("requires a standalone DAX definition to close its four core identity features", () => {
+    it("retains the legacy DAX four-feature rubric outside open-domain mode", () => {
         const incomplete = "DAX 直接访问（Direct Access）是一种持久内存访问模式；它能降低读写时延";
         const complete = "DAX 直接访问（Direct Access）是操作系统内核提供的直接访问机制；它绕过页面缓存，把文件或设备地址范围直接映射到应用程序地址空间；处理器随后通过加载与存储指令访问数据；它不是某一种内存硬件";
         const daxIssue = "DAX 定义没有闭合其操作系统内核身份、绕过页面缓存、直接内存映射，以及它不是一种内存硬件这四个核心特征";

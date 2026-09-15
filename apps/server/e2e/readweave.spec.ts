@@ -229,6 +229,133 @@ async function ensureGeneratedItemSaved(panel: Locator) {
     if (await manualSave.count() > 0) await expect(manualSave).toBeDisabled();
 }
 
+test("ReadWeave isolates the same ambiguous word across articles without body writes or duplicate results", async ({ page, context }) => {
+    test.setTimeout(180_000);
+    const app = new App(page, context);
+    const pageErrors: string[] = [];
+    const starts: Array<Record<string, unknown>> = [];
+    const bodyPuts: string[] = [];
+    page.on("pageerror", error => pageErrors.push(error.message));
+    await gotoReadWeave(app, page);
+    const origin = new URL(page.url()).origin;
+    const csrfToken = await page.evaluate(() => (window as unknown as { glob: { csrfToken: string } }).glob.csrfToken);
+    const articles = [
+        {
+            title: uniqueTitle("ReadWeave E2E · Operating-system kernel"),
+            paragraphs: [
+                "Author card: Professor Alba writes the ORCHID operating-system course.",
+                "The kernel schedules processes, manages virtual memory and coordinates device access.",
+                "Applications request these services through system calls; this article describes software privileges.",
+                "ORCHID ARTICLE END: device isolation is part of this operating-system discussion."
+            ]
+        },
+        {
+            title: uniqueTitle("ReadWeave E2E · Linear-map kernel"),
+            paragraphs: [
+                "Author card: Professor Beno writes the TOPAZ linear-algebra course.",
+                "The kernel of a linear map is the set of vectors mapped to the zero vector.",
+                "For T(x, y) = (x, 0), the kernel consists of vectors (0, y); it is a subspace of the domain.",
+                "TOPAZ ARTICLE END: the word denotes a mathematical subspace in this article."
+            ]
+        }
+    ];
+    const notes: Array<{ noteId: string; body: string; savedLinkId?: string }> = [];
+    for (const article of articles) {
+        await createTextNote(app, article.title, article.paragraphs.join("\n\n"));
+        const noteId = await page.evaluate(() => (window as unknown as TestAppWindow).glob.appContext.tabManager.getActiveContext().noteId);
+        const blobUrl = `${origin}/api/notes/${encodeURIComponent(noteId)}/blob`;
+        await expect.poll(async () => {
+            const response = await page.request.get(blobUrl);
+            return ((await response.json()) as { content: string }).content;
+        }, { timeout: 20_000 }).toContain(article.paragraphs.at(-1)!);
+        const response = await page.request.post(`${origin}/api/notes/${encodeURIComponent(noteId)}/attributes`, {
+            headers: { "x-csrf-token": csrfToken },
+            data: { type: "label", name: "readOnly", value: "true" }
+        });
+        expect(response.ok()).toBe(true);
+        const blob = await page.request.get(blobUrl);
+        notes.push({ noteId, body: ((await blob.json()) as { content: string }).content });
+    }
+
+    // Fixture creation writes are complete. From here, neither article body may
+    // be saved by selection, generation, auto-save, article switching or reload.
+    page.on("request", request => {
+        const pathname = new URL(request.url()).pathname;
+        if (request.method() === "POST" && pathname === "/api/readweave/generation-jobs") starts.push(request.postDataJSON());
+        if (request.method() === "PUT" && notes.some(note =>
+            pathname === `/api/notes/${note.noteId}/data` || pathname === `/api/notes/${note.noteId}/blob`)) bodyPuts.push(pathname);
+    });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    const panel = app.sidebar.locator("#readweave-panel");
+    for (const [index, article] of articles.entries()) {
+        await app.tabBar.locator(".note-tab-wrapper", { hasText: article.title }).click();
+        await expect(app.currentNoteSplitTitle).toHaveValue(article.title, { timeout: 20_000 });
+        const content = app.currentNoteSplit.locator('.note-detail-readonly-text-content[data-readweave-content-root="readonly"]');
+        await selectReadOnlyTextRange(page, content.locator("p", { hasText: article.paragraphs[1] }), "kernel");
+        await page.locator(".readweave-selection-actions").getByRole("button", { name: "Ask", exact: true }).click();
+        if (index === 0) {
+            await panel.getByTestId("readweave-quote-selected-text").uncheck();
+            await panel.getByTestId("readweave-optimize-question").uncheck();
+            await panel.getByTestId("readweave-auto-apply-plan").check();
+            await panel.getByTestId("readweave-auto-save").check();
+            await panel.getByTestId("readweave-disable-external-search").check();
+        }
+        await expect(panel.getByTestId("readweave-quote-selected-text")).not.toBeChecked();
+        await expect(panel.getByTestId("readweave-optimize-question")).not.toBeChecked();
+        await expect(panel.getByTestId("readweave-auto-apply-plan")).toBeChecked();
+        await expect(panel.getByTestId("readweave-auto-save")).toBeChecked();
+        await expect(panel.getByTestId("readweave-disable-external-search")).toBeChecked();
+        await panel.getByTestId("readweave-question").fill("What is kernel in this article?");
+        await panel.getByTestId("readweave-generate").click();
+        await expect.poll(() => starts.length).toBe(index + 1);
+        expect(starts[index]).toMatchObject({
+            articleId: notes[index].noteId, title: "What is kernel in this article?", kind: "question",
+            quoteSelectedText: false, optimizeQuestion: false, autoApplyPlan: true, autoSave: true,
+            activeExternalSearch: false, autoExternalSearch: false
+        });
+        expect(starts[index].parentLinkId).toBeFalsy();
+        expect(starts[index].answerSelection).toBeFalsy();
+        const fragments = starts[index].fragments as Array<{ id: string; role: string; text: string }>;
+        expect(fragments.find(fragment => fragment.id === "selected")?.text).toBe("kernel");
+        const documentText = fragments.filter(fragment => fragment.role === "document").map(fragment => fragment.text).join("");
+        expect(documentText.replace(/<[^>]*>/gu, "")).toBe(article.paragraphs.join(""));
+        expect(fragments.map(fragment => fragment.text).join("\n")).not.toContain(index === 0 ? "TOPAZ" : "ORCHID");
+
+        await expect.poll(async () => (await panel.locator(".readweave-status").allTextContents()).join(" | "),
+            { timeout: 30_000 }).toContain("Reviewed item saved");
+        await expect(panel.locator(".readweave-entry")).toHaveCount(1);
+        notes[index].savedLinkId = (await panel.locator(".readweave-entry").getAttribute("data-link-id"))!;
+        expect(notes[index].savedLinkId).toBeTruthy();
+        const jobs = await page.request.get(`${origin}/api/readweave/articles/${notes[index].noteId}/generation-jobs`);
+        expect(jobs.ok()).toBe(true);
+        expect(((await jobs.json()) as { jobs: Array<{ status: string; savedLinkId?: string }> }).jobs).toEqual([
+            expect.objectContaining({ status: "saved", savedLinkId: notes[index].savedLinkId })
+        ]);
+    }
+
+    // The server's deterministic AI mock does not establish semantic answer
+    // quality. Check request isolation and restore the actual distinct saved IDs.
+    expect(notes[0].savedLinkId).not.toBe(notes[1].savedLinkId);
+    for (const [index, article] of articles.entries()) {
+        await app.tabBar.locator(".note-tab-wrapper", { hasText: article.title }).click();
+        await expect(app.currentNoteSplitTitle).toHaveValue(article.title);
+        await page.reload({ waitUntil: "domcontentloaded" });
+        await expect(app.currentNoteSplitTitle).toHaveValue(article.title, { timeout: 20_000 });
+        const anchor = app.currentNoteSplit.locator('[data-readweave-runtime-only="1"][data-readweave-range-anchor-id]');
+        await expect(anchor).toHaveCount(1, { timeout: 20_000 });
+        await anchor.click();
+        await expect(panel.locator(".readweave-entry")).toHaveCount(1);
+        await expect(panel.locator(".readweave-entry")).toHaveAttribute("data-link-id", notes[index].savedLinkId!);
+        await expect(panel.getByTestId("readweave-auto-save")).toBeChecked();
+        await expect(panel.getByTestId("readweave-disable-external-search")).toBeChecked();
+        const blob = await page.request.get(`${origin}/api/notes/${notes[index].noteId}/blob`);
+        expect(((await blob.json()) as { content: string }).content).toBe(notes[index].body);
+    }
+    expect(starts).toHaveLength(2);
+    expect(bodyPuts).toEqual([]);
+    expect(pageErrors).toEqual([]);
+});
+
 test("ReadWeave passes the whole article, remembers checkboxes and generates directly from pending selection", async ({ page, context }) => {
     test.setTimeout(120_000);
     const app = new App(page, context);
@@ -1332,14 +1459,18 @@ test("ReadWeave releases a busy editor when the active background job disappears
     const generate = panel.getByTestId("readweave-generate");
     await panel.getByRole("textbox", { name: "Question", exact: true }).fill("后台任务消失后为什么必须恢复编辑？");
 
+    let releaseMissingJob!: () => void;
+    const missingJobGate = new Promise<void>(resolve => { releaseMissingJob = resolve; });
     await page.route("**/api/readweave/generation-jobs/*/events?*", async route => {
+        await missingJobGate;
         await route.fulfill({
-            status: 200,
+            status: 404,
             contentType: "application/json",
-            body: JSON.stringify({ job: null, events: [], nextSequence: 0 })
+            body: JSON.stringify({ message: "Generation job not found" })
         });
     });
     await page.route("**/api/readweave/articles/*/generation-jobs", async route => {
+        await missingJobGate;
         await route.fulfill({
             status: 200,
             contentType: "application/json",
@@ -1347,8 +1478,17 @@ test("ReadWeave releases a busy editor when the active background job disappears
         });
     });
 
-    await generate.click();
-    await expect(generate).toHaveAttribute("aria-busy", "true");
+    // An immediate missing-job response can clear busy before the first locator
+    // read. Observe the pending poll, assert busy, then permit recovery.
+    const eventsRequest = page.waitForRequest("**/api/readweave/generation-jobs/*/events?*", { timeout: 10_000 });
+    try {
+        await generate.click();
+        await eventsRequest;
+        await expect(generate).toHaveAttribute("aria-busy", "true");
+        await expect(generate).toBeDisabled();
+    } finally {
+        releaseMissingJob();
+    }
     await expect(generate).toBeEnabled({ timeout: 10_000 });
     await expect(generate).not.toHaveAttribute("aria-busy", "true");
     await expect(panel.getByTestId("readweave-generation-monitor")).toHaveCount(0);

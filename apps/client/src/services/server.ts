@@ -40,8 +40,8 @@ async function getHeaders(headers?: Headers) {
     return allHeaders;
 }
 
-async function getWithSilentNotFound<T>(url: string, componentId?: string) {
-    return await call<T>("GET", url, componentId, { silentNotFound: true });
+async function getWithSilentNotFound<T>(url: string, componentId?: string, options: Pick<CallOptions, "preserveErrorStatus"> = {}) {
+    return await call<T>("GET", url, componentId, { silentNotFound: true, ...options });
 }
 
 /**
@@ -181,6 +181,8 @@ function signalAuthenticationRequired() {
 interface CallOptions {
     data?: unknown;
     silentNotFound?: boolean;
+    /** Opt-in for callers that distinguish missing resources from transient errors. */
+    preserveErrorStatus?: boolean;
     silentInternalServerError?: boolean;
     // If `true`, the value will be returned as a string instead of a JavaScript object if JSON, XMLDocument if XML, etc.
     raw?: boolean;
@@ -286,7 +288,9 @@ function ajax(url: string, method: string, data: unknown, headers: Headers, opts
                     }
                 }
 
-                rej(jqXhr.responseText);
+                rej(opts.preserveErrorStatus
+                    ? Object.assign(new Error(jqXhr.responseText), { status: jqXhr.status })
+                    : jqXhr.responseText);
             }
         };
 

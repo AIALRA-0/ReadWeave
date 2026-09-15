@@ -226,9 +226,18 @@ describe("ajax error handling", () => {
         (window as any).$.ajax = (opts: AjaxOptions) => {
             opts.error({ status: 404, responseText: "{}" });
         };
-        await expect(server.getWithSilentNotFound("url")).rejects.toBeDefined();
+        await expect(server.getWithSilentNotFound("url")).rejects.toBe("{}");
         expect(toastMock.showError).not.toHaveBeenCalled();
         expect((window as any).logError).not.toHaveBeenCalled();
+    });
+
+    it.each([404, 500])("preserves status %s only when explicitly requested", async status => {
+        (window as any).$.ajax = (opts: AjaxOptions) => {
+            void opts.error({ status, responseText: '{"message":"Request failed"}' });
+        };
+        await expect(server.getWithSilentNotFound("url", undefined, { preserveErrorStatus: true }))
+            .rejects.toMatchObject({ status, message: '{"message":"Request failed"}' });
+        if (status === 404) expect((window as any).logError).not.toHaveBeenCalled();
     });
 
     it("stays silent on 500 when silentInternalServerError is set", async () => {

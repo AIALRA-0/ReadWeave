@@ -818,7 +818,13 @@ export function exportReadWeave(articleIdValue?: unknown): ReadWeaveExport {
     const anchorIdSet = new Set(anchors.map(anchor => `${anchor.articleId}:${anchor.anchorId}`));
     const objectIdSet = new Set(objects.map(object => object.objectId));
     const valid = links.every(link => articleIdSet.has(link.articleId) && anchorIdSet.has(`${link.articleId}:${link.anchorId}`) && objectIdSet.has(link.objectId));
-    const contentSha256 = crypto.createHash("sha256").update(JSON.stringify({ articles, anchors, objects, links })).digest("hex");
+    // Reused objects can carry another article's complete request in taskContract.
+    // Strip this reserved server-only field at every depth (including retained
+    // candidate/revision audits), without rewriting answer strings or saved records.
+    const portableJson = JSON.stringify({ articles, anchors, objects, links },
+        (key: string, value: unknown) => key === "taskContract" ? undefined : value);
+    const portableData = JSON.parse(portableJson) as Pick<ReadWeaveExport, "articles" | "anchors" | "objects" | "links">;
+    const contentSha256 = crypto.createHash("sha256").update(portableJson).digest("hex");
     return {
         schemaVersion: READWEAVE_SCHEMA_VERSION,
         exportId: `exp_${newEntityId()}`,
@@ -830,10 +836,7 @@ export function exportReadWeave(articleIdValue?: unknown): ReadWeaveExport {
             workflowVersion: "unified-evidence-v1"
         },
         scope: articleId ? { type: "articles", articleIds: [ articleId ], includeContent: true } : { type: "all", includeContent: true },
-        articles,
-        anchors,
-        objects,
-        links,
+        ...portableData,
         integrity: {
             valid,
             articleCount: articles.length,

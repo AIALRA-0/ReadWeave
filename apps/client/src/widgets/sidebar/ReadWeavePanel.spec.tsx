@@ -5,9 +5,9 @@ import ReadWeavePanel, { answerMarkers } from "./ReadWeavePanel.js";
 import type { ReadWeaveGenerationJob, ReadWeaveResolvedEntry } from "@triliumnext/commons";
 import { readReadWeaveGenerationPreferences } from "./readweave_generation_preferences.js";
 
-const state = vi.hoisted(() => ({ root: null as HTMLElement | null, noteContext: null as unknown, job: null as unknown, post: vi.fn(), get: vi.fn() }));
+const state = vi.hoisted(() => ({ root: null as HTMLElement | null, noteContext: null as unknown, job: null as unknown, post: vi.fn(), get: vi.fn(), events: vi.fn() }));
 vi.mock("@triliumnext/ckeditor5", () => ({ updateReadWeaveAnchorIdOnRange: vi.fn(), parseReadWeaveAnchorIds: (value?: string) => value?.split(/\s+/u).filter(Boolean) ?? [] }));
-vi.mock("../../services/server.js", () => ({ default: { get: state.get, post: (url: string, body: unknown) => url === "readweave/candidates" ? Promise.resolve({ candidates: [] }) : state.post(url, body), getWithSilentNotFound: vi.fn(async () => ({ job: state.job, events: [], nextSequence: 0 })) } }));
+vi.mock("../../services/server.js", () => ({ default: { get: state.get, post: (url: string, body: unknown) => url === "readweave/candidates" ? Promise.resolve({ candidates: [] }) : state.post(url, body), getWithSilentNotFound: state.events } }));
 vi.mock("../../services/i18n.js", () => ({ t: (key: string, values?: {excerpt?:string}) => key === "readweave.default_question_short" ? `“${values?.excerpt}”是什么意思？` : key }));
 vi.mock("../../services/utils.js", () => ({ default: { randomString: () => Math.random().toString(36).slice(2) } }));
 vi.mock("../react/hooks.js", () => ({
@@ -54,6 +54,7 @@ describe("ReadWeave panel generation actions", () => {
     beforeEach(async () => {
         vi.clearAllMocks();
         state.job = null;
+        state.events.mockReset().mockImplementation(async () => ({ job: state.job, events: [], nextSequence: 0 }));
         sessionStorage.clear();
         localStorage.clear();
         host = document.createElement("div");
@@ -70,6 +71,7 @@ describe("ReadWeave panel generation actions", () => {
     });
     afterEach(async () => {
         await act(() => render(null, host));
+        vi.useRealTimers();
         window.getSelection()?.removeAllRanges();
         host.remove();
         state.root?.remove();
@@ -206,6 +208,122 @@ describe("ReadWeave panel generation actions", () => {
         await vi.waitFor(() => expect(Array.from({ length: sessionStorage.length }, (_, i) => sessionStorage.getItem(sessionStorage.key(i)!)).some(value => value?.includes('"generationJobId":"accepted-job"'))).toBe(true));
         expect(button().disabled).toBe(true);
     });
+    function acceptGenerationJobs() {
+        state.post.mockImplementation(async (_url: string, body: Record<string, unknown>) => ({ job: state.job = {
+            ...body, jobId: `accepted-${state.post.mock.calls.length}`, draftId: `draft-${state.post.mock.calls.length}`,
+            status: "running", progress: [], stateVersion: 1,
+            createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z",
+            sourceExcerpt: body.rootSourceExcerpt
+        } }));
+    }
+
+    it.each(["404", "null"])("clears a missing job (%s) without losing the question or draft", async missing => {
+        acceptGenerationJobs();
+        let resolvePoll!: (value: unknown) => void;
+        let rejectPoll!: (error: unknown) => void;
+        state.events.mockImplementation(() => new Promise((resolve, reject) => { resolvePoll = resolve; rejectPoll = reject; }));
+        await select("First selection");
+        const originalQuestion = "Explain First selection, keeping my exact question.";
+        const originalBody = "My unfinished answer must survive a missing job.";
+        await act(() => {
+            question().value = originalQuestion;
+            question().dispatchEvent(new Event("input", { bubbles: true }));
+            const body = host.querySelector<HTMLTextAreaElement>('[data-testid="readweave-answer"]')!;
+            body.value = originalBody;
+            body.dispatchEvent(new Event("input", { bubbles: true }));
+        });
+        await act(() => button().click());
+        await vi.waitFor(() => expect(state.events).toHaveBeenCalledTimes(1));
+        expect(state.events).toHaveBeenCalledWith(expect.stringContaining("accepted-1/events"), undefined, { preserveErrorStatus: true });
+        expect(button().disabled).toBe(true);
+        expect(host.querySelector('[data-testid="readweave-generation-monitor"]')).not.toBeNull();
+        await act(() => {
+            if (missing === "404") rejectPoll(Object.assign(new Error("Job missing"), { status: 404 }));
+            else resolvePoll({ job: null, events: [], nextSequence: 0 });
+        });
+        await vi.waitFor(() => expect(button().disabled).toBe(false));
+        expect(button().getAttribute("aria-busy")).toBe("false");
+        expect(host.querySelector('[data-testid="readweave-generation-monitor"]')).toBeNull();
+        expect(question().value).toBe(originalQuestion);
+        const savedDraft = Array.from({ length: sessionStorage.length }, (_, index) => sessionStorage.key(index)!)
+            .filter(key => key.endsWith(":latest"))
+            .map(key => JSON.parse(sessionStorage.getItem(key)!))
+            .find(draft => draft.questionTitle === originalQuestion);
+        expect(savedDraft).toMatchObject({ body: originalBody, newQuestionDraft: true });
+        expect(savedDraft.generationJobId).toBeUndefined();
+        expect(checkbox("quote-selected-text").checked).toBe(true);
+        expect(state.post).toHaveBeenCalledTimes(1);
+    });
+
+    it.each(["404", "null"])("ignores an old poll's %s after a different selection starts a new job", async missing => {
+        acceptGenerationJobs();
+        let resolveOld!: (value: unknown) => void;
+        let rejectOld!: (error: unknown) => void;
+        state.events.mockImplementation((url: string) => url.includes("accepted-1/")
+            ? new Promise((resolve, reject) => { resolveOld = resolve; rejectOld = reject; })
+            : new Promise(() => {}));
+        await select("First selection");
+        await act(() => button().click());
+        await vi.waitFor(() => expect(state.events).toHaveBeenCalledTimes(1));
+        await select("Second selection");
+        await act(() => button().click());
+        await vi.waitFor(() => expect(state.events).toHaveBeenCalledTimes(2));
+        const newQuestion = question().value;
+        await act(() => {
+            if (missing === "404") rejectOld(Object.assign(new Error("Old job missing"), { status: 404 }));
+            else resolveOld({ job: null, events: [], nextSequence: 0 });
+        });
+        expect(button().disabled).toBe(true);
+        expect(button().getAttribute("aria-busy")).toBe("true");
+        expect(question().value).toBe(newQuestion);
+        expect(host.querySelector('[data-testid="readweave-generation-monitor"]')).not.toBeNull();
+        expect(state.post).toHaveBeenCalledTimes(2);
+        expect(Array.from({ length: sessionStorage.length }, (_, index) => sessionStorage.getItem(sessionStorage.key(index)!))
+            .some(value => value?.includes('"generationJobId":"accepted-2"'))).toBe(true);
+    });
+
+    it("does not treat a transient poll failure as a deleted job", async () => {
+        acceptGenerationJobs();
+        let rejectPoll!: (error: unknown) => void;
+        state.events.mockImplementation(() => new Promise((_resolve, reject) => { rejectPoll = reject; }));
+        await select("First selection");
+        await act(() => button().click());
+        await vi.waitFor(() => expect(state.events).toHaveBeenCalledTimes(1));
+        await act(() => rejectPoll(Object.assign(new Error("Temporary server failure"), { status: 500 })));
+        expect(host.querySelector('[data-testid="readweave-generation-monitor"]')).not.toBeNull();
+        expect(Array.from({ length: sessionStorage.length }, (_, index) => sessionStorage.getItem(sessionStorage.key(index)!))
+            .some(value => value?.includes('"generationJobId":"accepted-1"'))).toBe(true);
+    });
+
+    it("does not let an in-flight history snapshot resurrect a missing job", async () => {
+        vi.useFakeTimers();
+        acceptGenerationJobs();
+        let rejectPoll!: (error: unknown) => void;
+        state.events.mockImplementation(() => new Promise((_resolve, reject) => { rejectPoll = reject; }));
+        await select("First selection");
+        await act(() => button().click());
+        await vi.waitFor(() => expect(state.events).toHaveBeenCalledTimes(1));
+        const removedJob = state.job;
+        let resolveHistory!: (value: unknown) => void;
+        const history = new Promise(resolve => { resolveHistory = resolve; });
+        let historyRequested = false;
+        state.get.mockImplementation((url: string) => {
+            if (url.startsWith("readweave/generation-jobs?")) {
+                historyRequested = true;
+                return history;
+            }
+            return Promise.resolve(url.endsWith("/anchors") ? { anchors: [] } : { entries: [] });
+        });
+        await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+        expect(historyRequested).toBe(true);
+        await act(async () => { rejectPoll(Object.assign(new Error("Job missing"), { status: 404 })); });
+        await vi.waitFor(() => expect(button().disabled).toBe(false));
+        await act(async () => { resolveHistory({ jobs: [removedJob], removedJobIds: [], nextCursor: 1 }); });
+        expect(button().disabled).toBe(false);
+        expect(host.querySelector('[data-testid="readweave-generation-monitor"]')).toBeNull();
+        expect(state.events).toHaveBeenCalledTimes(1);
+    });
+
     it("shows an expired selection confirmation instead of silently abandoning Generate", async () => {
         await select("First selection");
         // Crossing an existing anchor leaves a visible preview but no valid action.

@@ -1,0 +1,2208 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:readweave:task-contract:1.0",
+  "title": "ReadWeave unified task contract 1.0",
+  "description": "Server-owned immutable input and policy; advisory open-ended semantics; append-only execution evidence. Cross-reference and semantic obligations require checks beyond JSON Schema.",
+  "$ref": "#/$defs/TaskContract",
+  "$defs": {
+    "Locator": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "whole",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "text",
+              "type": "string"
+            },
+            "start": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "end": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "offsetUnit": {
+              "const": "utf16-code-unit",
+              "type": "string"
+            },
+            "quote": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "start",
+            "end",
+            "offsetUnit",
+            "quote"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "node",
+              "type": "string"
+            },
+            "anchorId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            "rangeAnchorId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "anchorId",
+            "rangeAnchorId"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "table",
+              "type": "string"
+            },
+            "tableId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            "rowIds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            },
+            "columnIds": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 160
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "tableId",
+            "rowIds",
+            "columnIds"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "region",
+              "type": "string"
+            },
+            "pageIndex": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "x": {
+              "type": "number",
+              "minimum": 0
+            },
+            "y": {
+              "type": "number",
+              "minimum": 0
+            },
+            "width": {
+              "type": "number",
+              "minimum": 0
+            },
+            "height": {
+              "type": "number",
+              "minimum": 0
+            },
+            "unit": {
+              "type": "string",
+              "enum": [
+                "normalized",
+                "pixel"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "pageIndex",
+            "x",
+            "y",
+            "width",
+            "height",
+            "unit"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "const": "pointer",
+              "type": "string"
+            },
+            "pointer": {
+              "type": "string"
+            },
+            "format": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "pointer",
+            "format"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "InputRef": {
+      "type": "object",
+      "properties": {
+        "blockId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "locator": {
+          "$ref": "#/$defs/Locator"
+        }
+      },
+      "required": [
+        "blockId",
+        "locator"
+      ],
+      "additionalProperties": false
+    },
+    "ContentBlock": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "question",
+            "selection",
+            "article_context",
+            "article_metadata",
+            "prior_user",
+            "prior_assistant",
+            "attachment"
+          ]
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "blobRef": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contentHash": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "sourceId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "sourceVersion": {
+          "type": "string"
+        },
+        "sourceUrl": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "capturedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "extraction": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "original",
+                "extracted",
+                "partial",
+                "unavailable"
+              ]
+            },
+            "method": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "warnings": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "status",
+            "method",
+            "warnings"
+          ],
+          "additionalProperties": false
+        },
+        "origin": {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "enum": [
+                "user",
+                "article",
+                "assistant",
+                "attachment"
+              ]
+            },
+            "messageId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "parentAnswerId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "messageId",
+            "parentAnswerId"
+          ],
+          "additionalProperties": false
+        },
+        "instructionAuthority": {
+          "const": "none",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "mimeType",
+        "text",
+        "blobRef",
+        "contentHash",
+        "sourceId",
+        "sourceVersion",
+        "sourceUrl",
+        "capturedAt",
+        "extraction",
+        "origin",
+        "instructionAuthority"
+      ],
+      "additionalProperties": false
+    },
+    "UserOptions": {
+      "type": "object",
+      "properties": {
+        "externalSearch": {
+          "type": "string",
+          "enum": [
+            "allowed",
+            "off",
+            "required"
+          ]
+        },
+        "knowledgeMode": {
+          "type": "string",
+          "enum": [
+            "mixed",
+            "provided_only"
+          ]
+        },
+        "language": {
+          "type": "string"
+        },
+        "requestedAsOf": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requestedLength": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "privacyMode": {
+          "type": "string",
+          "enum": [
+            "standard",
+            "restricted"
+          ]
+        }
+      },
+      "required": [
+        "externalSearch",
+        "knowledgeMode",
+        "language",
+        "requestedAsOf",
+        "requestedLength",
+        "privacyMode"
+      ],
+      "additionalProperties": false
+    },
+    "RequestEnvelope": {
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "tenantScope": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "sessionId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "turnId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "parentAnswerId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "receivedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "questionText": {
+          "type": "string"
+        },
+        "questionRef": {
+          "$ref": "#/$defs/InputRef"
+        },
+        "selectionRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputRef"
+          }
+        },
+        "articleContextRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputRef"
+          }
+        },
+        "conversationRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputRef"
+          }
+        },
+        "attachmentRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputRef"
+          }
+        },
+        "blocks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContentBlock"
+          }
+        },
+        "options": {
+          "$ref": "#/$defs/UserOptions"
+        }
+      },
+      "required": [
+        "requestId",
+        "tenantScope",
+        "sessionId",
+        "turnId",
+        "parentAnswerId",
+        "receivedAt",
+        "timezone",
+        "questionText",
+        "questionRef",
+        "selectionRefs",
+        "articleContextRefs",
+        "conversationRefs",
+        "attachmentRefs",
+        "blocks",
+        "options"
+      ],
+      "additionalProperties": false
+    },
+    "ServerPolicy": {
+      "type": "object",
+      "properties": {
+        "policyVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "writerRoute": {
+          "const": "unified",
+          "type": "string"
+        },
+        "budget": {
+          "type": "object",
+          "properties": {
+            "currency": {
+              "const": "CNY",
+              "type": "string"
+            },
+            "unit": {
+              "const": "micro-CNY",
+              "type": "string"
+            },
+            "hardLimit": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "writerReserve": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxModelCalls": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "maxSearchRequests": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxRetrievalWaves": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxPageFetches": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxRepairCalls": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxToolCalls": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxBilledInputTokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "maxBilledOutputTokens": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "deadlineAt": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "priceSnapshotId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            }
+          },
+          "required": [
+            "currency",
+            "unit",
+            "hardLimit",
+            "writerReserve",
+            "maxModelCalls",
+            "maxSearchRequests",
+            "maxRetrievalWaves",
+            "maxPageFetches",
+            "maxRepairCalls",
+            "maxToolCalls",
+            "maxBilledInputTokens",
+            "maxBilledOutputTokens",
+            "deadlineAt",
+            "priceSnapshotId"
+          ],
+          "additionalProperties": false
+        },
+        "permissions": {
+          "type": "object",
+          "properties": {
+            "externalSearch": {
+              "type": "string",
+              "enum": [
+                "allowed",
+                "off",
+                "required"
+              ]
+            },
+            "externalModelProcessing": {
+              "type": "boolean"
+            },
+            "allowedCapabilities": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "allowSideEffects": {
+              "const": false,
+              "type": "boolean"
+            },
+            "redactQueries": {
+              "type": "boolean"
+            },
+            "allowedSourceScopes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "externalSearch",
+            "externalModelProcessing",
+            "allowedCapabilities",
+            "allowSideEffects",
+            "redactQueries",
+            "allowedSourceScopes"
+          ],
+          "additionalProperties": false
+        },
+        "answerPolicy": {
+          "type": "object",
+          "properties": {
+            "unknownIntent": {
+              "const": "continue",
+              "type": "string"
+            },
+            "evidenceGap": {
+              "const": "limit_only_affected_claims",
+              "type": "string"
+            },
+            "classifierMayRefuse": {
+              "const": false,
+              "type": "boolean"
+            },
+            "requireCitationForExternalClaims": {
+              "type": "boolean"
+            },
+            "preserveOriginalQuestion": {
+              "const": true,
+              "type": "boolean"
+            },
+            "preserveSelections": {
+              "const": true,
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "unknownIntent",
+            "evidenceGap",
+            "classifierMayRefuse",
+            "requireCitationForExternalClaims",
+            "preserveOriginalQuestion",
+            "preserveSelections"
+          ],
+          "additionalProperties": false
+        },
+        "safety": {
+          "type": "object",
+          "properties": {
+            "decisionId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            "basis": {
+              "const": "independent_policy_on_original_request",
+              "type": "string"
+            },
+            "restrictions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "scopeRef": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/InputRef"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "ruleId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 160
+                  },
+                  "instruction": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "scopeRef",
+                  "ruleId",
+                  "instruction"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "decisionId",
+            "basis",
+            "restrictions"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "policyVersion",
+        "writerRoute",
+        "budget",
+        "permissions",
+        "answerPolicy",
+        "safety"
+      ],
+      "additionalProperties": false
+    },
+    "Subject": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "surface": {
+          "type": "string"
+        },
+        "mentions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputRef"
+          }
+        },
+        "kindHints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "interpretation": {
+          "type": "string"
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "target",
+            "context",
+            "intermediate"
+          ]
+        },
+        "introducedByTaskId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "surface",
+        "mentions",
+        "kindHints",
+        "interpretation",
+        "aliases",
+        "role",
+        "introducedByTaskId"
+      ],
+      "additionalProperties": false
+    },
+    "Requirement": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "instruction": {
+          "type": "string"
+        },
+        "originRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputRef"
+          }
+        },
+        "mustAddress": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "instruction",
+        "originRefs",
+        "mustAddress"
+      ],
+      "additionalProperties": false
+    },
+    "Task": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "instruction": {
+          "type": "string"
+        },
+        "intentHints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "subjectIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "requirementIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "originRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputRef"
+          }
+        },
+        "dependsOnTaskIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "expectedDeliverable": {
+          "type": "string"
+        },
+        "acceptanceCriteria": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "scope": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "instruction",
+        "intentHints",
+        "subjectIds",
+        "requirementIds",
+        "originRefs",
+        "dependsOnTaskIds",
+        "expectedDeliverable",
+        "acceptanceCriteria",
+        "scope"
+      ],
+      "additionalProperties": false
+    },
+    "EvidenceNeed": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "taskIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "subjectIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "questionToResolve": {
+          "type": "string"
+        },
+        "candidateClaim": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "originRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputRef"
+          }
+        },
+        "whyNeeded": {
+          "type": "string"
+        },
+        "sourcePreferences": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "queryCandidates": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "freshness": {
+          "type": "object",
+          "properties": {
+            "timeIntent": {
+              "type": "string"
+            },
+            "asOf": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxAgeSecondsHint": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "versionHint": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "timeIntent",
+            "asOf",
+            "maxAgeSecondsHint",
+            "versionHint"
+          ],
+          "additionalProperties": false
+        },
+        "necessity": {
+          "type": "string",
+          "enum": [
+            "needed_for_specific_claim",
+            "helpful"
+          ]
+        },
+        "alternativeIfMissing": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "taskIds",
+        "subjectIds",
+        "questionToResolve",
+        "candidateClaim",
+        "originRefs",
+        "whyNeeded",
+        "sourcePreferences",
+        "queryCandidates",
+        "freshness",
+        "necessity",
+        "alternativeIfMissing"
+      ],
+      "additionalProperties": false
+    },
+    "ReasoningStep": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "taskIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "operation": {
+          "type": "string"
+        },
+        "inputNeedIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "dependsOnStepIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "capabilityHints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "expectedResult": {
+          "type": "string"
+        },
+        "checks": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "taskIds",
+        "operation",
+        "inputNeedIds",
+        "dependsOnStepIds",
+        "capabilityHints",
+        "expectedResult",
+        "checks"
+      ],
+      "additionalProperties": false
+    },
+    "Assumption": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "statement": {
+          "type": "string"
+        },
+        "taskIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "basisRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputRef"
+          }
+        },
+        "consequenceIfFalse": {
+          "type": "string"
+        },
+        "mustDisclose": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "statement",
+        "taskIds",
+        "basisRefs",
+        "consequenceIfFalse",
+        "mustDisclose"
+      ],
+      "additionalProperties": false
+    },
+    "Ambiguity": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "originRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputRef"
+          }
+        },
+        "alternatives": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "subjectIds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                }
+              },
+              "supportRefs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/InputRef"
+                }
+              }
+            },
+            "required": [
+              "description",
+              "subjectIds",
+              "supportRefs"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "handling": {
+          "type": "string",
+          "enum": [
+            "use_context",
+            "answer_conditionally",
+            "cover_alternatives",
+            "ask_only_if_blocking"
+          ]
+        },
+        "blockingReason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "originRefs",
+        "alternatives",
+        "handling",
+        "blockingReason"
+      ],
+      "additionalProperties": false
+    },
+    "ContextBinding": {
+      "type": "object",
+      "properties": {
+        "inputRef": {
+          "$ref": "#/$defs/InputRef"
+        },
+        "taskIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "purpose": {
+          "type": "string"
+        },
+        "relation": {
+          "type": "string",
+          "enum": [
+            "disambiguation",
+            "evidence",
+            "background",
+            "counterevidence",
+            "example"
+          ]
+        }
+      },
+      "required": [
+        "inputRef",
+        "taskIds",
+        "purpose",
+        "relation"
+      ],
+      "additionalProperties": false
+    },
+    "AnswerPlan": {
+      "type": "object",
+      "properties": {
+        "objective": {
+          "type": "string"
+        },
+        "requiredPoints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "orderedTaskIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "contextUse": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "objective",
+        "requiredPoints",
+        "exclusions",
+        "orderedTaskIds",
+        "contextUse"
+      ],
+      "additionalProperties": false
+    },
+    "SemanticProposal": {
+      "type": "object",
+      "properties": {
+        "subjects": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Subject"
+          }
+        },
+        "requirements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Requirement"
+          }
+        },
+        "tasks": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Task"
+          }
+        },
+        "evidenceNeeds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/EvidenceNeed"
+          }
+        },
+        "reasoning": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ReasoningStep"
+          }
+        },
+        "assumptions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Assumption"
+          }
+        },
+        "ambiguities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Ambiguity"
+          }
+        },
+        "contextBindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ContextBinding"
+          }
+        },
+        "answerPlan": {
+          "$ref": "#/$defs/AnswerPlan"
+        }
+      },
+      "required": [
+        "tasks"
+      ],
+      "additionalProperties": false
+    },
+    "EvidenceItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "provided",
+            "external",
+            "tool_result"
+          ]
+        },
+        "needIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "inputRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputRef"
+          }
+        },
+        "title": {
+          "type": "string"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "publisher": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retrievedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "publishedAt": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "eventTime": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceVersion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "access": {
+          "type": "string",
+          "enum": [
+            "full",
+            "excerpt",
+            "snippet",
+            "unavailable"
+          ]
+        },
+        "contentText": {
+          "type": "string"
+        },
+        "blobRef": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contentHash": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "independenceGroup": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "transportRecordId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "instructionAuthority": {
+          "const": "none",
+          "type": "string"
+        },
+        "licenseId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "usageRestriction": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "sourceWarnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "needIds",
+        "inputRefs",
+        "title",
+        "url",
+        "publisher",
+        "retrievedAt",
+        "publishedAt",
+        "eventTime",
+        "sourceVersion",
+        "access",
+        "contentText",
+        "blobRef",
+        "contentHash",
+        "independenceGroup",
+        "transportRecordId",
+        "instructionAuthority",
+        "licenseId",
+        "usageRestriction",
+        "sourceWarnings"
+      ],
+      "additionalProperties": false
+    },
+    "ClaimAssessment": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "taskIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "statement": {
+          "type": "string"
+        },
+        "basis": {
+          "type": "string",
+          "enum": [
+            "provided",
+            "external",
+            "tool_result",
+            "parametric",
+            "inference",
+            "assumption"
+          ]
+        },
+        "evidenceIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "premiseClaimIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "supported",
+            "contradicted",
+            "unresolved",
+            "not_checked",
+            "not_applicable"
+          ]
+        },
+        "assessedBy": {
+          "type": "string",
+          "enum": [
+            "writer",
+            "checker",
+            "deterministic_tool",
+            "human"
+          ]
+        },
+        "asOf": {
+          "anyOf": [
+            {
+              "type": "string",
+              "format": "date-time"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "qualifiers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "answerSpan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Locator"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "taskIds",
+        "statement",
+        "basis",
+        "evidenceIds",
+        "premiseClaimIds",
+        "status",
+        "assessedBy",
+        "asOf",
+        "qualifiers",
+        "answerSpan"
+      ],
+      "additionalProperties": false
+    },
+    "TaskResult": {
+      "type": "object",
+      "properties": {
+        "taskId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "addressed",
+            "partially_addressed",
+            "not_addressed"
+          ]
+        },
+        "answerBlockIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "claimIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "unresolvedPoints": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "nextUsefulStep": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "taskId",
+        "status",
+        "answerBlockIds",
+        "claimIds",
+        "unresolvedPoints",
+        "nextUsefulStep"
+      ],
+      "additionalProperties": false
+    },
+    "PromptProjection": {
+      "type": "object",
+      "properties": {
+        "includedRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputRef"
+          }
+        },
+        "omittedRefs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InputRef"
+          }
+        },
+        "lossWarnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "billedTokenEstimate": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "projectionVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        }
+      },
+      "required": [
+        "includedRefs",
+        "omittedRefs",
+        "lossWarnings",
+        "billedTokenEstimate",
+        "projectionVersion"
+      ],
+      "additionalProperties": false
+    },
+    "ExecutionEvent": {
+      "type": "object",
+      "properties": {
+        "eventId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "stage": {
+          "type": "string",
+          "enum": [
+            "capture",
+            "interpret",
+            "schedule",
+            "retrieve",
+            "tool",
+            "write",
+            "check",
+            "publish"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "ok",
+            "skipped",
+            "degraded",
+            "failed"
+          ]
+        },
+        "occurredAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reasonCode": {
+          "type": "string"
+        },
+        "modelCallId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "toolCallId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "chargedMicroCny": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "relatedTaskIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "relatedNeedIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "configVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        }
+      },
+      "required": [
+        "eventId",
+        "stage",
+        "status",
+        "occurredAt",
+        "reasonCode",
+        "modelCallId",
+        "toolCallId",
+        "chargedMicroCny",
+        "relatedTaskIds",
+        "relatedNeedIds",
+        "configVersion"
+      ],
+      "additionalProperties": false
+    },
+    "Usage": {
+      "type": "object",
+      "properties": {
+        "inputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cachedInputTokens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "outputTokensIncludingReasoning": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "modelCalls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "searchRequests": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "retrievalWaves": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pageFetches": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "upperBoundReservedMicroCny": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "knownChargedMicroCny": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unsettledMicroCny": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "wallTimeMs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "priceSnapshotId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        }
+      },
+      "required": [
+        "inputTokens",
+        "cachedInputTokens",
+        "outputTokensIncludingReasoning",
+        "modelCalls",
+        "searchRequests",
+        "retrievalWaves",
+        "pageFetches",
+        "upperBoundReservedMicroCny",
+        "knownChargedMicroCny",
+        "unsettledMicroCny",
+        "wallTimeMs",
+        "priceSnapshotId"
+      ],
+      "additionalProperties": false
+    },
+    "AnswerBlock": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "taskIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        },
+        "claimIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 160
+          }
+        }
+      },
+      "required": [
+        "id",
+        "mimeType",
+        "content",
+        "taskIds",
+        "claimIds"
+      ],
+      "additionalProperties": false
+    },
+    "TaskContract": {
+      "type": "object",
+      "properties": {
+        "schemaVersion": {
+          "const": "1.0",
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/RequestEnvelope"
+        },
+        "policy": {
+          "$ref": "#/$defs/ServerPolicy"
+        },
+        "rootRequirement": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "const": "root",
+              "type": "string"
+            },
+            "instruction": {
+              "type": "string"
+            },
+            "origin": {
+              "$ref": "#/$defs/InputRef"
+            },
+            "owner": {
+              "const": "server",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "instruction",
+            "origin",
+            "owner"
+          ],
+          "additionalProperties": false
+        },
+        "interpretation": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "accepted",
+                "fallback",
+                "not_needed"
+              ]
+            },
+            "proposal": {
+              "$ref": "#/$defs/SemanticProposal"
+            },
+            "producer": {
+              "type": "string",
+              "enum": [
+                "existing_call",
+                "deterministic_fallback",
+                "legacy_adapter"
+              ]
+            },
+            "diagnostics": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "status",
+            "proposal",
+            "producer",
+            "diagnostics"
+          ],
+          "additionalProperties": false
+        },
+        "runtime": {
+          "type": "object",
+          "properties": {
+            "evidence": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/EvidenceItem"
+              }
+            },
+            "claims": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ClaimAssessment"
+              }
+            },
+            "taskResults": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/TaskResult"
+              }
+            },
+            "projection": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/PromptProjection"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "events": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ExecutionEvent"
+              }
+            },
+            "usage": {
+              "$ref": "#/$defs/Usage"
+            },
+            "answerBlocks": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AnswerBlock"
+              }
+            }
+          },
+          "required": [
+            "evidence",
+            "claims",
+            "taskResults",
+            "projection",
+            "events",
+            "usage",
+            "answerBlocks"
+          ],
+          "additionalProperties": false
+        },
+        "compatibility": {
+          "type": "object",
+          "properties": {
+            "legacyTaskId": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "legacyCategoryReadOnly": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "legacyPayloadRef": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 160
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "lossWarnings": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "legacyTaskId",
+            "legacyCategoryReadOnly",
+            "legacyPayloadRef",
+            "lossWarnings"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "schemaVersion",
+        "request",
+        "policy",
+        "rootRequirement",
+        "interpretation",
+        "runtime",
+        "compatibility"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

@@ -18,6 +18,7 @@ import {
     generateReadWeaveAnswer,
     mergeReadWeaveTermIdentity
 } from "./readweave_ai.js";
+import { openReadWeaveJobBudget } from "./readweave_durable_budget.js";
 import { NonRetryableReadWeaveError } from "./readweave_errors.js";
 import { getPublishedReadWeaveHarnessProfile, initializeReadWeaveHarnessTrials } from "./readweave_harness.js";
 import { editReadWeaveLink, saveReadWeaveEntry, validateReadWeaveFollowUp } from "./readweave_repository.js";
@@ -690,11 +691,18 @@ function runJob(jobId: string) {
     }
 
     const generateWithTransportRecovery = async () => {
+        // Authorization permits at most .10; actual resource demand raises the .05
+        // working target. Only explicit regeneration changes the allowance epoch.
+        const budget = openReadWeaveJobBudget(jobId, {
+            requiredUpperBoundCny: 0.10,
+            difficultWorkAuthorized: true,
+            generationKey: row.createdAt
+        });
         let latestError: unknown;
         for (let attempt = 1; attempt <= MAX_BACKGROUND_GENERATION_ATTEMPTS; attempt++) {
             try {
                 validateReadWeaveFollowUp(request);
-                const result = await generateReadWeaveAnswer(request, progress => appendProgress(jobId, progress), controller.signal);
+                const result = await generateReadWeaveAnswer(request, progress => appendProgress(jobId, progress), controller.signal, { budget });
                 // A non-empty, structurally valid answer with review warnings is
                 // still a deliverable draft.  The unified workflow has already
                 // rejected empty, unparsable, unsafe and invariant-breaking
@@ -1151,7 +1159,8 @@ export function regenerateReadWeaveGenerationJob(jobId: string, inputValue: unkn
         request.answerPlan = input.answerPlan as ReadWeaveGenerateRequest["answerPlan"];
     }
     requireReviewedAnswerPlan(request);
-    const now = new Date().toISOString();
+    // Regenerations in the same millisecond still need distinct budget epochs.
+    const now = new Date(Math.max(Date.now(), Date.parse(row.createdAt) + 1)).toISOString();
     const harnessVersion = getPublishedReadWeaveHarnessProfile().versionId;
     validateReadWeaveFollowUp(request);
     const attemptId = randomUUID();

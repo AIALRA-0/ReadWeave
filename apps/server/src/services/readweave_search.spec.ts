@@ -1,17 +1,30 @@
+import dns from "node:dns";
+
 import { cls, hidden_subtree as hiddenSubtreeService } from "@triliumnext/core";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { Agent, fetch as undiciFetch } from "undici";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
     buildFocusedGeneralSearchQuery,
     buildReadWeaveSearchVariants,
     clearReadWeaveSearchCacheForTests,
     readReadWeavePageWithJina,
-    searchReadWeaveEvidence
+    normalizeReadWeavePageContent,
+    type ReadWeaveSearchPolicy,
+    searchReadWeaveEvidence,
+    searchReadWeaveEvidencePlan,
+    testReadWeaveSearch,
+    withReadWeaveSearchPolicy
 } from "./readweave_search.js";
 import { updateReadWeaveAiSettings } from "./readweave_settings.js";
 import sqlInit from "./sql_init.js";
 
+vi.mock("undici", async importOriginal => ({
+    ...await importOriginal<typeof import("undici")>(), fetch: vi.fn()
+}));
+
 describe("ReadWeave free-source search", () => {
+    afterEach(() => vi.restoreAllMocks());
     it("preserves prepared English full-name queries as well as origin queries", () => {
         for (const query of [ '"XPT" full name official documentation',
             '"Lumen" origin of name', "site:example.com XPT specification" ])
@@ -25,6 +38,7 @@ describe("ReadWeave free-source search", () => {
 
     beforeEach(() => {
         clearReadWeaveSearchCacheForTests();
+        vi.mocked(undiciFetch).mockReset();
         cls.init(() => {
             updateReadWeaveAiSettings({
                 baseUrl: "https://api.deepseek.com",
@@ -40,37 +54,14 @@ describe("ReadWeave free-source search", () => {
         });
     });
 
-    it("focuses a time-sensitive bilingual query on its named entity instead of the Chinese date prefix", () => {
-        const query = buildFocusedGeneralSearchQuery("截至 2026 年 7 月，DeepSeek API 当前提供哪些正式模型名称");
-
-        expect(query).toMatch(/^DeepSeek API\b/u);
-        expect(query).toContain("official current model names");
-        expect(query).toContain("2026");
-        expect(query).not.toMatch(/^截至/u);
-        expect(query).not.toMatch(/deepseek-v4-(?:flash|pro)/iu);
-    });
-
-    it("keeps a Chinese-only current query meaningful while moving the date out of the lead", () => {
-        const query = buildFocusedGeneralSearchQuery("截至 2026 年，某研究机构的现任负责人是谁");
-
-        expect(query).toContain("某研究机构的现任负责人是谁");
-        expect(query).toContain("official current affiliation");
-        expect(query).toContain("2026");
-        expect(query).not.toMatch(/^截至/u);
-    });
-
-    it("turns a person lookup into a direct biography and affiliation query", () => {
-        const query = buildFocusedGeneralSearchQuery("Moongon Jung researcher");
-
-        expect(query).toMatch(/^"Moongon Jung"/u);
-        expect(query).toContain("researcher profile current affiliation");
-    });
-
-    it("keeps a Chinese person's full name as an exact search anchor", () => {
-        const query = buildFocusedGeneralSearchQuery("周志华 官方主页 大学 教授 研究方向");
-
-        expect(query).toMatch(/^"周志华"/u);
-        expect(query).toContain("researcher profile current affiliation");
+    it.each([
+        "截至 2026 年 7 月，DeepSeek API 当前提供哪些正式模型名称",
+        "截至 2026 年，某研究机构的现任负责人是谁",
+        "Moongon Jung researcher",
+        "周志华 官方主页 大学 教授 研究方向",
+        "Who is Ada Example and how does SRAM work"
+    ])("preserves the complete evidence question: %s", query => {
+        expect(buildFocusedGeneralSearchQuery(query)).toBe(query);
     });
 
     it("admits a first-party personal homepage instead of dropping non-edu domains", async () => {
@@ -139,7 +130,7 @@ describe("ReadWeave free-source search", () => {
         }
     });
 
-    it("runs Exa beside Serper for people only when the configured budget allows it", async () => {
+    it("uses Exa as an explicitly requested fallback within the same budget", async () => {
         cls.init(() => {
             updateReadWeaveAiSettings({
                 baseUrl: "https://api.deepseek.com",
@@ -154,9 +145,7 @@ describe("ReadWeave free-source search", () => {
         const fetcher = vi.fn(async (input: string | URL | globalThis.Request) => {
             const url = input.toString();
             requested.push(url);
-            if (url.includes("google.serper.dev")) return Response.json({ organic: [ {
-                title: "Wuxi Li - Homepage", link: "https://wuxili.net/", snippet: "Wuxi Li AMD/Xilinx"
-            } ] });
+            if (url.includes("google.serper.dev")) return Response.json({ organic: [] });
             if (url.includes("api.exa.ai/search")) return Response.json({ results: [ {
                 title: "Wuxi Li personal site", url: "https://wuxili.net/", text: "Wuxi Li AMD/Xilinx"
             } ] });
@@ -168,6 +157,7 @@ describe("ReadWeave free-source search", () => {
 
         const result = await cls.init(() => searchReadWeaveEvidence({
             query: "Wuxi Li researcher profile current affiliation",
+            resourceHints: ["person"],
             kind: "question",
             force: true
         }, { fetcher, bypassCache: true }));
@@ -194,12 +184,12 @@ describe("ReadWeave free-source search", () => {
         await expect(readReadWeavePageWithJina("https://wuxili.net/", { fetcher }))
             .resolves.toContain("Principal Software Engineer at AMD/Xilinx");
     });
-    it("truncates anonymous long pages instead of rejecting them", async () => {
+    it("preserves complete anonymous pages without provider-side token clipping", async () => {
         const fetcher = vi.fn(async (_input: unknown, init?: RequestInit) => {
             const headers = new Headers(init?.headers);
             expect(headers.get("Authorization")).toBeNull();
             expect(headers.get("X-Token-Budget")).toBeNull();
-            expect(headers.get("X-Max-Tokens")).toBe("12000");
+            expect(headers.get("X-Max-Tokens")).toBeNull();
             const text = `${"Introduction ".repeat(2100)}The author decided to call it Lumen.`;
             return new Response(text, { status: 200 });
         }) as unknown as typeof fetch;
@@ -208,33 +198,21 @@ describe("ReadWeave free-source search", () => {
         )).resolves.toContain("decided to call it Lumen");
     });
 
-    it("focuses a definition lookup on the official meaning instead of nearby publications", () => {
-        const query = buildFocusedGeneralSearchQuery("DBLP 是什么");
-
-        expect(query).toContain("official definition meaning full name");
-        expect(query).toContain("DBLP 是什么");
+    it("keeps Markdown headings and creates equivalent boundaries for direct HTML fallback", () => {
+        const markdown = "# Document\n\n## 9.2.2 Idempotent Methods\n\nComplete section text";
+        expect(normalizeReadWeavePageContent(markdown)).toBe(markdown);
+        expect(normalizeReadWeavePageContent(
+            "<html><h2 id=\"section-9.2.2\">9.2.2 Idempotent Methods</h2><p>Complete section text</p></html>", true
+        )).toContain("## 9.2.2 Idempotent Methods\nComplete section text");
     });
 
-    it("expands person, DOI and acronym searches into independent verification queries", () => {
-        expect(buildReadWeaveSearchVariants("Naifeng Jing researcher professor profile"))
-            .toEqual(expect.arrayContaining([
-                "Naifeng Jing",
-                "Naifeng Jing official faculty profile current affiliation",
-                "Naifeng Jing ORCID researcher"
-            ]));
-        expect(buildReadWeaveSearchVariants("10.1109/TEST.2015.7342405 是什么"))
-            .toEqual(expect.arrayContaining([
-                "10.1109/TEST.2015.7342405",
-                "\"10.1109/TEST.2015.7342405\" DOI publication"
-            ]));
-        expect(buildReadWeaveSearchVariants("NPU definition"))
-            .toEqual(expect.arrayContaining([
-                "NPU official definition full name",
-                "NPU acronym history official"
-            ]));
-        expect(buildReadWeaveSearchVariants("NPU Researcher professor profile"))
-            .toHaveLength(6);
-    });
+    it.each(["DBLP 是什么", "Naifeng Jing researcher professor profile",
+        "10.1109/TEST.2015.7342405 是什么", "NPU definition", "NPU Researcher professor profile"])(
+        "leaves alternatives to evidence-need scheduling: %s", query => {
+            expect(buildFocusedGeneralSearchQuery(query)).toBe(query);
+            expect(buildReadWeaveSearchVariants(query)).toEqual([query]);
+        }
+    );
 
     it("identifies free-source requests with a contactable project URL", async () => {
         const userAgents: string[] = [];
@@ -521,7 +499,7 @@ describe("ReadWeave free-source search", () => {
 
         expect(requested.some(url => url.includes("api.tavily.com"))).toBe(true);
         expect(requestBodies).toEqual([ expect.objectContaining({
-            query: expect.stringMatching(/Sung Kyu Lim.*official primary source/u)
+            query: "Sung Kyu Lim researcher professor profile"
         }) ]);
         expect(result.sources[0]).toMatchObject({
             provider: "Tavily",
@@ -608,7 +586,7 @@ describe("ReadWeave free-source search", () => {
         }) as unknown as typeof fetch;
 
         const result = await cls.init(() => searchReadWeaveEvidence({
-            query: "Sung Kyu Lim current professor faculty official profile 2026",
+            query: "Sung Kyu Lim current professor faculty official profile 2026 ORCID 0000-0002-2267-5282",
             context: "ORCID 0000-0002-2267-5282",
             kind: "question",
             force: true
@@ -624,4 +602,334 @@ describe("ReadWeave free-source search", () => {
         expect(result.memo).toMatch(/2025-08-16 至 今/u);
         expect(result.memo).toMatch(/Georgia Institute of Technology（历史任职）/u);
     });
+
+    const allowedPolicy = (): ReadWeaveSearchPolicy => ({
+        externalSearch: "allowed", allowedSourceScopes: ["provided", "public"],
+        allowedCapabilities: ["search", "page_read"]
+    });
+    const entrypoints = ["search", "plan", "reader", "anonymous-reader", "settings-test"] as const;
+    const invoke = (entry: typeof entrypoints[number], fetcher: typeof fetch) => {
+        const input = { query: "DBLP ORCID DAX Direct Access DeepSeek current model names paper",
+            force: true, resourceHints: ["person"] };
+        if (entry === "search") return searchReadWeaveEvidence(input, { fetcher });
+        if (entry === "plan") return searchReadWeaveEvidencePlan(input, { fetcher });
+        if (entry === "settings-test") return testReadWeaveSearch(input.query);
+        return readReadWeavePageWithJina("https://wuxili.net/", { fetcher, anonymous: entry === "anonymous-reader" });
+    };
+
+    it.each(entrypoints)("blocks all HTTP at %s when the scoped policy is off", async entry => {
+        const fetcher = vi.fn<typeof fetch>();
+        await cls.init(() => withReadWeaveSearchPolicy({
+            ...allowedPolicy(), externalSearch: "off"
+        }, () => invoke(entry, fetcher)));
+        expect(fetcher).not.toHaveBeenCalled();
+        expect(undiciFetch).not.toHaveBeenCalled();
+    });
+
+    it.each(entrypoints)("propagates scoped cancellation at %s before HTTP", async entry => {
+        const controller = new AbortController();
+        controller.abort();
+        const fetcher = vi.fn<typeof fetch>();
+        await expect(cls.init(() => withReadWeaveSearchPolicy({
+            ...allowedPolicy(), signal: controller.signal
+        }, () => invoke(entry, fetcher)))).rejects.toThrow();
+        expect(fetcher).not.toHaveBeenCalled();
+        expect(undiciFetch).not.toHaveBeenCalled();
+    });
+
+    it.each(entrypoints)("lets a task-scoped grant override the obsolete global setting at %s", async entry => {
+        cls.init(() => updateReadWeaveAiSettings({
+            baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash", searchMode: "off", jinaApiKey: "test-key"
+        }));
+        const fetcherMock = vi.fn(async () => new Response("{}", {
+            status: 200, headers: { "Content-Type": "application/json" }
+        }));
+        const fetcher = fetcherMock as unknown as typeof fetch;
+        await cls.init(() => withReadWeaveSearchPolicy(allowedPolicy(), () => invoke(entry, fetcher)));
+        expect(fetcherMock.mock.calls.length + vi.mocked(undiciFetch).mock.calls.length).toBeGreaterThan(0);
+    });
+
+    it.each(entrypoints)("requires public source scope at %s even when search is required", async entry => {
+        const fetcher = vi.fn<typeof fetch>();
+        await cls.init(() => withReadWeaveSearchPolicy({
+            ...allowedPolicy(), externalSearch: "required", allowedSourceScopes: ["provided"]
+        }, () => invoke(entry, fetcher)));
+        expect(fetcher).not.toHaveBeenCalled();
+        expect(undiciFetch).not.toHaveBeenCalled();
+    });
+
+    it.each(entrypoints)("cannot broaden an outer off policy in a nested scope at %s", async entry => {
+        const fetcher = vi.fn<typeof fetch>();
+        await cls.init(() => withReadWeaveSearchPolicy({
+            ...allowedPolicy(), externalSearch: "off"
+        }, () => withReadWeaveSearchPolicy(allowedPolicy(), () => invoke(entry, fetcher))));
+        expect(fetcher).not.toHaveBeenCalled();
+        expect(undiciFetch).not.toHaveBeenCalled();
+    });
+
+    it("blocks raw official HTML extraction while permitting search APIs", async () => {
+        const fetcher = vi.fn<typeof fetch>(async () => Response.json({ query: { pages: {} } }));
+        const result = await cls.init(() => withReadWeaveSearchPolicy({
+            ...allowedPolicy(), allowedCapabilities: ["search"]
+        }, () => searchReadWeaveEvidence({
+            query: "DBLP ORCID identifier meaning DAX Direct Access DeepSeek current model names",
+            force: true, allowPaid: false
+        }, { fetcher })));
+        const urls = fetcher.mock.calls.map(call => String(call[0]));
+        expect(urls.some(url => url.includes("wikipedia.org"))).toBe(true);
+        expect(urls.some(url => /dblp.org\/faq|info.orcid.org|docs.kernel.org|api-docs.deepseek.com/u.test(url))).toBe(false);
+        expect(result.warnings.some(warning => warning.includes("not permitted"))).toBe(true);
+    });
+
+    it("blocks profile-page extraction discovered through an ORCID API result", async () => {
+        const fetcher = vi.fn(async (resource: Parameters<typeof fetch>[0]) => {
+            if (String(resource).includes("/employments")) return Response.json({
+                "affiliation-group": [{ summaries: [{ "employment-summary": {
+                    "put-code": 1, "end-date": null, organization: { name: "Example University" },
+                    source: { "source-name": { value: "Ada Example" } }, url: { value: "https://faculty.public.edu/" }
+                } }] }]
+            });
+            return Response.json({});
+        });
+        await cls.init(() => withReadWeaveSearchPolicy({
+            ...allowedPolicy(), allowedCapabilities: ["search"]
+        }, () => searchReadWeaveEvidence({
+            query: "Ada Example current affiliation 0000-0002-2267-5282", force: true, allowPaid: false
+        }, { fetcher })));
+        expect(fetcher.mock.calls.some(([url]) => String(url).includes("/employments"))).toBe(true);
+        expect(fetcher.mock.calls.some(([url]) => String(url).includes("wp-json"))).toBe(false);
+    });
+
+    it.each([
+        "http://127.0.0.1/", "http://2130706433/", "http://0x7f000001/",
+        "http://10.0.0.1/", "http://169.254.169.254/", "http://[::1]/",
+        "http://[::ffff:127.0.0.1]/", "http://[fd00::1]/", "http://localhost/",
+        "http://office.internal/", "http://127.0.0.1.nip.io/", "https://user:secret@example.com/"
+    ])("rejects private or credentialed reader targets: %s", async url => {
+        const fetcher = vi.fn<typeof fetch>();
+        await cls.init(() => withReadWeaveSearchPolicy(allowedPolicy(), () =>
+            readReadWeavePageWithJina(url, { fetcher, anonymous: true })));
+        expect(fetcher).not.toHaveBeenCalled();
+    });
+
+    it("rejects an embedded private target hidden behind another reader URL", async () => {
+        const fetcher = vi.fn<typeof fetch>();
+        await expect(cls.init(() => withReadWeaveSearchPolicy(allowedPolicy(), () =>
+            readReadWeavePageWithJina("https://r.jina.ai/http://127.0.0.1/", { fetcher, anonymous: true })
+        ))).rejects.toThrow();
+        expect(fetcher).not.toHaveBeenCalled();
+    });
+
+    it("checks the reader target's DNS before requesting the proxy in production", async () => {
+        vi.spyOn(dns.promises, "lookup").mockResolvedValue([{ address: "10.0.0.1", family: 4 }] as never);
+        await expect(cls.init(() => withReadWeaveSearchPolicy(allowedPolicy(), () =>
+            readReadWeavePageWithJina("https://wuxili.net/", { anonymous: true })
+        ))).rejects.toThrow(/private|internal/u);
+        expect(undiciFetch).not.toHaveBeenCalled();
+    });
+
+    it("uses validated DNS, manual redirects and cancellation in the default transport", async () => {
+        const lookup = vi.spyOn(dns.promises, "lookup")
+            .mockResolvedValue([{ address: "8.8.8.8", family: 4 }] as never);
+        vi.mocked(undiciFetch).mockResolvedValue(Response.json({ query: { pages: {} } }) as never);
+        const controller = new AbortController();
+        await cls.init(() => withReadWeaveSearchPolicy({
+            ...allowedPolicy(), signal: controller.signal
+        }, () => testReadWeaveSearch("a neutral query")));
+        expect(lookup).toHaveBeenCalled();
+        expect(undiciFetch).toHaveBeenCalledTimes(1);
+        const init = vi.mocked(undiciFetch).mock.calls[0][1]!;
+        expect(init.redirect).toBe("manual");
+        expect(init.dispatcher).toBeDefined();
+        expect(init.signal?.aborted).toBe(false);
+        controller.abort();
+        expect(init.signal?.aborted).toBe(true);
+    });
+
+    it.each(["throw", "reject"])("preserves retrieved page text when dispatcher cleanup fails: %s", async failure => {
+        vi.spyOn(dns.promises, "lookup").mockResolvedValue([{ address: "8.8.8.8", family: 4 }] as never);
+        vi.mocked(undiciFetch).mockResolvedValue(new Response("Retrieved page text") as never);
+        const destroy = vi.spyOn(Agent.prototype, "destroy");
+        if (failure === "throw") destroy.mockImplementation(() => { throw new Error("cleanup failed"); });
+        else destroy.mockRejectedValue(new Error("cleanup failed"));
+        await expect(cls.init(() => withReadWeaveSearchPolicy(allowedPolicy(), () =>
+            readReadWeavePageWithJina("https://wuxili.net/", { anonymous: true })
+        ))).resolves.toBe("Retrieved page text");
+        expect(destroy).toHaveBeenCalled();
+    });
+
+    it("allows page reads without granting search capability", async () => {
+        const fetcher = vi.fn<typeof fetch>(async () => new Response("Page text"));
+        await cls.init(() => withReadWeaveSearchPolicy({
+            ...allowedPolicy(), allowedCapabilities: ["page_read"]
+        }, async () => {
+            expect((await searchReadWeaveEvidence({ query: "neutral", force: true }, { fetcher })).used).toBe(false);
+            expect(await readReadWeavePageWithJina("https://wuxili.net/", { fetcher, anonymous: true })).toBe("Page text");
+        }));
+        expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
+    it("rejects cross-origin redirects without forwarding provider credentials", async () => {
+        cls.init(() => updateReadWeaveAiSettings({
+            baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash", serperApiKey: "test-only"
+        }));
+        const fetcher = vi.fn(async (resource: Parameters<typeof fetch>[0]) =>
+            String(resource).includes("serper")
+                ? new Response(null, { status: 302, headers: { location: "http://127.0.0.1/private" } })
+                : Response.json({ query: { pages: {} } }));
+        const result = await cls.init(() => withReadWeaveSearchPolicy(allowedPolicy(), () =>
+            searchReadWeaveEvidence({ query: "neutral", force: true }, { fetcher })));
+        expect(fetcher.mock.calls.some(([url]) => String(url).includes("127.0.0.1"))).toBe(false);
+        expect(result.searchCostCny).toBeCloseTo(.0072);
+    });
+
+    it("rechecks capability on same-origin redirects from an API to a raw page", async () => {
+        const fetcher = vi.fn(async (resource: Parameters<typeof fetch>[0]) =>
+            String(resource).includes("dblp.org/search/publ/api")
+                ? new Response(null, { status: 302, headers: { location: "/faq/1474577.html" } })
+                : Response.json({}));
+        await cls.init(() => withReadWeaveSearchPolicy({
+            ...allowedPolicy(), allowedCapabilities: ["search"]
+        }, () => searchReadWeaveEvidence({ query: "paper", force: true, allowPaid: false }, { fetcher })));
+        expect(fetcher.mock.calls.some(([url]) => String(url).includes("/search/publ/api"))).toBe(true);
+        expect(fetcher.mock.calls.some(([url]) => String(url).includes("/faq/"))).toBe(false);
+    });
+
+    it("rechecks revocation before a same-origin redirect starts", async () => {
+        const policy = allowedPolicy();
+        const fetcher = vi.fn(async () => {
+            policy.externalSearch = "off";
+            return new Response(null, { status: 302, headers: { location: "/next" } });
+        });
+        await cls.init(() => withReadWeaveSearchPolicy(policy, () =>
+            searchReadWeaveEvidence({ query: "neutral", force: true, allowPaid: false }, { fetcher })));
+        expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not retry HTTP 503 or start a fallback after cancellation", async () => {
+        const controller = new AbortController();
+        const fetcher = vi.fn(async () => {
+            controller.abort();
+            return new Response("retry later", { status: 503 });
+        });
+        await expect(cls.init(() => withReadWeaveSearchPolicy({
+            ...allowedPolicy(), signal: controller.signal
+        }, () => searchReadWeaveEvidence({ query: "neutral", force: true }, { fetcher })))).rejects.toThrow();
+        expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
+    it("propagates cancellation during page extraction through the combined transport signal", async () => {
+        const controller = new AbortController();
+        const fetcher = vi.fn(async (_resource: Parameters<typeof fetch>[0], init?: RequestInit) => {
+            controller.abort();
+            expect(init?.signal?.aborted).toBe(true);
+            return new Response("late page");
+        });
+        await expect(cls.init(() => withReadWeaveSearchPolicy({
+            ...allowedPolicy(), signal: controller.signal
+        }, () => readReadWeavePageWithJina("https://wuxili.net/", { fetcher, anonymous: true })))).rejects.toThrow();
+        expect(fetcher).toHaveBeenCalledTimes(1);
+    });
+
+    it("reuses cache only within a scope and never returns it after cancellation or denial", async () => {
+        const fetcher = vi.fn(async () => Response.json({ query: { pages: {
+            1: { title: "Evidence", fullurl: "https://wuxili.net/", extract: "Candidate text" }
+        } } }));
+        const input = { query: "neutral", force: true, allowPaid: false };
+        const controller = new AbortController();
+        await cls.init(() => withReadWeaveSearchPolicy({
+            ...allowedPolicy(), signal: controller.signal
+        }, async () => {
+            await searchReadWeaveEvidence(input, { fetcher });
+            expect((await searchReadWeaveEvidence(input, { fetcher })).cacheHit).toBe(true);
+            controller.abort();
+            await expect(searchReadWeaveEvidence(input, { fetcher })).rejects.toThrow();
+        }));
+        await cls.init(() => withReadWeaveSearchPolicy(allowedPolicy(), () => searchReadWeaveEvidence(input, { fetcher })));
+        const off = await cls.init(() => withReadWeaveSearchPolicy({
+            ...allowedPolicy(), externalSearch: "off"
+        }, () => searchReadWeaveEvidence(input, { fetcher })));
+        expect(fetcher).toHaveBeenCalledTimes(2);
+        expect(off.used).toBe(false);
+        expect(off.cacheHit).toBe(false);
+    });
+
+    it("lets an authorized task search override an obsolete global off option", async () => {
+        cls.init(() => updateReadWeaveAiSettings({
+            baseUrl: "https://api.deepseek.com",
+            model: "deepseek-v4-flash",
+            searchMode: "off"
+        }));
+        const fetcher = vi.fn(async () => Response.json({ query: { pages: {
+            1: { title: "Evidence", fullurl: "https://example.org/evidence", extract: "Relevant evidence" }
+        } } }));
+
+        const result = await cls.init(() => withReadWeaveSearchPolicy(allowedPolicy(), () =>
+            searchReadWeaveEvidence({ query: "authorized evidence", force: true, allowPaid: false }, { fetcher })));
+
+        expect(result.query).toBe("authorized evidence");
+        expect(fetcher).toHaveBeenCalled();
+    });
+
+    it("does not join an allowed request's in-flight operation from an off scope", async () => {
+        let release!: (response: Response) => void;
+        const fetcher = vi.fn(() => new Promise<Response>(resolve => { release = resolve; }));
+        const active = cls.init(() => withReadWeaveSearchPolicy(allowedPolicy(), () =>
+            searchReadWeaveEvidence({ query: "neutral", force: true, allowPaid: false }, { fetcher })));
+        const denied = await cls.init(() => withReadWeaveSearchPolicy({
+            ...allowedPolicy(), externalSearch: "off"
+        }, () => searchReadWeaveEvidence({ query: "neutral", force: true, allowPaid: false }, { fetcher })));
+        expect(denied.used).toBe(false);
+        expect(fetcher).toHaveBeenCalledTimes(1);
+        release(Response.json({ query: { pages: {} } }));
+        await active;
+    });
+
+    it("does not select people providers from whole-question text or nearby author context", async () => {
+        cls.init(() => updateReadWeaveAiSettings({
+            baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash",
+            serperApiKey: "test-only", exaApiKey: "test-only", searchBudgetCny: .06
+        }));
+        const fetcher = vi.fn(async (resource: Parameters<typeof fetch>[0], init?: RequestInit) => {
+            if (String(resource).includes("serper")) {
+                expect(JSON.parse(String(init?.body)).q).toBe("Who is Ada Example and how does SRAM work");
+                return Response.json({ organic: [] });
+            }
+            return Response.json({ query: { pages: {} } });
+        });
+        await cls.init(() => searchReadWeaveEvidence({
+            query: "Who is Ada Example and how does SRAM work", force: true,
+            context: "Professor Ada, researcher, ORCID 0000-0002-2267-5282"
+        }, { fetcher }));
+        expect(fetcher.mock.calls.some(([url]) => /exa.ai|openalex.org\/authors|pub.orcid.org/u.test(String(url)))).toBe(false);
+    });
+
+    it.each([false, true])("keeps a general provider success when person resource hint=%s", async hint => {
+        cls.init(() => updateReadWeaveAiSettings({
+            baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash",
+            serperApiKey: "test-only", exaApiKey: "test-only", searchBudgetCny: .06
+        }));
+        const fetcher = vi.fn(async (resource: Parameters<typeof fetch>[0]) =>
+            String(resource).includes("serper")
+                ? Response.json({ organic: [{ title: "Ada Example", link: "https://wuxili.net/", snippet: "Candidate" }] })
+                : Response.json({}));
+        const result = await cls.init(() => searchReadWeaveEvidence({
+            query: "Ada Example affiliation", force: true, resourceHints: hint ? ["person"] : []
+        }, { fetcher }));
+        expect(fetcher.mock.calls.some(([url]) => String(url).includes("exa.ai"))).toBe(false);
+        expect(result.searchCostCny).toBeCloseTo(.0072);
+    });
+
+    it("never expands the allowance to pay for an advisory Exa request", async () => {
+        cls.init(() => updateReadWeaveAiSettings({
+            baseUrl: "https://api.deepseek.com", model: "deepseek-v4-flash", exaApiKey: "test-only"
+        }));
+        const fetcher = vi.fn<typeof fetch>(async () => Response.json({}));
+        const result = await cls.init(() => searchReadWeaveEvidence({
+            query: "Ada Example affiliation", force: true, resourceHints: ["person"], budgetCny: .009
+        }, { fetcher }));
+        expect(fetcher.mock.calls.some(([url]) => String(url).includes("exa.ai"))).toBe(false);
+        expect(result.searchCostCny).toBe(0);
+    });
+
 });

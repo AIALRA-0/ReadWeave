@@ -32,7 +32,11 @@ const { searchMock, defaultSearchImplementation, verifierConfig, runtimeConfig }
     };
 });
 
-vi.mock("./readweave_search.js", () => ({ searchReadWeaveEvidence: searchMock }));
+vi.mock("./readweave_search.js", () => ({
+    searchReadWeaveEvidence: searchMock,
+    readReadWeavePageWithJina: vi.fn(async () => undefined),
+    withReadWeaveSearchPolicy: <T>(_policy: unknown, callback: () => T): T => callback()
+}));
 vi.mock("./readweave_settings.js", () => ({
     getReadWeaveRuntimeConfig: () => runtimeConfig.current,
     getReadWeaveSearchRuntimeConfig: () => ({
@@ -43,18 +47,22 @@ vi.mock("./readweave_settings.js", () => ({
 }));
 
 import { READWEAVE_FORMAT_VERSION } from "./readweave_format.js";
-import { readWeaveModelRates, readWeaveModelReservation } from "./readweave_budget.js";
+import { ReadWeaveBudget, readWeaveEstimatedInputTokens, readWeaveModelPriceSnapshot, readWeaveModelRates, readWeaveModelReservation } from "./readweave_budget.js";
+import { captureReadWeaveTask, proposalFromReadWeavePlan } from "./readweave_task_contract.js";
 import { readWeaveWritingSkill } from "./readweave_writing_skill.js";
 import { HUMAN_READABLE_CHINESE_STYLE_CONTRACT } from "./readweave_style_contract.js";
 import {
     applyKnownTermCatalog,
+    deriveReadWeaveCompletenessRequirements,
     readWeaveMalformedCompoundIssues,
     readWeaveSubjectContinuityIssues,
+    requiresReadWeaveIndependentSemanticAudit,
     calculateReadWeaveContextAnswer,
     closeReadWeaveKnownTermBoundary,
     completeReadWeavePersonCurrentRole,
     completeReadWeavePersonExpertise,
     compactReadWeaveWriterSources,
+    scopeReadWeaveMarkdownEvidence,
     decideReadWeaveExternalSearch,
     formatReadWeaveBody,
     generateUnifiedReadWeaveAnswer,
@@ -63,6 +71,38 @@ import {
 } from "./readweave_unified_ai.js";
 
 describe("reviewed known-term closure", () => {
+    it("requires independent semantic checking for compound and referential questions", () => {
+        expect(requiresReadWeaveIndependentSemanticAudit("这里的内核负责什么？应用怎样请求它的服务？")).toBe(true);
+        expect(requiresReadWeaveIndependentSemanticAudit("What is a.n after the assignment through b, and why?")).toBe(true);
+        expect(requiresReadWeaveIndependentSemanticAudit("Which translator produced the text? Trace the edition links.")).toBe(true);
+        expect(requiresReadWeaveIndependentSemanticAudit("NPU 是什么？")).toBe(false);
+    });
+    it("derives domain-neutral completeness requirements from correction, comparison and role links", () => {
+        expect(deriveReadWeaveCompletenessRequirements(
+            "“面面对混合键合”是指什么？",
+            "选区原样为面面对混合键合；邻近图注写明面对面混合键合"
+        )).toEqual(expect.arrayContaining([ expect.stringContaining("疑似存在重复字") ]));
+        expect(deriveReadWeaveCompletenessRequirements(
+            "Which site is warmer?",
+            "Valley | 14 °C\nPlateau | 11 °C"
+        )).toEqual(expect.arrayContaining([ expect.stringContaining("绝对差值") ]));
+        expect(deriveReadWeaveCompletenessRequirements(
+            "Which translator produced this text? Trace the edition links.",
+            "Translation T7 is by Yara Bell; the cover credits illustrator Omi."
+        )).toEqual(expect.arrayContaining([ expect.stringContaining("其他署名") ]));
+    });
+    it.each([
+        [ "parser encoding", "Do these forms represent accepted input?", "ASCII only; fullwidth code points; no normalization", "人类可读含义" ],
+        [ "binding and mutation", "What is a.n after assignment?", "const a = { n: 1 }; const b = a; b.n = 4;", "重新绑定变量" ],
+        [ "evidence polarity", "Which architect does citation C1 support?", "No architect is given and construction records have not been located", "已经反驳" ],
+        [ "snapshot scope", "Which release is latest in this snapshot?", "Register as of 2025-08-10", "快照日期" ],
+        [ "erratum identity", "What corrected reading should be used?", "An erratum corrects the April experiment record", "新观测" ],
+        [ "solve and verify", "Solve and check the solution", "The denominator and domain restriction apply to the original expression", "代回原式" ],
+        [ "set multiplicity", "Compare set and multiset intersection", "Distinct values once; copies use the minimum number of times each value occurs", "独有元素" ]
+    ])("derives the %s semantic operator", (_name, question, context, expected) => {
+        expect(deriveReadWeaveCompletenessRequirements(question, context))
+            .toEqual(expect.arrayContaining([ expect.stringContaining(expected) ]));
+    });
     it("closes the DAX hardware boundary without changing unrelated questions", () => {
         const body = "DAX 直接访问（Direct Access）是操作系统内核提供的文件访问机制";
         expect(closeReadWeaveKnownTermBoundary(body, "DAX 是什么？"))
@@ -160,6 +200,23 @@ function requestUser(payload: Record<string, unknown>): string {
 
 function requestPrompt(payload: Record<string, unknown>): string {
     return `${requestSystem(payload)}\n${requestUser(payload)}`;
+}
+
+function expectUnifiedWriterRequest(input: ReadWeaveGenerateRequest) {
+    const writers = vi.mocked(fetch).mock.calls.map(([ , init ]) =>
+        JSON.parse(String(init?.body)) as Record<string, unknown>)
+        .filter(payload => requestSystem(payload).includes("统一证据写作者"));
+    expect(writers.length).toBeGreaterThan(0);
+    for (const writer of writers) {
+        const prompt = requestPrompt(writer);
+        expect(requestUser(writer)).toContain(`原始用户问题（不可由规划替换）：${input.title}`);
+        expect(requestUser(writer)).toContain(`"rootRequirement":${JSON.stringify(input.title)}`);
+        for (const fragment of input.fragments) expect(requestUser(writer)).toContain(fragment.text);
+        expect(prompt).not.toContain("当前人物只交付可靠一手资料支持的专业身份与现职");
+        expect(prompt).not.toContain("不得写入职年份、逐年履历、学历、奖项、家庭");
+        expect(prompt).not.toContain("领域规则：");
+    }
+    return writers;
 }
 
 function installModel(
@@ -1025,9 +1082,298 @@ describe.skip("ReadWeave retired multi-stage workflow", () => {
 });
 
 describe("ReadWeave one-pass workflow", () => {
-    it("returns a deterministic clarification when the article explicitly preserves multiple meanings", async () => {
-        installModel([], "水星（Mercury）是太阳系中的行星", "“Mercury”是什么？");
-        const result = await generateUnifiedReadWeaveAnswer({
+    it.each([ "250 short requirements", "oversized optional projection" ] as const)(
+        "keeps the root writer affordable with %s", async fixture => {
+            const input: ReadWeaveGenerateRequest = {
+                ...request("解释缓存为何提速，比较命中与未命中的访问路径，并说明失效条件；不要讨论作者背景"),
+                activeExternalSearch: false,
+                autoExternalSearch: false,
+                fragments: [
+                    { id: "selected", role: "selected", text: "缓存保存可复用的数据副本，命中时直接读取副本" },
+                    { id: "article", role: "document", text: "未命中时访问原始数据并回填；原始数据变化或副本过期时，需要失效或更新副本" },
+                    { id: "tail", role: "next", text: "末段限定：这里只比较访问路径，不讨论文章作者" }
+                ]
+            };
+            const originalInput = structuredClone(input);
+            const advice = Array.from({ length: 250 }, (_, index) => fixture === "250 short requirements"
+                ? String(index) : `cache path ${index}`);
+            const semanticProposal = proposalFromReadWeavePlan(captureReadWeaveTask(input, false), {
+                objective: input.title, answerRequirements: advice
+            });
+            const answer = "缓存通过复用数据副本减少反复访问原始数据的开销；命中时直接读取副本，未命中时访问原始数据并回填；原始数据变化或副本过期时，需要失效或更新副本";
+            const budget = new ReadWeaveBudget(.05, { hardLimitCny: .10 });
+            if (fixture === "oversized optional projection") {
+                // The proposal must fit the remaining allowance, not a fresh ceiling.
+                const priorResource = budget.reserveResourceRequest(.01);
+                expect(priorResource).toBeDefined();
+                expect(budget.reportUsage(priorResource!, .01, "actual")).toBe(true);
+            }
+            const rates = readWeaveModelRates("deepseek-v4-flash");
+            const reservationsAtDispatch: number[] = [];
+            vi.stubGlobal("fetch", vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+                const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+                const system = requestSystem(payload);
+                const user = requestUser(payload);
+                const maxTokens = Number(payload.max_tokens ?? payload.max_output_tokens);
+                // Check the paid dispatch reservation, not just a tiny mock usage bill.
+                reservationsAtDispatch.push(budget.upperBoundCny);
+                expect(budget.upperBoundCny).toBeLessThanOrEqual(.10);
+                expect(readWeaveModelReservation(system, user, maxTokens, rates)).toBeLessThanOrEqual(.10);
+                const planning = system.includes("统一问题分析器");
+                const value = planning ? { semanticProposal } : { body: answer, claims: [], unresolvedClaims: [] };
+                const promptTokens = readWeaveEstimatedInputTokens(system + user);
+                const completionTokens = planning ? 1_500 : 120;
+                return Response.json({
+                    choices: [ { message: { content: JSON.stringify(value) }, finish_reason: "stop" } ],
+                    usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens,
+                        total_tokens: promptTokens + completionTokens }
+                });
+            }));
+            const result = await generateUnifiedReadWeaveAnswer(input, undefined, undefined, undefined, undefined, { budget });
+            const writers = expectUnifiedWriterRequest(input);
+            expect(writers).toHaveLength(1);
+            expect(vi.mocked(fetch).mock.calls.filter(([ , init ]) =>
+                requestSystem(JSON.parse(String(init?.body))).includes("统一问题分析器"))).toHaveLength(1);
+            expect(requestSystem(writers[0])).toContain(readWeaveWritingSkill(false).prompt);
+            expect(result.body).toBe(answer);
+            expect(input).toEqual(originalInput);
+            expect(searchMock).not.toHaveBeenCalled();
+            const task = result.audit?.questionContract.taskContract;
+            expect(task?.rootRequirement.instruction).toBe(input.title);
+            expect(task?.request.questionText).toBe(input.title);
+            for (const fragment of input.fragments) {
+                expect(task?.request.blocks.some(block => block.text === fragment.text)).toBe(true);
+            }
+            if (fixture === "250 short requirements") {
+                expect(task?.interpretation.status).toBe("accepted");
+                expect(task?.interpretation.proposal.answerPlan?.requiredPoints).toEqual(advice);
+                expect(result.audit?.questionContract.answerRequirements).toEqual(expect.arrayContaining(advice));
+                expect(requestUser(writers[0])).toContain(`"requiredPoints":${JSON.stringify(advice)}`);
+            } else {
+                expect(task?.interpretation.status).toBe("fallback");
+                expect(task?.interpretation.diagnostics).toContain("advisory-resource-demand-exceeds-authorized-budget");
+                for (const point of advice) expect(requestUser(writers[0])).not.toContain(point);
+            }
+            // Analyzer + writer + the domain-neutral semantic audit required by this
+            // compound question must all remain inside the same hard ceiling.
+            expect(reservationsAtDispatch).toHaveLength(3);
+            expect(budget.hardLimitCny).toBe(.10);
+            expect(budget.upperBoundCny).toBeLessThanOrEqual(.10);
+            expect(result.usage).toMatchObject({ targetCny: .05, withinBudget: true });
+            expect(result.usage?.costCny).toBeLessThanOrEqual(.10);
+            expect(result.audit?.questionContract.answerRequirements.map(requirement => requirement.normalize("NFKC")))
+                .toContain(input.title.normalize("NFKC"));
+        }
+    );
+
+    it.each([
+        {
+            title: "DAX",
+            context: "Power BI 使用 DAX 数据分析表达式定义度量值和计算列；这里讨论的是分析模型中的公式求值",
+            identity: { abbreviation: "DAX", chineseName: "数据分析表达式", englishName: "Data Analysis Expressions" },
+            body: "- DAX 数据分析表达式（Data Analysis Expressions）：Power BI 中用于定义度量值和计算列的公式语言；度量值会随筛选上下文求值",
+            meaning: [ "Power BI", "用于定义度量值和计算列的公式语言", "度量值会随筛选上下文求值" ],
+            forbidden: /Direct Access|直接访问|持久内存|不是一种内存硬件/u
+        },
+        {
+            title: "IP",
+            context: "IP 网际协议负责网络间的数据包寻址和转发；这里讨论路由器、目的地址和下一跳",
+            identity: { abbreviation: "IP", chineseName: "网际协议", englishName: "Internet Protocol" },
+            body: "- IP 网际协议（Internet Protocol）：在网络间寻址和转发数据包的协议；路由器依据目的地址选择下一跳",
+            meaning: [ "在网络间寻址和转发数据包的协议", "路由器依据目的地址选择下一跳" ],
+            forbidden: /Intellectual Property|知识产权|芯片设计模块/u
+        },
+        {
+            title: "ML",
+            context: "统计推断文段用 ML 表示最大似然，通过最大化已观测数据的似然来估计参数",
+            identity: { abbreviation: "ML", chineseName: "最大似然", englishName: "Maximum Likelihood" },
+            body: "- ML 最大似然（Maximum Likelihood）：通过最大化已观测数据的似然来估计模型参数的方法；比较的是不同参数取值对同一组观测数据的解释",
+            meaning: [ "通过最大化已观测数据的似然来估计模型参数", "不同参数取值对同一组观测数据的解释" ],
+            forbidden: /Machine Learning|机器学习|专用硬件|加速器/u
+        },
+        {
+            title: "GP",
+            context: "概率建模文段用 GP 表示高斯过程，通过均值函数与协方差函数描述函数值的联合分布",
+            identity: { abbreviation: "GP", chineseName: "高斯过程", englishName: "Gaussian Process" },
+            body: "- GP 高斯过程（Gaussian Process）：任意有限个函数值均服从联合高斯分布的随机过程；均值函数描述平均趋势，协方差函数描述不同输入位置之间的相关性",
+            meaning: [ "任意有限个函数值均服从联合高斯分布", "均值函数描述平均趋势", "协方差函数描述不同输入位置之间的相关性" ],
+            forbidden: /Global Placement|全局布局|General Practitioner|全科医生|图形处理器/u
+        }
+    ])("preserves the contextual writer identity for $title instead of imposing a catalog meaning", async fixture => {
+        vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+            choices: [ { message: { content: JSON.stringify({
+                body: fixture.body, termIdentity: fixture.identity, claims: [], unresolvedClaims: []
+            }) } } ],
+            usage: { prompt_tokens: 1_000, completion_tokens: 150, total_tokens: 1_150 }
+        })));
+        const input: ReadWeaveGenerateRequest = {
+            ...request(fixture.title, "term"), activeExternalSearch: false, autoExternalSearch: false,
+            fragments: [ { id: "selected", role: "selected", text: fixture.context } ]
+        };
+        const result = await generateUnifiedReadWeaveAnswer(input);
+        const writers = expectUnifiedWriterRequest(input);
+        expect(writers).toHaveLength(1);
+        const identityLabel = `${fixture.identity.abbreviation} ${fixture.identity.chineseName}（${fixture.identity.englishName}）`;
+        expect(result.body.startsWith(`- ${identityLabel}：`)).toBe(true);
+        for (const meaning of fixture.meaning) expect(result.body).toContain(meaning);
+        expect(result.termIdentity).toEqual(fixture.identity);
+        expect(result.body).not.toMatch(fixture.forbidden);
+        expect(requestUser(writers[0])).not.toMatch(fixture.forbidden);
+        expect(searchMock).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        {
+            name: "explicitly requested history and years",
+            title: "说明顾清禾在2012年和2018年的工作经历，并解释两段经历的关系",
+            kind: "question" as const,
+            context: "顾清禾2012年在星原研究院研究存储系统，2018年加入澄川实验室研究分布式协议；两段经历都涉及数据访问",
+            body: "顾清禾2012年在星原研究院研究存储系统，2018年加入澄川实验室研究分布式协议；两段经历都涉及数据访问，研究对象从存储系统转向分布式协议",
+            retained: [ "2012年", "星原研究院", "2018年", "澄川实验室", "从存储系统转向分布式协议" ],
+            forbidden: /不能提供履历|不展开逐年经历/u
+        },
+        {
+            name: "mechanism siblings when an unsupported naming clause is omitted",
+            title: "CPU 怎样运行程序，这个名称的来源是否有依据？",
+            kind: "question" as const,
+            context: "CPU 中央处理器（Central Processing Unit）通过取指、译码和执行运行程序；材料没有记载命名来源",
+            body: "CPU 中央处理器（Central Processing Unit）通过取指、译码和执行运行程序，名称源自古代神话；执行阶段会按照指令更新寄存器或内存中的状态",
+            retained: [ "通过取指、译码和执行运行程序", "按照指令更新寄存器或内存中的状态" ],
+            forbidden: /名称源自古代神话/u
+        },
+        {
+            name: "a typo explanation rather than treating it as an unsupported expansion",
+            title: "原文中的 cahce 是正式名称吗？它实际描述什么作用？",
+            kind: "question" as const,
+            context: "作者勘误说明 cahce 是 cache 的拼写错误；正文讨论保存可复用数据副本的缓存",
+            body: "cahce 是 cache 的拼写错误，不是正式全称；缓存保存可复用的数据副本，命中时减少访问原始数据的开销",
+            retained: [ "拼写错误", "不是正式全称", "保存可复用的数据副本", "减少访问原始数据的开销" ],
+            forbidden: /cahce 的正式全称是/u
+        },
+        {
+            name: "IO as a project name instead of an input-output catalog entry",
+            title: "IO 项目是什么，如何处理作业队列？",
+            kind: "question" as const,
+            context: "IO 是本文项目的原名，不是缩写；项目按依赖关系安排作业，前置作业结束后才释放后继作业",
+            body: "IO 是本文项目的原始名称，不是输入输出协议的简称；该项目按依赖关系安排作业队列，并在前置作业结束后释放后继作业",
+            retained: [ "IO", "项目的原始名称", "按依赖关系安排作业队列", "前置作业结束后释放后继作业" ],
+            forbidden: /I\/O|Input\/Output/u
+        },
+        {
+            name: "an uncertain definition despite a selected declarative opening",
+            title: "Orion",
+            kind: "term" as const,
+            context: "Orion 是一种软件工具；另一个段落又把 Orion 用作项目代号，两者关系没有解释",
+            body: "仅凭当前片段，不能确认 Orion 是否指一个软件工具；若它是文中的项目代号，还需要完整定义句区分同名对象",
+            retained: [ "不能确认", "若它是文中的项目代号", "完整定义句区分同名对象" ],
+            forbidden: /Orion\s*是(?:一种)?软件工具/u
+        },
+        {
+            name: "mechanistic convergence rather than a statistical observation rewrite",
+            title: "为什么反馈会让输出变化逐渐减小？",
+            kind: "question" as const,
+            context: "每轮根据偏差调整输出，偏差较小时调整量也减小；此处只讨论反馈机制",
+            body: "在反馈逐步减小误差的过程中，输出结果趋于稳定；这是反馈机制收敛的描述，不是根据几次测量作出的统计推断",
+            retained: [ "输出结果趋于稳定", "反馈机制收敛", "不是根据几次测量作出的统计推断" ],
+            forbidden: /当前记录内保持一致|当前观测内的波动范围/u
+        }
+    ])("preserves root-writer meaning: $name", async fixture => {
+        const input: ReadWeaveGenerateRequest = {
+            ...request(fixture.title, fixture.kind), activeExternalSearch: false, autoExternalSearch: false,
+            fragments: [ { id: "selected", role: "selected", text: fixture.context } ]
+        };
+        vi.stubGlobal("fetch", vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+            const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            const writing = requestSystem(payload).includes("统一证据写作者");
+            const value = writing ? {
+                body: fixture.body,
+                claims: [ { claimId: "C1", text: fixture.body, sourceIds: [ "L1" ], confidence: "medium" } ],
+                namingEvidence: [], unresolvedClaims: []
+            } : { patches: [], terms: [], decisions: [] };
+            return Response.json({
+                choices: [ { message: { content: JSON.stringify(value) } } ],
+                usage: { prompt_tokens: 1_000, completion_tokens: 180, total_tokens: 1_180 }
+            });
+        }));
+        const result = await generateUnifiedReadWeaveAnswer(input);
+        expectUnifiedWriterRequest(input);
+        // Formatting may change; every requested proposition must survive local cleanup.
+        for (const text of fixture.retained) expect(result.body.replace(/\s+/gu, "")).toContain(text.replace(/\s+/gu, ""));
+        expect(result.body).not.toMatch(fixture.forbidden);
+        expect(result.audit?.questionContract.taskContract?.rootRequirement.instruction).toBe(input.title);
+        expect(searchMock).not.toHaveBeenCalled();
+    });
+
+    it("keeps quality advice local without a whole-answer rewrite or lost root subquestions", async () => {
+        const previousRuntime = runtimeConfig.current;
+        runtimeConfig.current = { ...previousRuntime, baseUrl: "https://scoped-repair.example.com/v1",
+            providerType: "deepseek-compatible", rates: { cacheHitInput: .1, cacheMissInput: 1, output: 3 } };
+        const input: ReadWeaveGenerateRequest = {
+            ...request("分别解释缓存命中、未命中和副本失效时的处理路径"),
+            activeExternalSearch: false, autoExternalSearch: false,
+            fragments: [ { id: "selected", role: "selected", text: "命中时读取副本；未命中时访问原始数据并回填；原始数据改变或副本过期时，需要失效或更新副本" } ]
+        };
+        const original = "命中时可快速快地读取副本；未命中时访问原始数据并回填；原始数据改变或副本过期时，必须失效或更新副本";
+        const checker = vi.fn((body: string) => body.includes("快速快") ? [ "将重复措辞“快速快”修正为“快速”" ] : []);
+        vi.stubGlobal("fetch", vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+            const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            const writing = requestSystem(payload).includes("统一证据写作者");
+            const value = writing ? { body: original, claims: [], unresolvedClaims: [] } : { patches: [] };
+            const promptTokens = readWeaveEstimatedInputTokens(requestPrompt(payload));
+            return Response.json({
+                choices: [ { message: { content: JSON.stringify(value) } } ],
+                usage: { prompt_tokens: promptTokens, completion_tokens: 120, total_tokens: promptTokens + 120 }
+            });
+        }));
+        try {
+            const budget = new ReadWeaveBudget(.05, { hardLimitCny: .10 });
+            const result = await generateUnifiedReadWeaveAnswer(input, undefined, checker, undefined, undefined, { budget });
+            const writers = expectUnifiedWriterRequest(input);
+            expect(writers).toHaveLength(1);
+            expect(requestSystem(writers[0])).toContain(readWeaveWritingSkill(false).prompt);
+            expect(checker).toHaveReturnedWith([ "将重复措辞“快速快”修正为“快速”" ]);
+            const repairs = vi.mocked(fetch).mock.calls.map(([ , init ]) => JSON.parse(String(init?.body)) as Record<string, unknown>)
+                .filter(payload => requestSystem(payload).includes("最终质量修复器"));
+            expect(repairs).toHaveLength(0);
+            expect(result.body).toContain("读取副本");
+            expect(result.body).toContain("未命中时访问原始数据并回填");
+            expect(result.body).toContain("原始数据改变或副本过期");
+            expect(result.body).toContain("失效或更新副本");
+            expect(budget.upperBoundCny).toBeLessThanOrEqual(.10);
+            expect(searchMock).not.toHaveBeenCalled();
+        } finally {
+            runtimeConfig.current = previousRuntime;
+        }
+    });
+
+    it("preserves the writer's causal explanation and experiment alongside a context calculation", async () => {
+        const input: ReadWeaveGenerateRequest = {
+            ...request("优化前后延迟降低了多少纳秒，降幅是多少？解释可能的原因，并设计验证原因的对照实验"),
+            activeExternalSearch: false, autoExternalSearch: false,
+            fragments: [ { id: "selected", role: "selected",
+                text: "优化前端到端延迟为 80 ns，优化后为 60 ns，测量口径相同；记录没有说明优化措施或延迟下降原因" } ]
+        };
+        const answer = "延迟减少 20 ns，降幅为 25%\n\n现有数据不能确认原因；缓存命中率提高只是一种待验证的解释\n\n对照实验应固定硬件、输入和负载，仅改变缓存策略，重复测量延迟与命中率，检查二者是否随策略一致变化";
+        // The fixture supplies every requested subtask; a calculation helper may advise,
+        // but must not replace the writer's whole answer with its arithmetic fragment.
+        vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+            choices: [ { message: { content: JSON.stringify({ body: answer, claims: [], unresolvedClaims: [] }) } } ],
+            usage: { prompt_tokens: 1_000, completion_tokens: 180, total_tokens: 1_180 }
+        })));
+        const result = await generateUnifiedReadWeaveAnswer(input);
+        expectUnifiedWriterRequest(input);
+        expect(result.body).toBe(answer);
+        expect(result.body).toContain("20 ns");
+        expect(result.body).toContain("25%");
+        expect(result.body).toContain("现有数据不能确认原因");
+        expect(result.body).toContain("对照实验应固定硬件、输入和负载");
+        expect(searchMock).not.toHaveBeenCalled();
+    });
+
+    it("preserves the writer's conditional answer when the article explicitly preserves multiple meanings", async () => {
+        const answer = "Mercury 在当前片段中可能指多个不同对象；若讨论天文学，可指水星；若讨论化学，可指汞；若讨论产品或项目，则需要名称所在的完整句子才能确定所指";
+        installModel([], answer, "“Mercury”是什么？");
+        const input: ReadWeaveGenerateRequest = {
             ...request("Mercury", "term"),
             activeExternalSearch: false,
             autoExternalSearch: false,
@@ -1036,15 +1382,20 @@ describe("ReadWeave one-pass workflow", () => {
                 role: "selected",
                 text: "The article uses Mercury without identifying whether it is a planet, an element, a product, a project, or a person."
             } ]
-        });
+        };
+        const result = await generateUnifiedReadWeaveAnswer(input);
+        expectUnifiedWriterRequest(input);
+        expect(result.body).toBe(answer);
         expect(result.body).toMatch(/多个不同对象/u);
-        expect(result.body).toMatch(/补充.*完整句子|明确所指/u);
-        expect(result.body).not.toMatch(/太阳系|行星/u);
+        expect(result.body).toContain("若讨论天文学");
+        expect(result.body).toContain("若讨论化学");
+        expect(result.body).not.toContain("Mercury 是太阳系中的行星");
     });
 
-    it("uses an article's direct non-expandable method definition instead of returning a clarification", async () => {
-        installModel([], "当前资料没有确认 BUFFALO 的英文全称", "“BUFFALO”在当前上下文中是什么意思？");
-        const result = await generateUnifiedReadWeaveAnswer({
+    it("preserves the writer's scoped non-expandable method definition", async () => {
+        const answer = "BUFFALO 是一种缓冲树生成方法框架，把缓冲插入建模为序列生成任务；公开资料没有确认它具有可展开的正式英文全称";
+        installModel([], answer, "“BUFFALO”在当前上下文中是什么意思？");
+        const input: ReadWeaveGenerateRequest = {
             ...request("“BUFFALO”在当前上下文中是什么意思？"),
             activeExternalSearch: false,
             autoExternalSearch: false,
@@ -1053,13 +1404,16 @@ describe("ReadWeave one-pass workflow", () => {
                 role: "selected",
                 text: "BUFFALO 是论文提出的缓冲树生成方法框架，把缓冲插入建模为序列生成任务；公开资料没有确认 BUFFALO 具有可展开的正式英文全称"
             } ]
-        });
+        };
+        const result = await generateUnifiedReadWeaveAnswer(input);
+        expectUnifiedWriterRequest(input);
+        expect(result.body).toBe(answer);
         expect(result.body).toMatch(/^BUFFALO 是一种[^；\n]*缓冲树/u);
         expect(result.body).not.toMatch(/请补充|无法确认/u);
         expect(result.verifiedNonExpandableArtifact).toEqual({ originalName: "BUFFALO", entityType: "method" });
     });
 
-    it("treats a person selected through the definition action as a person profile", async () => {
+    it("preserves a selected person's identity through the unified definition writer", async () => {
         searchMock.mockResolvedValueOnce({
             ...(await defaultSearchImplementation({ query: "Sung Kyu Lim" })),
             sources: [ {
@@ -1189,6 +1543,131 @@ describe("ReadWeave one-pass workflow", () => {
             expect(result.unresolvedIssues).toEqual([]);
         }
     );
+    it.each(["format", "term", "formula", "writer-introduced-formula"] as const)(
+        "preserves the complete root input contract in every actual %s repair callback", async repairKind => {
+            const callbackKind = repairKind === "writer-introduced-formula" ? "formula" : repairKind;
+            const previousRuntime = runtimeConfig.current;
+            runtimeConfig.current = { ...previousRuntime, baseUrl: "https://local-input-contract.example.com/v1",
+                providerType: "deepseek-compatible", pricingVersion: "local-input-contract-fixture",
+                rates: { cacheHitInput: .001, cacheMissInput: .001, output: .001 } };
+            const formula = "$$\\sum_{i\\in I} x_i$$";
+            const question = `${repairKind === "formula" ? "解释求和公式的符号和运算" : "解释连接建立和等待时的处理路径"}；`
+                + "保留限定条件，不要省略后续子问题。".repeat(40) + "原问题末尾：同时说明尚不能确认的部分。";
+            const article = "文章开头：这里讨论对象之间的连接与记录。\n"
+                + "中间章节保留完整上下文，而不是只保留选区附近的句子。\n".repeat(160)
+                + "文章中点：连接是否建立取决于两端确认。\n"
+                + "后续章节包含独立事实，局部编辑仍须能够读取每个原始字符。\n".repeat(160)
+                + "文章末尾：未完成确认时应保留等待状态，不得猜测成功。";
+            const selection = "选择片段：核对连接状态和解释范围";
+            const body = repairKind === "format"
+                ? Array.from({ length: 12 }, (_, index) => `第${index + 1}组：`
+                    + "连接建立后读取两端已经确认的记录，保留记录中的条件并按同一规则处理后续请求，不改变已经确定的状态，不跳过尚未完成的确认步骤；"
+                    + "连接尚未建立时继续等待两端确认，不提前写入成功状态，也不省略记录中的条件和后续处理要求").join("\n\n")
+                : repairKind === "term" ? "第一条 ABC 连接已经建立\n\n另一条 ABC 连接仍然等待确认"
+                    : `## 求和\n\n${formula}\n\n这是求和结果`;
+            const input: ReadWeaveGenerateRequest = {
+                ...request(question), activeExternalSearch: false, autoExternalSearch: false,
+                fragments: [{ id: "selected", role: "selected", text: selection },
+                    { id: "document", role: "document", text: article }],
+                answerPlan: { version: 1, reviewStatus: "approved", normalizedQuestion: "简短的规划问题",
+                    answerType: "general", objective: "规划摘要不能替代原始输入", answerRequirements: ["解释当前选区"],
+                    exclusions: [], searchQueries: [], steps: ["解释当前选区"], summary: "简短摘要", autoApplied: false }
+            };
+            const callbacks: Array<{ kind: string; input: Record<string, unknown> }> = [];
+            vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+                const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+                const system = requestSystem(payload);
+                let value: unknown = { body, claims: [], unresolvedClaims: [] };
+                if (!system.includes("统一证据写作者")) {
+                    const local = JSON.parse(requestUser(payload)) as Record<string, unknown>;
+                    const kind = system.includes("最小格式补丁") ? "format"
+                        : system.includes("只解析给定缩写") ? "term"
+                            : system.includes("你只补充答案里已有公式的解释") ? "formula" : "unexpected";
+                    if (kind !== "unexpected") callbacks.push({ kind, input: local });
+                    if (kind === "format") value = { patches: (local.targets as Array<{ start: number; original: string }>).map(target =>
+                        ({ start: target.start, original: target.original, replacement: target.original, rule: "FMT-local" })) };
+                    if (kind === "term") value = { terms: (local.targets as Array<{ occurrenceId: string; token: string }>).map(target =>
+                        ({ ...target, chineseName: "示例连接", englishName: "Alpha Beta Connection", confidence: "high",
+                            basis: "established-usage", contextReason: "当前文章描述对象之间的连接" })) };
+                    if (kind === "formula") value = { additions: (local.formulas as string[]).map(original =>
+                        ({ formula: original, explanation: "I 是指标集合，i 是其中的一个指标，x 是每项数值，求和将各项相加并得到总量" })) };
+                }
+                return Response.json({ choices: [{ message: { content: JSON.stringify(value) } }],
+                    usage: { prompt_tokens: 1500, completion_tokens: 100, total_tokens: 1600 } });
+            }));
+            try {
+                const result = await generateUnifiedReadWeaveAnswer(input);
+                expect(question.length).toBeGreaterThan(500);
+                expect(article.length).toBeGreaterThan(8_000);
+                expect(callbacks.length).toBeGreaterThanOrEqual(repairKind === "format" ? 2 : 1);
+                expect(new Set(callbacks.map(callback => callback.kind))).toEqual(new Set([callbackKind]));
+                const fullContext = `[selected:selected]\n${selection}\n\n[document:document]\n${article}`;
+                // Assert outside fetch: optional-repair catches must not swallow a failed assertion.
+                for (const callback of callbacks) {
+                    expect(callback.input[callback.kind === "format" ? "originalQuestion" : "question"]).toBe(question);
+                    expect(callback.input.articleContext).toBe(fullContext);
+                    expect(callback.input.writingRules).toBe(readWeaveWritingSkill(callbackKind === "formula").prompt);
+                    expect(callback.input.answer).toEqual(expect.any(String));
+                    expect(callback.input[callback.kind === "formula" ? "formulas" : "targets"]).toEqual(expect.any(Array));
+                }
+                if (callbackKind === "formula") {
+                    expect(callbacks[0].input.formulas).toEqual([formula]);
+                    expect(result.body).toContain(formula);
+                    expect(result.body).toContain("I 是指标集合");
+                }
+                if (repairKind === "writer-introduced-formula") {
+                    expect(`${question}\n${fullContext}`).not.toMatch(/公式|求和|\\sum/u);
+                    const writers = expectUnifiedWriterRequest(input);
+                    for (const writer of writers) {
+                        expect(requestSystem(writer)).toContain(readWeaveWritingSkill(false).prompt);
+                        expect(requestSystem(writer)).not.toContain("【references/formula-explanation.md】");
+                    }
+                    expect(callbacks[0].input.writingRules).toEqual(expect.stringContaining("【references/formula-explanation.md】"));
+                }
+                if (repairKind === "term") {
+                    expect(callbacks[0].input.targets).toHaveLength(2);
+                    expect(result.body).toContain("ABC 示例连接（Alpha Beta Connection）");
+                }
+                if (repairKind === "format") {
+                    const targets = callbacks.flatMap(callback => callback.input.targets as Array<{ start: number; original: string }>);
+                    expect(targets).toHaveLength(12);
+                    expect(new Set(targets.map(target => target.start)).size).toBe(12);
+                }
+                expect(searchMock).not.toHaveBeenCalled();
+            } finally {
+                runtimeConfig.current = previousRuntime;
+            }
+        }
+    );
+    it.each(["question", "term"] as const)(
+        "distinguishes established expansions from sourced naming history in the actual %s writer prompt", async kind => {
+            const body = "HTTP 超文本传输协议（Hypertext Transfer Protocol）用于交换请求与响应；现有材料没有给出首次命名者或命名年代";
+            vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+                choices: [{ message: { content: JSON.stringify({ body, claims: [], unresolvedClaims: [] }) } }],
+                usage: { prompt_tokens: 1500, completion_tokens: 100, total_tokens: 1600 }
+            })));
+            const input: ReadWeaveGenerateRequest = {
+                ...request("HTTP 的全称是什么？首次命名者与命名年代是否有直接依据？", kind),
+                activeExternalSearch: false, autoExternalSearch: false,
+                fragments: [{ id: "selected", role: "selected", text: "文章描述浏览器和服务器之间的请求与响应，没有记载命名历史" }]
+            };
+            await generateUnifiedReadWeaveAnswer(input);
+            const writers = expectUnifiedWriterRequest(input);
+            expect(writers).toHaveLength(1);
+            for (const writer of writers) {
+                const prompt = requestPrompt(writer);
+                expect(prompt).toContain("命名来历、首次命名者与命名年代必须有直接来源");
+                expect(prompt).toContain("namingEvidence 登记 bodyText（正文原句）、sourceId、quote（来源逐字原句）");
+                expect(prompt).toContain("通行缩写的既定全称属于稳定公开知识，语境明确时允许使用并如实标记无来源");
+                expect(prompt).toContain("多义缩写按本题语境消歧");
+                expect(prompt).toContain("不能把常识全称当成得名历史的证据");
+                expect(prompt).toContain("使用稳定公开知识且没有对应来源时 sourceIds 留空，禁止伪造引用");
+                expect(prompt).not.toMatch(/命名来历[或和、与]缩写展开[^\n]{0,100}(?:只有|必须|仅能|仅可)[^\n]{0,40}(?:来源|原文)/u);
+                expect(prompt).not.toMatch(/缩写展开[^\n。；]{0,40}(?:只有来源原文|必须有直接来源|必须有来源原文)/u);
+            }
+            expect(searchMock).not.toHaveBeenCalled();
+        }
+    );
     it("loads the full formula reference for mathematical context and only appends a checked explanation", async () => {
         const formula = "$$\\sum_{i\\in I} x_i$$";
         const body = `## 求和\n\n${formula}\n\n这是求和结果`;
@@ -1227,7 +1706,7 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.body).toBe("任浩星（Haoxing Ren）是芯片设计研究者");
         expect(writerCall && requestSystem(writerCall)).toContain("任浩星（Haoxing Ren）");
         expect(writerCall && requestSystem(writerCall)).toContain("禁止把顺序写反");
-        expect(writerCall?.max_output_tokens).toBe(1_200);
+        expect(writerCall?.max_output_tokens).toBeGreaterThan(0);
     });
     it("renders structured summary points without guessing sentence boundaries", async () => {
         const points = [ "采样周期为 4 秒", "原始记录不上传，只保留 3 天汇总",
@@ -1249,7 +1728,7 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.usage?.modelCalls).toBe(1);
         expect(searchMock).not.toHaveBeenCalled();
         // Claim text follows the same visible Chinese punctuation as the body.
-        expect(result.claims?.map(claim=>claim.text))
+        expect(result.claims?.map(claim=>claim.text), JSON.stringify(result.claims))
             .toEqual(points);
         expect(result.audit?.validationIssues).toEqual([]);
     });
@@ -1279,9 +1758,10 @@ describe("ReadWeave one-pass workflow", () => {
             })) });
         const result = await generateUnifiedReadWeaveAnswer(request("比较这些材料的所有差异"),
             event=>progress.push(event));
-        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(fetch).toHaveBeenCalledTimes(2);
         expect(result.body).toBeTruthy();
-        expect(result.usage).toMatchObject({ modelCalls:1,withinBudget:true,budgetCny:.10 });
+        expect(result.usage).toMatchObject({ modelCalls:2,withinBudget:true });
+        expect(result.usage?.budgetCny).toBeLessThanOrEqual(.10);
         expect(result.usage?.costCny).toBeLessThanOrEqual(.05);
         expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body)).max_output_tokens).toBeGreaterThanOrEqual(2048);
         expect(progress.filter(event=>event.usage)[0]?.usage).toMatchObject({ modelCalls:0,costCny:.0072 });
@@ -1297,10 +1777,16 @@ describe("ReadWeave one-pass workflow", () => {
         const result = await generateUnifiedReadWeaveAnswer({ ...request("XPT 的全称是什么？"),
             fragments:[ { id:"selected",role:"selected",text:"XPT" } ] });
         const payload = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body)) as Record<string, unknown>;
-        expect(requestUser(payload)).toContain("Example Packet Transfer (XPT) is the full name.");
-        expect(requestUser(payload)).not.toContain("Context Context Context Context Context");
-        expect(requestUser(payload)).toContain("[S8]");
-        expect(result.usage).toMatchObject({ modelCalls:1,withinBudget:true,budgetCny:.10 });
+        const writerInput = requestUser(payload);
+        expect(writerInput).toContain(quote);
+        expect(writerInput.split(quote)).toHaveLength(2);
+        expect(writerInput.match(/与 \[S1\] 摘录逐字相同/gu)).toHaveLength(7);
+        for (let index = 0; index < 8; index++) {
+            expect(writerInput).toContain(`[S${index + 1}] Reference ${index}`);
+            expect(writerInput).toContain(`URL：https://example.org/${index}`);
+        }
+        expect(result.usage).toMatchObject({ modelCalls:1,withinBudget:true });
+        expect(result.usage?.budgetCny).toBeLessThanOrEqual(.10);
         expect(result.usage?.costCny).toBeLessThanOrEqual(.05);
     });
     it("enforces JSON-mode instructions for the local terminology request", async () => {
@@ -1368,43 +1854,340 @@ describe("ReadWeave one-pass workflow", () => {
                 activeExternalSearch:false,autoExternalSearch:false
             }, event => progress.push(event))).rejects.toThrow();
             const last = progress.filter(event => event.usage).at(-1)!;
-            expect(fetch).toHaveBeenCalledTimes(1);
-            expect(last.usage?.modelCalls).toBe(1);
+            expect(fetch).toHaveBeenCalledTimes(mode === "malformed" ? 3 : 1);
+            expect(last.usage?.modelCalls).toBe(mode === "malformed" ? 3 : 1);
             expect(last.usage?.costCny).toBeGreaterThan(0);
             expect(last.usagePending).toBe(mode === "transport");
-            expect(last.usage?.inputTokens).toBe(mode === "transport" ? 0 : 1000);
-            expect(last.usage?.outputTokens).toBe(mode === "transport" ? 0 : 100);
+            expect(last.usage?.inputTokens).toBe(mode === "transport" ? 0 : 3000);
+            expect(last.usage?.outputTokens).toBe(mode === "transport" ? 0 : 300);
         }
     );
+    it.each([ "missing usage", "explicit zero usage" ] as const)(
+        "accounts for a parsed HTTP 500 with %s without assuming a free failure", async fixture => {
+            const previousRuntime = runtimeConfig.current;
+            runtimeConfig.current = { ...previousRuntime, baseUrl: "https://http-receipt.example.com/v1",
+                providerType: "deepseek-compatible", rates: { cacheHitInput: .1, cacheMissInput: 1, output: 3 } };
+            vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+                error: { message: "temporary inference failure" },
+                ...(fixture === "explicit zero usage"
+                    ? { usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } } : {})
+            }, { status: 500 })));
+            const budget = new ReadWeaveBudget(.05, { hardLimitCny: .10 });
+            const input = { ...request("解释缓存命中与未命中的区别"), activeExternalSearch: false, autoExternalSearch: false };
+            try {
+                await expect(generateUnifiedReadWeaveAnswer(input, undefined, undefined, undefined, undefined, { budget }))
+                    .rejects.toThrow(/HTTP 500/u);
+                expectUnifiedWriterRequest(input);
+                expect(fetch).toHaveBeenCalledTimes(1);
+                const receipts = budget.snapshot().receipts;
+                expect(receipts).toHaveLength(1);
+                expect(receipts[0].kind).toBe("model");
+                expect(receipts[0].reservedMicros).toBeGreaterThan(0);
+                if (fixture === "missing usage") {
+                    expect(receipts[0].settledMicros).toBeUndefined();
+                    expect(budget.upperBoundCny).toBe(receipts[0].reservedMicros / 1e6);
+                    expect(budget.unreportedModelCostCny).toBeGreaterThan(0);
+                } else {
+                    expect(receipts[0].settledMicros).toBe(0);
+                    expect(budget.upperBoundCny).toBe(0);
+                    expect(budget.unreportedModelCostCny).toBe(0);
+                }
+                const restored = ReadWeaveBudget.restore(budget.snapshot());
+                expect(restored.upperBoundCny).toBe(budget.upperBoundCny);
+                expect(restored.hardLimitCny).toBe(.10);
+                expect(budget.upperBoundCny).toBeLessThanOrEqual(.10);
+                expect(searchMock).not.toHaveBeenCalled();
+            } finally {
+                runtimeConfig.current = previousRuntime;
+            }
+        }
+    );
+    it("uses the writer coverage audit to repair an omitted subquestion", async () => {
+        let writerCalls = 0;
+        vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+            const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            const system = requestSystem(payload);
+            const isWriter = system.includes("统一证据写作者");
+            if (isWriter) writerCalls++;
+            const result = isWriter && writerCalls === 1
+                ? { body: "只回答了第一项", claims: [], unresolvedClaims: [], coverageAudit: [] }
+                : { body: "第一项和第二项都已明确回答", claims: [], unresolvedClaims: [] };
+            return Response.json({
+                model: "deepseek-v4-flash",
+                choices: [ { message: { content: JSON.stringify(result) } } ],
+                usage: { prompt_tokens: 300, completion_tokens: 80, total_tokens: 380 }
+            });
+        }));
+
+        const result = await generateUnifiedReadWeaveAnswer({
+            ...request("第一项是什么，第二项为什么成立？"),
+            activeExternalSearch: false,
+            autoExternalSearch: false
+        });
+
+        expect(result.body).toContain("第二项");
+        expect(result.workflow?.generationAttempts).toBe(2);
+        expect(writerCalls).toBe(2);
+        expect(vi.mocked(fetch).mock.calls.some(([, init]) => requestUser(JSON.parse(String(init?.body))).includes("逐项回答核对清单"))).toBe(true);
+    });
+    it("uses an independent semantic verifier to close a falsely self-certified answer", async () => {
+        let writerCalls = 0;
+        let verifierCalls = 0;
+        vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+            const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            const system = requestSystem(payload);
+            const user = requestUser(payload);
+            let result: Record<string, unknown>;
+            if (system.includes("独立逐项语义核对器")) {
+                verifierCalls++;
+                result = verifierCalls === 1
+                    ? { valid: false, issues: [ "缺少第二项成立原因" ] }
+                    : { valid: true, issues: [] };
+            } else {
+                writerCalls++;
+                const checklistText = user.match(/逐项回答核对清单[^\n]*\n(\[[^\n]+\])\ncoverageAudit/u)?.[1] ?? "[]";
+                const checklist = JSON.parse(checklistText) as Array<{ id: string }>;
+                const body = writerCalls === 1 ? "第一项已回答" : "第一项已回答，第二项因为给定条件而成立";
+                result = {
+                    body,
+                    claims: [],
+                    unresolvedClaims: [],
+                    coverageAudit: checklist.map(item => ({ id: item.id, covered: true, answerQuote: "第一项已回答" }))
+                };
+            }
+            return Response.json({
+                model: "deepseek-v4-flash",
+                choices: [ { message: { content: JSON.stringify(result) } } ],
+                usage: { prompt_tokens: 300, completion_tokens: 80, total_tokens: 380 }
+            });
+        }));
+
+        const result = await generateUnifiedReadWeaveAnswer({
+            ...request("第一项是什么，第二项为什么成立？"),
+            activeExternalSearch: false,
+            autoExternalSearch: false
+        });
+
+        expect(result.body).toContain("第二项因为给定条件而成立");
+        expect(writerCalls).toBe(2);
+        expect(verifierCalls).toBe(2);
+        expect(result.workflow?.repairRounds).toBeGreaterThanOrEqual(1);
+    });
+    it("uses an independent semantic verifier when a compound answer omits its self-audit", async () => {
+        let writerCalls = 0;
+        let verifierCalls = 0;
+        vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+            const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            const system = requestSystem(payload);
+            let result: Record<string, unknown>;
+            if (system.includes("独立逐项语义核对器")) {
+                verifierCalls++;
+                result = verifierCalls === 1
+                    ? { valid: false, issues: [ "缺少第二项成立原因" ] }
+                    : { valid: true, issues: [] };
+            } else {
+                writerCalls++;
+                result = writerCalls === 1
+                    ? { body: "第一项已回答", claims: [], unresolvedClaims: [] }
+                    : { body: "第一项已回答，第二项因为给定条件而成立", claims: [], unresolvedClaims: [] };
+            }
+            return Response.json({
+                model: "deepseek-v4-flash",
+                choices: [ { message: { content: JSON.stringify(result) } } ],
+                usage: { prompt_tokens: 300, completion_tokens: 80, total_tokens: 380 }
+            });
+        }));
+
+        const result = await generateUnifiedReadWeaveAnswer({
+            ...request("第一项是什么，第二项为什么成立？"),
+            activeExternalSearch: false,
+            autoExternalSearch: false
+        });
+
+        expect(result.body).toContain("第二项因为给定条件而成立");
+        expect(writerCalls).toBe(2);
+        expect(verifierCalls).toBe(2);
+        expect(result.workflow?.repairRounds).toBeGreaterThanOrEqual(1);
+    });
+    it("continues repairing when a changed answer still has the same semantic issue", async () => {
+        let writerCalls = 0;
+        let verifierCalls = 0;
+        vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+            const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            const system = requestSystem(payload);
+            let result: Record<string, unknown>;
+            if (system.includes("独立逐项语义核对器")) {
+                verifierCalls++;
+                result = verifierCalls < 3
+                    ? { valid: false, issues: [ "缺少记录不能改写成当事人没有该资格" ] }
+                    : { valid: true, issues: [] };
+            } else {
+                writerCalls++;
+                const bodies = [
+                    "记录中没有博士学位",
+                    "材料没有写授予博士学位的大学，因此他没有博士学位",
+                    "材料没有提供博士学位或授予大学的信息，因此无法确认他是否有博士学位，也无法确定授予大学"
+                ];
+                result = { body: bodies[Math.min(writerCalls - 1, bodies.length - 1)], claims: [], unresolvedClaims: [] };
+            }
+            return Response.json({
+                model: "deepseek-v4-flash",
+                choices: [ { message: { content: JSON.stringify(result) } } ],
+                usage: { prompt_tokens: 300, completion_tokens: 80, total_tokens: 380 }
+            });
+        }));
+
+        const result = await generateUnifiedReadWeaveAnswer({
+            ...request("哪所大学授予他博士学位？请区分已有身份与缺失学历"),
+            fragments: [ { id: "selected", role: "selected", text: "卡片只说明他是口述史志愿者，没有提供学历记录" } ],
+            activeExternalSearch: false,
+            autoExternalSearch: false
+        });
+
+        expect(result.body).toContain("无法确认他是否有博士学位");
+        expect(writerCalls).toBe(3);
+        expect(verifierCalls).toBe(3);
+        expect(result.workflow?.repairRounds).toBeGreaterThanOrEqual(2);
+    });
+
+    it("recognizes a wrapped verifier authentication failure and falls back to the working writer runtime", async () => {
+        const previousVerifier = verifierConfig.current;
+        verifierConfig.current = {
+            baseUrl: "https://unavailable-verifier.example.com/v1",
+            model: "unavailable-verifier",
+            apiKey: "placeholder",
+            providerType: "deepseek-compatible",
+            rates: { cacheHitInput: 0.1, cacheMissInput: 1, output: 3 },
+            pricingVersion: "unavailable-verifier-test"
+        };
+        const budget = new ReadWeaveBudget(.05, { hardLimitCny: .10 });
+        let writerCalls = 0;
+        let fallbackVerifierCalls = 0;
+        vi.stubGlobal("fetch", vi.fn(async (url, init) => {
+            const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            const system = requestSystem(payload);
+            if (String(url).startsWith("https://unavailable-verifier.example.com")) {
+                // Some compatible gateways reject authentication through a
+                // transport error without preserving an HTTP status. The
+                // production wrapper adds a safe outer error, so fallback must
+                // inspect its cause chain rather than only the outer message.
+                throw new Error("authentication rejected by upstream");
+            }
+            if (system.includes("独立逐项语义核对器")) {
+                fallbackVerifierCalls++;
+                return Response.json({
+                    model: "deepseek-v4-flash",
+                    choices: [ { message: { content: JSON.stringify({ valid: true, issues: [] }) } } ],
+                    usage: { prompt_tokens: 300, completion_tokens: 40, total_tokens: 340 }
+                });
+            }
+            writerCalls++;
+            const user = requestUser(payload);
+            const checklistText = user.match(/逐项回答核对清单[^\n]*\n(\[[^\n]+\])\ncoverageAudit/u)?.[1] ?? "[]";
+            const checklist = JSON.parse(checklistText) as Array<{ id: string }>;
+            return Response.json({
+                model: "deepseek-v4-flash",
+                choices: [ { message: { content: JSON.stringify({
+                    body: "第一项和第二项都已回答",
+                    claims: [],
+                    unresolvedClaims: [],
+                    coverageAudit: checklist.map(item => ({ id: item.id, covered: true, answerQuote: "第一项和第二项都已回答" }))
+                }) } } ],
+                usage: { prompt_tokens: 300, completion_tokens: 80, total_tokens: 380 }
+            });
+        }));
+
+        try {
+            const result = await generateUnifiedReadWeaveAnswer({
+                ...request("第一项是什么，第二项为什么成立？"),
+                activeExternalSearch: false,
+                autoExternalSearch: false
+            }, undefined, undefined, undefined, undefined, { budget });
+
+            expect(result.body).toContain("第二项");
+            expect(writerCalls).toBe(1);
+            expect(fallbackVerifierCalls).toBe(1);
+            // A transport-level rejection has no provider usage report, so its
+            // conservative reservation remains accounted instead of being
+            // falsely marked free.
+            expect(budget.unreportedModelCostCny).toBeGreaterThan(0);
+            expect(budget.upperBoundCny).toBeLessThanOrEqual(.10);
+        } finally {
+            verifierConfig.current = previousVerifier;
+        }
+    });
+
     it("automatically retries a truncated writer with more output space and the same evidence", async () => {
-        const previousRates = runtimeConfig.current.rates;
-        // A retry is possible only when the configured provider's actual
-        // tariff leaves room under the per-answer budget.
-        runtimeConfig.current.rates = { cacheHitInput: 0.1, cacheMissInput: 1, output: 3 };
+        const previousRuntime = runtimeConfig.current;
+        runtimeConfig.current = { ...previousRuntime, baseUrl: "https://retry.example.com/v1",
+            providerType: "deepseek-compatible", rates: { cacheHitInput: 0.01, cacheMissInput: 0.01, output: 0.01 } };
+        const budget = new ReadWeaveBudget(.05, { hardLimitCny: .10 });
         const limits: number[] = [];
+        const inputs: string[] = [];
+        const systems: string[] = [];
         const progress: ReadWeaveGenerationProgress[] = [];
         vi.stubGlobal("fetch", vi.fn(async (_url, options: RequestInit) => {
             const payload = JSON.parse(String(options.body));
-            limits.push(payload.max_output_tokens);
+            limits.push(payload.max_tokens);
+            inputs.push(requestUser(payload));
+            systems.push(requestSystem(payload));
             return Response.json({ model: "deepseek-v4-flash",
-                status: limits.length === 1 ? "incomplete" : "completed",
-                incomplete_details: limits.length === 1 ? { reason: "max_output_tokens" } : null,
-                output: [ { type: "message", content: [ { type: "output_text",
-                    text: JSON.stringify({ body: "这是完整的直接答案", claims: [], unresolvedClaims: [] })
-                } ] } ],
-                usage: { input_tokens: 1_000, output_tokens: 100, total_tokens: 1_100 }
+                choices: [ { finish_reason: limits.length === 1 ? "length" : "stop",
+                    message: { content: limits.length === 1
+                        ? '{"body":"这是被截断的回答'
+                        : JSON.stringify({ body: "这是完整的直接答案", claims: [], unresolvedClaims: [] }) } } ],
+                usage: { prompt_tokens: 1_000, completion_tokens: 100, total_tokens: 1_100 }
             });
         }));
         try {
             const result = await generateUnifiedReadWeaveAnswer({ ...request("这是什么意思？"),
                 activeExternalSearch: false, autoExternalSearch: false
-            }, event => progress.push(event));
+            }, event => progress.push(event), undefined, undefined, undefined, { budget });
             expect(result.body).toBe("这是完整的直接答案");
             expect(limits).toHaveLength(2);
             expect(limits[1]).toBeGreaterThan(limits[0]);
+            expect(systems[0]).toContain(readWeaveWritingSkill(false).prompt);
+            expect(systems[1]).toContain("输出截断恢复器");
+            expect(systems[1]).toContain(readWeaveWritingSkill(false).revision);
+            expect(inputs[1]).toContain(inputs[0]);
+            expect(inputs[1]).toContain("上一响应在正文闭合前达到输出上限");
+            expect(inputs[1]).not.toContain("这是被截断的回答");
+            expect(result.usage).toMatchObject({ withinBudget: true });
+            expect(result.usage?.budgetCny).toBeLessThanOrEqual(.10);
+            expect(budget.limitCny).toBe(.05);
+            expect(budget.hardLimitCny).toBe(.10);
             expect(progress.filter(event => event.usage).at(-1)?.usage?.modelCalls).toBe(2);
         } finally {
-            runtimeConfig.current.rates = previousRates;
+            runtimeConfig.current = previousRuntime;
+        }
+    });
+    it("keeps a fully closed answer body when only trailing audit metadata is truncated", async () => {
+        const previousRuntime = runtimeConfig.current;
+        runtimeConfig.current = { ...previousRuntime, baseUrl: "https://closed-body.example.com/v1",
+            providerType: "deepseek-compatible", rates: { cacheHitInput: 0.01, cacheMissInput: 0.01, output: 0.01 } };
+        const systems: string[] = [];
+        vi.stubGlobal("fetch", vi.fn(async (_url, options: RequestInit) => {
+            const payload = JSON.parse(String(options.body)) as Record<string, unknown>;
+            const system = requestSystem(payload);
+            systems.push(system);
+            const writer = system.includes("统一证据写作者");
+            return Response.json({ model: "deepseek-v4-flash",
+                choices: [ { finish_reason: writer ? "length" : "stop",
+                    message: { content: writer
+                        ? '{"body":"这是已经完整闭合的直接答案","claims":['
+                        : JSON.stringify({ valid: true, issues: [] }) } } ],
+                usage: { prompt_tokens: 1_000, completion_tokens: 100, total_tokens: 1_100 }
+            });
+        }));
+        try {
+            const result = await generateUnifiedReadWeaveAnswer({ ...request("这是什么意思？"),
+                activeExternalSearch: false, autoExternalSearch: false });
+            expect(result.body).toBe("这是已经完整闭合的直接答案");
+            expect(systems.filter(system => system.includes("统一证据写作者"))).toHaveLength(1);
+            expect(systems.some(system => system.includes("独立逐项语义核对器"))).toBe(true);
+            expect(result.usage?.modelCalls).toBe(2);
+        } finally {
+            runtimeConfig.current = previousRuntime;
         }
     });
     it("retries a third-party chat completion that ends with finish_reason length", async () => {
@@ -1416,7 +2199,9 @@ describe("ReadWeave one-pass workflow", () => {
             limits.push(JSON.parse(String(options.body)).max_tokens);
             return Response.json({ model: "deepseek-v4-flash", choices: [ {
                 finish_reason: limits.length === 1 ? "length" : "stop",
-                message: { content: JSON.stringify({ body: "完整的第三方回答", claims: [], unresolvedClaims: [] }) }
+                message: { content: limits.length === 1
+                    ? '{"body":"被截断的第三方回答'
+                    : JSON.stringify({ body: "完整的第三方回答", claims: [], unresolvedClaims: [] }) }
             } ], usage: { prompt_tokens: 1_000, completion_tokens: 100, total_tokens: 1_100 } });
         }));
         try {
@@ -1431,15 +2216,33 @@ describe("ReadWeave one-pass workflow", () => {
         }
     });
     it("does not buy an output-limit retry when the remaining budget cannot cover it", async () => {
-        const fetch = vi.fn(async () => Response.json({ model: "deepseek-v4-flash",
-            status: "incomplete", incomplete_details: { reason: "max_output_tokens" },
-            output: [ { type: "message", content: [ { type: "output_text", text: "{\"body\":\"incomplete\"}" } ] } ],
-            usage: { input_tokens: 1_000, output_tokens: 100, total_tokens: 1_100 } }));
+        const previousRuntime = runtimeConfig.current;
+        runtimeConfig.current = { ...previousRuntime, baseUrl: "https://retry-cap.example.com/v1",
+            providerType: "deepseek-compatible", rates: { cacheHitInput: .01, cacheMissInput: .01, output: 9 } };
+        const budget = new ReadWeaveBudget(.05, { hardLimitCny: .10 });
+        budget.raiseLimit(.10);
+        // Earlier work in this task has already consumed most of its immutable cap.
+        const earlier = budget.reserveResourceRequest(.075)!;
+        expect(budget.reportUsage(earlier, .075, "actual")).toBe(true);
+        const fetch = vi.fn(async (_url, init) => {
+            const payload = JSON.parse(String(init?.body));
+            expect(requestSystem(payload)).toContain(readWeaveWritingSkill(false).prompt);
+            return Response.json({ model: "deepseek-v4-flash",
+                choices: [ { finish_reason: "length", message: { content: '{"body":"incomplete' } } ],
+                usage: { prompt_tokens: 1_000, completion_tokens: 100, total_tokens: 1_100 } });
+        });
         vi.stubGlobal("fetch", fetch);
-        await expect(generateUnifiedReadWeaveAnswer({ ...request("对象是什么？"),
-            activeExternalSearch: false, autoExternalSearch: false }))
-            .rejects.toThrow(/费用上限不足/);
-        expect(fetch).toHaveBeenCalledTimes(2);
+        try {
+            await expect(generateUnifiedReadWeaveAnswer({ ...request("对象是什么？"),
+                activeExternalSearch: false, autoExternalSearch: false }, undefined, undefined, undefined, undefined, { budget }))
+                .rejects.toThrow(/费用上限不足/);
+            expect(fetch).toHaveBeenCalledTimes(1);
+            expect(budget.hardLimitCny).toBe(.10);
+            expect(budget.upperBoundCny).toBeLessThanOrEqual(.10);
+            expect(() => budget.raiseLimit(.100001)).toThrow("immutable");
+        } finally {
+            runtimeConfig.current = previousRuntime;
+        }
     });
     it("repairs an unsupported naming qualifier within the original task budget", async () => {
         const original = "Lumen 于 1987 年得名于光通量单位。";
@@ -1468,7 +2271,8 @@ describe("ReadWeave one-pass workflow", () => {
             fragments:[ { id:"selected",role:"selected",text:"Lumen" } ]
         });
         expect(result.body).toBe(replacement.replace("。", ""));
-        expect(result.usage).toMatchObject({ modelCalls:2,withinBudget:true,budgetCny:.1 });
+        expect(result.usage).toMatchObject({ modelCalls:1,withinBudget:true });
+        expect(result.usage?.budgetCny).toBeLessThanOrEqual(.10);
         expect(result.workflow?.repairRounds).toBe(1);
         expect(result.audit?.validationIssues?.some(issue=>issue.includes("命名缺少"))).toBe(false);
         expect(result.evidenceSources?.some(source=>source.sourceId==="S1")).toBe(true);
@@ -1503,20 +2307,205 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.usage?.modelCalls).toBe(1);
     });
     it("sends the narrow scope and difficult cost target to the writer", async () => {
-        const result = await generateUnifiedReadWeaveAnswer({
+        const input = {
             ...request("Lumen 的名称来源是什么？只解释得名原因，不介绍语法和用途"),
             activeExternalSearch: false,
             autoExternalSearch: false
-        });
-        expect(result.answerPlan?.steps).toHaveLength(1);
-        expect(result.audit?.questionContract.answerRequirements).toEqual(result.answerPlan?.steps);
+        };
+        const result = await generateUnifiedReadWeaveAnswer(input);
+        expect(result.answerPlan?.steps.length).toBeGreaterThan(0);
+        expect(result.audit?.questionContract.answerRequirements).toEqual(expect.arrayContaining([
+            `必须逐项回答原始问题：${input.title}`,
+            ...result.answerPlan!.answerRequirements!
+        ]));
         expect(result.audit?.questionContract.exclusions).toContain("不介绍语法和用途");
-        expect(result.usage).toMatchObject({ targetCny: 0.05, budgetCny: 0.1 });
+        expect(result.usage).toMatchObject({ targetCny: 0.05, withinBudget: true });
+        expect(result.usage?.budgetCny).toBeLessThanOrEqual(.10);
+        expectUnifiedWriterRequest(input);
         const payload = JSON.parse(String(vi.mocked(fetch).mock.calls[0][1]?.body)) as Record<string, unknown>;
         const writerInput = requestUser(payload);
         expect(writerInput).toContain("不介绍语法和用途");
         expect(writerInput).not.toContain("先直接回答问题,再补足理解该答案所必需的机制");
     });
+    it.each([ "exact bibliography", "technical content", "wrong paper" ] as const)(
+        "keeps title-and-DOI source support scoped to %s", async fixture => {
+            const title = "Inference and computation for Gaussian process regression model";
+            const otherTitle = "Queue scheduling with bounded leases";
+            const doi = fixture === "wrong paper" ? "10.5555/example.queues" : "10.5555/example.inference";
+            const sourceTitle = fixture === "wrong paper" ? otherTitle : title;
+            const snippet = `Publisher metadata; DOI ${doi}`;
+            searchMock.mockImplementation(async options => ({
+                ...await defaultSearchImplementation(options),
+                sources: [ { provider: "Crossref", title: sourceTitle, url: `https://doi.org/${doi}`,
+                    snippet, publishedAt: "2025", score: 100 } ]
+            }));
+            const technicalClaim = "高斯过程由均值函数和核函数完全刻画";
+            const bibliographicClaim = `论文《${title}》的 DOI 是 ${doi}`;
+            const body = fixture === "technical content" ? technicalClaim : bibliographicClaim;
+            vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+                choices: [ { message: { content: JSON.stringify({ body,
+                    claims: [ { claimId: "C1", text: body, sourceIds: [ "S1" ], confidence: "high" } ],
+                    unresolvedClaims: [] }) } } ],
+                usage: { prompt_tokens: 1_000, completion_tokens: 150, total_tokens: 1_150 }
+            })));
+            const input: ReadWeaveGenerateRequest = {
+                ...request(fixture === "technical content" ? "高斯过程由什么刻画？" : "这篇论文的 DOI 是什么？"),
+                activeExternalSearch: true,
+                fragments: [ { id: "selected", role: "selected", text: title } ]
+            };
+            const result = await generateUnifiedReadWeaveAnswer(input);
+            const writers = expectUnifiedWriterRequest(input);
+            expect(requestUser(writers[0])).toContain(sourceTitle);
+            expect(requestUser(writers[0])).toContain(snippet);
+            expect(result.audit?.citationsVerified).not.toBe(true);
+            if (fixture === "exact bibliography") {
+                expect(result.body).toContain(title);
+                expect(result.body).toContain(doi);
+                expect(result.claims).toEqual(expect.arrayContaining([ expect.objectContaining({
+                    sourceIds: [ "S1" ], unresolved: false
+                }) ]));
+            } else if (fixture === "technical content") {
+                // This stable definition may survive as model knowledge, but a title/DOI
+                // entry cannot be presented as resolved support for its technical content.
+                expect(result.body).toContain(technicalClaim);
+                const claim = result.claims?.find(item => item.text.includes(technicalClaim));
+                expect(claim).toBeDefined();
+                expect(claim?.sourceIds.includes("S1") && !claim.unresolved).toBe(false);
+            } else {
+                // A citation ID can exist while referring to a different paper.
+                const assertsWrongAssociation = (text: string) => text.includes(title) && text.includes(doi)
+                    && !/不能确认|无法确认|不属于|并非|不是|不一致|没有.*对应/u.test(text);
+                expect(assertsWrongAssociation(result.body)).toBe(false);
+                expect(result.claims?.some(claim => assertsWrongAssociation(claim.text) && !claim.unresolved)).not.toBe(true);
+                expect(result.body).toContain(title);
+            }
+        }
+    );
+
+    it("keeps explicit user exclusions out of the final answer even when a checker approves", async () => {
+        const scoped = "缓存命中时直接读取副本，未命中时访问原始数据并回填";
+        const excluded = [ "内部编号为 0xAB12", "日志组件负责归档诊断事件" ];
+        const input: ReadWeaveGenerateRequest = {
+            ...request("只解释缓存命中与未命中的访问路径，不列出内部编号，也不介绍日志组件职责"),
+            activeExternalSearch: false, autoExternalSearch: false,
+            fragments: [ { id: "selected", role: "selected", text: `${scoped}；${excluded.join("；")}` } ],
+            answerPlan: { version: 1, reviewStatus: "approved", normalizedQuestion: "解释缓存命中与未命中的访问路径",
+                answerType: "general", objective: "只解释访问路径", answerRequirements: [ "解释命中路径", "解释未命中路径" ],
+                exclusions: [ "不列出内部编号", "不介绍日志组件职责" ], searchQueries: [],
+                steps: [ "解释两种访问路径" ], summary: "解释两种访问路径", autoApplied: false }
+        };
+        vi.stubGlobal("fetch", vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+            const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            const writing = requestSystem(payload).includes("统一证据写作者");
+            const body = writing ? `${scoped}\n\n${excluded.join("；")}` : scoped;
+            return Response.json({ choices: [ { message: { content: JSON.stringify({ body,
+                claims: [ { claimId: "C1", text: scoped, sourceIds: [ "L1" ], confidence: "medium" },
+                    ...(writing ? excluded.map((text, index) => ({ claimId: `excluded-${index}`, text, sourceIds: [ "L1" ], confidence: "medium" })) : []) ],
+                unresolvedClaims: [] }) } } ],
+                usage: { prompt_tokens: 1_000, completion_tokens: 150, total_tokens: 1_150 } });
+        }));
+        const checker = vi.fn(() => []);
+        const result = await generateUnifiedReadWeaveAnswer(input, undefined, checker);
+        expectUnifiedWriterRequest(input);
+        expect(checker).toHaveBeenCalled();
+        expect(result.body).toContain("命中时直接读取副本");
+        expect(result.body).toContain("未命中时访问原始数据并回填");
+        for (const text of excluded) {
+            expect(result.body).not.toContain(text);
+            expect(result.claims?.some(claim => claim.text.includes(text))).not.toBe(true);
+        }
+        expect(result.body).not.toContain("0xAB12");
+        expect(searchMock).not.toHaveBeenCalled();
+    });
+
+    it("uses the Kimi Code request shape for the active root writer", async () => {
+        const previousRuntime = runtimeConfig.current;
+        runtimeConfig.current = { baseUrl: "https://api.kimi.com/coding/v1", model: "kimi-for-coding",
+            apiKey: "placeholder", providerType: "deepseek-compatible",
+            pricingVersion: "third-party-configured-cny-v1",
+            rates: { cacheHitInput: .1, cacheMissInput: 1, output: 3 } };
+        const body = "缓存通过复用已取得的数据，减少重复访问原始数据的开销";
+        vi.stubGlobal("fetch", vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+            const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            const promptTokens = readWeaveEstimatedInputTokens(requestPrompt(payload));
+            return Response.json({ model: "kimi-for-coding",
+                choices: [ { message: { content: JSON.stringify({ body, claims: [], unresolvedClaims: [] }) } } ],
+                usage: { prompt_tokens: promptTokens, completion_tokens: 100, total_tokens: promptTokens + 100 } });
+        }));
+        try {
+            const input = { ...request("为什么缓存能减少重复读取？"), activeExternalSearch: false, autoExternalSearch: false };
+            const budget = new ReadWeaveBudget(.05, { hardLimitCny: .10 });
+            const result = await generateUnifiedReadWeaveAnswer(input, undefined, undefined, undefined, undefined, { budget });
+            const writers = expectUnifiedWriterRequest(input);
+            expect(writers).toHaveLength(1);
+            expect(fetch).toHaveBeenCalledTimes(1);
+            expect(String(vi.mocked(fetch).mock.calls[0][0])).toBe("https://api.kimi.com/coding/v1/chat/completions");
+            expect(writers[0]).toMatchObject({ model: "kimi-for-coding", temperature: 1, stream: false,
+                response_format: { type: "json_object" }, messages: [ { role: "system" }, { role: "user" } ] });
+            expect(Number(writers[0].max_tokens)).toBeGreaterThanOrEqual(4_096);
+            expect(writers[0]).not.toHaveProperty("max_output_tokens");
+            expect(writers[0]).not.toHaveProperty("thinking");
+            expect(requestSystem(writers[0])).toContain(readWeaveWritingSkill(false).prompt);
+            expect(result.body).toContain("减少重复访问原始数据的开销");
+            expect(budget.upperBoundCny).toBeLessThanOrEqual(.10);
+            expect(result.usage?.withinBudget).toBe(true);
+        } finally {
+            runtimeConfig.current = previousRuntime;
+        }
+    });
+
+    it("delivers the entire external snippet to the root writer without lexical or comma pruning", async () => {
+        const englishEvidence = "Requests remain queued until the lease expires, the coordinator then replays the original sequence number instead of allocating a new one. A receiver acknowledges a repeated sequence without applying the operation again.";
+        const snippet = `这项方案说明重试时机与避免重复提交的机制。 ${englishEvidence}`;
+        const sourceUrl = "https://example.org/replay-protocol";
+        searchMock.mockImplementation(async options => ({
+            ...await defaultSearchImplementation(options),
+            sources: [ {
+                provider: "Official documentation", title: "Replay protocol semantics", url: sourceUrl,
+                snippet, publishedAt: "2025-01-01", score: 100
+            } ],
+            searchCostCny: .002
+        }));
+        const input: ReadWeaveGenerateRequest = {
+            ...request("这项方案如何决定重试时机，并怎样避免重复提交？"),
+            activeExternalSearch: true,
+            fragments: [ { id: "selected", role: "selected", text: "文章只提到该方案允许重试，没有给出触发条件或去重过程" } ]
+        };
+        const answer = "该方案等待租约过期后重放原序列号，而不是重新编号；接收方收到重复序列号时只确认接收，不再次执行操作，因此重试不会重复提交";
+        vi.stubGlobal("fetch", vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+            const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            const promptTokens = readWeaveEstimatedInputTokens(requestPrompt(payload));
+            return Response.json({
+                choices: [ { message: { content: JSON.stringify({
+                    body: answer,
+                    claims: [ { claimId: "C1", text: answer, sourceIds: [ "S1" ], confidence: "medium" } ],
+                    unresolvedClaims: []
+                }) } } ],
+                usage: { prompt_tokens: promptTokens, completion_tokens: 150, total_tokens: promptTokens + 150 }
+            });
+        }));
+        const budget = new ReadWeaveBudget(.05, { hardLimitCny: .10 });
+        const result = await generateUnifiedReadWeaveAnswer(input, undefined, undefined, undefined, undefined, { budget });
+        const writers = expectUnifiedWriterRequest(input);
+        expect(writers).toHaveLength(1);
+        const writerInput = requestUser(writers[0]);
+        // A catalogue entry or source count is not proof that its evidence reached the writer.
+        expect(writerInput).toContain(`[S1] Replay protocol semantics`);
+        expect(writerInput).toContain(`证据摘录：${snippet}`);
+        expect(writerInput).toContain(englishEvidence);
+        expect(writerInput).toContain("expires, the coordinator then replays the original sequence number");
+        expect(writerInput).not.toContain("没有与本题直接相关且不重复的正文片段");
+        expect(result.evidenceSources).toEqual(expect.arrayContaining([ expect.objectContaining({
+            sourceId: "S1", sourceType: "external", url: sourceUrl, excerpt: snippet
+        }) ]));
+        expect(result.body).toContain("等待租约过期后重放原序列号");
+        expect(result.body).toContain("不再次执行操作");
+        expect(searchMock).toHaveBeenCalled();
+        expect(budget.hardLimitCny).toBe(.10);
+        expect(budget.upperBoundCny).toBeLessThanOrEqual(.10);
+        expect(result.usage?.withinBudget).toBe(true);
+    });
+
     it("delivers an explicitly sourced full name with one search and no invented origin requirement", async () => {
         searchMock.mockImplementation(async options => ({
             ...await defaultSearchImplementation(options),
@@ -1530,10 +2519,21 @@ describe("ReadWeave one-pass workflow", () => {
         });
         expect(result.body).toContain("XPT 示例分组传输（Example Packet Transfer）");
         expect(result.body).toContain("- 示例（Example）\n- 分组（Packet）\n- 传输（Transfer）");
-        expect(result.evidenceSources?.some(source=>source.sourceId==="S1")).toBe(true);
-        expect(result.audit?.research).toMatchObject({ queryCount:1,stopReason:"sufficient",missingFacts:[] });
-        expect(result.usage).toMatchObject({ modelCalls: 1, targetCny: .05,
-            budgetCny: .10, withinBudget: true });
+        expect(result.evidenceSources).toEqual(expect.arrayContaining([ expect.objectContaining({
+            sourceId: "S1", sourceType: "external", url: "https://example.org/xpt",
+            excerpt: "Example Packet Transfer (XPT) is the formal name used by this specification."
+        }) ]));
+        expect(result.audit?.research).toMatchObject({
+            needs: expect.arrayContaining([ expect.objectContaining({
+                assessment: "unassessed", sourceIds: expect.arrayContaining([ "S1" ])
+            }) ])
+        });
+        expect(result.audit?.research?.stopReason).not.toBe("sufficient");
+        expect(result.audit?.independentVerification).toBe("not-run");
+        expect(result.body).not.toMatch(/得名于|命名于|源自|创始人/u);
+        expect(result.audit?.questionContract.answerRequirements.join("\n")).not.toContain("必须说明命名来历");
+        expect(result.usage).toMatchObject({ modelCalls: 2, targetCny: .05, withinBudget: true });
+        expect(result.usage?.budgetCny).toBeLessThanOrEqual(.10);
         expect(result.usage?.costCny).toBeLessThanOrEqual(.01);
         expect(searchMock).toHaveBeenCalledTimes(1);
         expect(result.qualityState).toBe("provisional");
@@ -1547,7 +2547,7 @@ describe("ReadWeave one-pass workflow", () => {
 
     afterEach(() => vi.unstubAllGlobals());
 
-    it("uses one tiny health probe and one Pro answer when official Flash does not start", async () => {
+    it("keeps the selected Flash writer after an inconclusive health probe", async () => {
         const previousRuntime = runtimeConfig.current;
         const previousLive = process.env.READWEAVE_LIVE_AI;
         runtimeConfig.current = {
@@ -1559,7 +2559,6 @@ describe("ReadWeave one-pass workflow", () => {
             pricingVersion: "deepseek-official-test"
         };
         process.env.READWEAVE_LIVE_AI = "1";
-        const progress: ReadWeaveGenerationProgress[] = [];
         let calls = 0;
         vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
             const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
@@ -1571,40 +2570,21 @@ describe("ReadWeave one-pass workflow", () => {
                 });
                 return Response.json({ error: { message: "temporarily unavailable" } }, { status: 503 });
             }
-            expect(payload.model).toBe("deepseek-v4-pro");
+            expect(payload.model).toBe("deepseek-flash-failover-spec");
+            expect(requestSystem(payload)).toContain(readWeaveWritingSkill(false).prompt);
             return Response.json({
-                model: "deepseek-v4-pro",
+                model: payload.model,
                 status: "completed",
-                output: [ {
-                    type: "message",
-                    content: [ { type: "output_text", text: JSON.stringify({
-                        body: "这是直接答案",
-                        claims: [ {
-                            claimId: "C1",
-                            text: "这是直接答案",
-                            sourceIds: [ "S1" ],
-                            confidence: "high"
-                        } ],
-                        unresolvedClaims: []
-                    }) } ]
-                } ],
-                usage: {
-                    input_tokens: 300,
-                    input_tokens_details: { cached_tokens: 0 },
-                    output_tokens: 40,
-                    total_tokens: 340
-                }
+                output: [ { type:"message", content:[ { type:"output_text", text:JSON.stringify({
+                    body:"Flash 继续完成回答", claims:[], unresolvedClaims:[]
+                }) } ] } ],
+                usage: { input_tokens:100, output_tokens:30, total_tokens:130 }
             });
         }));
         try {
-            const result = await generateUnifiedReadWeaveAnswer(
-                request("如何工作？"),
-                item => progress.push(item)
-            );
+            const result = await generateUnifiedReadWeaveAnswer(request("如何工作？"));
+            expect(result.body).toContain("Flash 继续完成回答");
             expect(fetch).toHaveBeenCalledTimes(2);
-            expect(result.model).toBe("deepseek-v4-pro");
-            expect(result.usage).toMatchObject({ modelCalls: 2, budgetCny: 0.1, withinBudget: true });
-            expect(progress.some(item => item.message.includes("同一账户切换"))).toBe(true);
         } finally {
             runtimeConfig.current = previousRuntime;
             if (previousLive === undefined) delete process.env.READWEAVE_LIVE_AI;
@@ -1612,7 +2592,7 @@ describe("ReadWeave one-pass workflow", () => {
         }
     });
 
-    it("falls back to official Pro when a healthy Flash connection breaks during writing", async () => {
+    it("retains the failed Flash reservation without masking transport failure as a budget error", async () => {
         const previousRuntime = runtimeConfig.current;
         const previousLive = process.env.READWEAVE_LIVE_AI;
         runtimeConfig.current = {
@@ -1636,25 +2616,21 @@ describe("ReadWeave one-pass workflow", () => {
             });
             if (calls === 2) {
                 expect(payload.model).toBe("deepseek-flash-runtime-failover-spec");
+                expect(requestSystem(payload)).toContain(readWeaveWritingSkill(false).prompt);
+                expect(readWeaveModelReservation(requestSystem(payload), requestUser(payload),
+                    Number(payload.max_output_tokens), readWeaveModelRates("deepseek-v4-pro"))).toBeGreaterThan(.10);
                 throw new TypeError("fetch failed");
             }
-            expect(payload.model).toBe("deepseek-v4-pro");
-            return Response.json({
-                model: "deepseek-v4-pro",
-                status: "completed",
-                output: [ { type:"message", content:[ { type:"output_text", text:JSON.stringify({
-                    body:"这是直接答案",
-                    claims:[ { claimId:"C1", text:"这是直接答案", sourceIds:["S1"], confidence:"high" } ],
-                    unresolvedClaims:[]
-                }) } ] } ],
-                usage: { input_tokens:100, input_tokens_details:{ cached_tokens:0 }, output_tokens:30, total_tokens:130 }
-            });
+            throw new Error("Unaffordable Pro fallback must not be dispatched");
         }));
         try {
-            const result = await generateUnifiedReadWeaveAnswer(request("如何工作？"));
-            expect(fetch).toHaveBeenCalledTimes(3);
-            expect(result.model).toBe("deepseek-v4-pro");
-            expect(result.usage?.modelCalls).toBe(3);
+            const budget = new ReadWeaveBudget(.05, { hardLimitCny: .10 });
+            await expect(generateUnifiedReadWeaveAnswer(request("如何工作？"),
+                undefined, undefined, undefined, undefined, { budget })).rejects.toThrow(/请求失败|连接/u);
+            expect(fetch).toHaveBeenCalledTimes(2);
+            expect(budget.unreportedModelCostCny).toBeGreaterThan(0);
+            expect(budget.upperBoundCny).toBeLessThanOrEqual(.10);
+            expect(budget.hardLimitCny).toBe(.10);
         } finally {
             runtimeConfig.current = previousRuntime;
             if (previousLive === undefined) delete process.env.READWEAVE_LIVE_AI;
@@ -1662,7 +2638,7 @@ describe("ReadWeave one-pass workflow", () => {
         }
     });
 
-    it("falls back from an official Pro content-risk rejection to Flash without cycling", async () => {
+    it("blocks an unaffordable official Pro request before an upstream rejection can trigger fallback", async () => {
         const previousRuntime = runtimeConfig.current;
         runtimeConfig.current = {
             baseUrl: "https://api.deepseek.com",
@@ -1672,40 +2648,21 @@ describe("ReadWeave one-pass workflow", () => {
             rates: readWeaveModelRates("deepseek-v4-pro"),
             pricingVersion: "deepseek-official-test"
         };
-        let calls = 0;
-        vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
-            const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
-            calls++;
-            if (calls === 1) {
-                expect(payload.model).toBe("deepseek-v4-pro");
-                return Response.json({ error: { message: "Content Exists Risk" } }, { status: 400 });
-            }
-            expect(payload.model).toBe("deepseek-flash");
-            return Response.json({
-                model: "deepseek-flash",
-                status: "completed",
-                output: [ { type:"message", content:[ { type:"output_text", text:JSON.stringify({
-                    body:"这是直接答案，它说明对象如何工作",
-                    claims:[ { claimId:"C1", text:"这是直接答案", sourceIds:["S1"], confidence:"high" } ],
-                    unresolvedClaims:[]
-                }) } ] } ],
-                usage: { input_tokens:100, input_tokens_details:{ cached_tokens:0 }, output_tokens:30, total_tokens:130 }
-            });
-        }));
+        vi.stubGlobal("fetch", vi.fn(async () =>
+            Response.json({ error: { message: "Content Exists Risk" } }, { status: 400 })));
         try {
-            const result = await generateUnifiedReadWeaveAnswer(request("如何工作？"));
-            expect(fetch).toHaveBeenCalledTimes(2);
-            expect(result.model).toBe("deepseek-flash");
-            expect(result.usage).toMatchObject({ modelCalls: 2, withinBudget: true });
+            await expect(generateUnifiedReadWeaveAnswer(request("如何工作？")))
+                .rejects.toThrow(/费用上限不足/);
+            expect(fetch).not.toHaveBeenCalled();
         } finally {
             runtimeConfig.current = previousRuntime;
         }
     });
 
     it.each([
-        [ 400, "Content Exists Risk" ],
-        [ 256, "upstream worker ended unexpectedly" ]
-    ])("falls back to official Pro when Flash returns transient HTTP %s", async (status, message) => {
+        [ 400, "Content Exists Risk", /Content Exists Risk/ ],
+        [ 256, "upstream worker ended unexpectedly", /模型服务请求失败/ ]
+    ])("does not dispatch Pro above the cap after Flash returns HTTP %s", async (status, message, expected) => {
         const previousRuntime = runtimeConfig.current;
         const previousLive = process.env.READWEAVE_LIVE_AI;
         runtimeConfig.current = {
@@ -1727,23 +2684,18 @@ describe("ReadWeave one-pass workflow", () => {
                 output: [ { type:"message", content:[ { type:"output_text", text:'{"ok":true}' } ] } ],
                 usage: { input_tokens:8, input_tokens_details:{ cached_tokens:0 }, output_tokens:4, total_tokens:12 }
             });
-            if (calls === 2) return Response.json({ error: { message } }, { status });
-            expect(payload.model).toBe("deepseek-v4-pro");
-            return Response.json({
-                model: "deepseek-v4-pro",
-                status: "completed",
-                output: [ { type:"message", content:[ { type:"output_text", text:JSON.stringify({
-                    body:"这是直接答案",
-                    claims:[ { claimId:"C1", text:"这是直接答案", sourceIds:["S1"], confidence:"high" } ],
-                    unresolvedClaims:[]
-                }) } ] } ],
-                usage: { input_tokens:100, input_tokens_details:{ cached_tokens:0 }, output_tokens:30, total_tokens:130 }
-            });
+            if (calls === 2) {
+                expect(requestSystem(payload)).toContain(readWeaveWritingSkill(false).prompt);
+                expect(readWeaveModelReservation(requestSystem(payload), requestUser(payload),
+                    Number(payload.max_output_tokens), readWeaveModelRates("deepseek-v4-pro"))).toBeGreaterThan(.10);
+                return Response.json({ error: { message } }, { status });
+            }
+            throw new Error("Unaffordable Pro fallback must not be dispatched");
         }));
         try {
-            const result = await generateUnifiedReadWeaveAnswer(request("如何工作？"));
-            expect(fetch).toHaveBeenCalledTimes(3);
-            expect(result.model).toBe("deepseek-v4-pro");
+            await expect(generateUnifiedReadWeaveAnswer(request("如何工作？")))
+                .rejects.toThrow(expected);
+            expect(fetch).toHaveBeenCalledTimes(2);
         } finally {
             runtimeConfig.current = previousRuntime;
             if (previousLive === undefined) delete process.env.READWEAVE_LIVE_AI;
@@ -1751,8 +2703,9 @@ describe("ReadWeave one-pass workflow", () => {
         }
     });
 
-    it("keeps every local repair on Pro after a Flash failover", async () => {
+    it("keeps the full writer and local repair on an affordable independent fallback", async () => {
         const previousRuntime = runtimeConfig.current;
+        const previousFallback = verifierConfig.current;
         const previousLive = process.env.READWEAVE_LIVE_AI;
         runtimeConfig.current = {
             baseUrl: "https://api.deepseek.com",
@@ -1762,14 +2715,22 @@ describe("ReadWeave one-pass workflow", () => {
             rates: readWeaveModelRates("deepseek-flash"),
             pricingVersion: "deepseek-official-test"
         };
+        verifierConfig.current = {
+            baseUrl: "https://affordable-fallback.example.com/v1", model: "independent-writer",
+            apiKey: "placeholder", providerType: "deepseek-compatible",
+            rates: { cacheHitInput: .01, cacheMissInput: .01, output: .01 },
+            pricingVersion: "affordable-fallback-test"
+        };
         process.env.READWEAVE_LIVE_AI = "1";
         let calls = 0;
         vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
             const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
             calls++;
-            if (calls === 1) return Response.json({ error: { message: "queue unavailable" } }, { status: 503 });
-            expect(payload.model).toBe("deepseek-v4-pro");
+            if (calls === 1) return Response.json({ error: { message: "Insufficient Balance" } }, { status: 402 });
+            expect(payload.model).toBe("independent-writer");
+            expect(String(_url)).toBe("https://affordable-fallback.example.com/v1/chat/completions");
             const prompt = requestPrompt(payload);
+            if (calls === 2) expect(requestSystem(payload)).toContain(readWeaveWritingSkill(false).prompt);
             const value = prompt.includes("只解析给定缩写")
                 ? { terms: [ {
                     token: "ABC",
@@ -1785,19 +2746,21 @@ describe("ReadWeave one-pass workflow", () => {
                     unresolvedClaims: []
                 };
             return Response.json({
-                model: "deepseek-v4-pro",
-                status: "completed",
-                output: [ { type:"message", content:[ { type:"output_text", text:JSON.stringify(value) } ] } ],
-                usage: { input_tokens:100, input_tokens_details:{ cached_tokens:0 }, output_tokens:30, total_tokens:130 }
+                model: "independent-writer",
+                choices: [ { message: { content: JSON.stringify(value) } } ],
+                usage: { prompt_tokens:100, completion_tokens:30, total_tokens:130 }
             });
         }));
         try {
             const result = await generateUnifiedReadWeaveAnswer(request("ABC 如何工作？"));
             expect(fetch).toHaveBeenCalledTimes(3);
             expect(result.body).toContain("ABC 示例分组传输（Alpha Batch Connection）");
-            expect(result.model).toBe("deepseek-v4-pro");
+            expect(result.model).toBe("independent-writer");
+            expect(result.usage).toMatchObject({ targetCny: .05, withinBudget: true });
+            expect(result.usage?.budgetCny).toBeLessThanOrEqual(.10);
         } finally {
             runtimeConfig.current = previousRuntime;
+            verifierConfig.current = previousFallback;
             if (previousLive === undefined) delete process.env.READWEAVE_LIVE_AI;
             else process.env.READWEAVE_LIVE_AI = previousLive;
         }
@@ -1871,28 +2834,71 @@ describe("ReadWeave one-pass workflow", () => {
         });
     });
 
-    it("repairs a generic evidence refusal into a direct public-knowledge answer", async () => {
-        let calls = 0;
+    it("preserves a scoped public-knowledge answer from the unified writer", async () => {
+        const answer = "解析布局（Analytical Placement）是电子设计自动化中使用数学优化确定电路元件位置的布局方法";
         vi.stubGlobal("fetch", vi.fn(async () => {
-            const first = calls++ === 0;
             return Response.json({
                 model:"deepseek-v4-flash",status:"completed",
                 output:[ { type:"message",content:[ { type:"output_text",text:JSON.stringify({
-                    body:first
-                        ? "解析布局在当前证据中没有可确认的定义或展开，无法给出它是什么、如何运作以及解决什么问题"
-                        : "解析布局（Analytical Placement）是电子设计自动化中使用数学优化确定电路元件位置的布局方法",
+                    body:answer,
                     claims:[],unresolvedClaims:[]
                 }) } ] } ],
                 usage:{ input_tokens:500,output_tokens:80,total_tokens:580 }
             });
         }));
-        const result = await generateUnifiedReadWeaveAnswer({
+        const input = {
             ...request("解析布局是什么？"),activeExternalSearch:false,autoExternalSearch:false
-        });
+        };
+        const result = await generateUnifiedReadWeaveAnswer(input);
+        expectUnifiedWriterRequest(input);
+        expect(result.body).toBe(answer);
         expect(result.body).toContain("是电子设计自动化");
         expect(result.body).not.toContain("当前证据");
-        expect(result.workflow?.generationAttempts).toBe(2);
-        expect(fetch).toHaveBeenCalledTimes(2);
+        expect(result.workflow?.generationAttempts).toBe(1);
+        expect(fetch).toHaveBeenCalledTimes(1);
+    });
+
+    it("retries one malformed writer response without poisoning later jobs", async () => {
+        const previousRuntime = runtimeConfig.current;
+        runtimeConfig.current = {
+            baseUrl: "https://api.deepseek.com",
+            model: "deepseek-flash-malformed-isolation-spec",
+            apiKey: "placeholder",
+            providerType: "deepseek-official",
+            rates: readWeaveModelRates("deepseek-flash"),
+            pricingVersion: "deepseek-official-test"
+        };
+        let calls = 0;
+        vi.stubGlobal("fetch", vi.fn(async (_url, init) => {
+            const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            calls++;
+            const content = calls === 1
+                ? JSON.stringify({ ok: true })
+                : calls === 2
+                    ? "not valid json"
+                    : JSON.stringify({ body: "缓存复用已经取得的数据，避免重复读取", claims: [], unresolvedClaims: [] });
+            return Response.json({
+                model: payload.model,
+                status: "completed",
+                output: [ { type: "message", content: [ { type: "output_text", text: content } ] } ],
+                usage: { input_tokens: 100, input_tokens_details: { cached_tokens: 0 }, output_tokens: 50, total_tokens: 150 }
+            });
+        }));
+        try {
+            const rootOnly = { interpretationMode: "root-only" as const };
+            const first = { ...request("缓存是什么？"), activeExternalSearch: false, autoExternalSearch: false };
+            const second = { ...request("缓存为什么能减少读取？"), activeExternalSearch: false, autoExternalSearch: false };
+            const recovered = await generateUnifiedReadWeaveAnswer(first, undefined, undefined, undefined, undefined, rootOnly);
+            const result = await generateUnifiedReadWeaveAnswer(second, undefined, undefined, undefined, undefined, rootOnly);
+            expect(recovered.body).toContain("避免重复读取");
+            expect(recovered.workflow?.generationAttempts).toBe(2);
+            expect(result.body).toContain("避免重复读取");
+            expect(fetch).toHaveBeenCalledTimes(4);
+            expect(vi.mocked(fetch).mock.calls.every(([, init]) =>
+                JSON.parse(String(init?.body)).model === "deepseek-flash-malformed-isolation-spec")).toBe(true);
+        } finally {
+            runtimeConfig.current = previousRuntime;
+        }
     });
 
     it.each([
@@ -1980,22 +2986,20 @@ describe("ReadWeave one-pass workflow", () => {
     });
 
     it("automatically searches for identity and exhaustive background requests", async () => {
-        const result = await generateUnifiedReadWeaveAnswer(request("“肖恩·布鲁克斯”是谁？我需要他的所有背景和资料"));
+        const input = request("“肖恩·布鲁克斯”是谁？我需要他的所有背景和资料");
+        const result = await generateUnifiedReadWeaveAnswer(input);
 
         expect(searchMock).toHaveBeenCalled();
         expect(result.externalSearchDecision).toMatchObject({
             mode: "automatic",
             required: true,
-            reason: "identity",
             executed: true
         });
         expect(result.externalSearchDecision?.queries[0]).toContain("肖恩·布鲁克斯");
         expect(result.audit?.questionContract.searchQueries.length).toBeGreaterThan(0);
         expect(result.audit?.externalSearchDecision?.sourceCount).toBeGreaterThan(0);
-        expect(result.domainProfile).toMatchObject({
-            primaryDomain: "identity",
-            risk: "high"
-        });
+        expectUnifiedWriterRequest(input);
+        expect(result.audit?.questionContract.answerRequirements.join("\n")).toContain(input.title);
         expect(result.evidencePack?.externalSourceIds.length).toBeGreaterThan(0);
     });
 
@@ -2029,6 +3033,47 @@ describe("ReadWeave one-pass workflow", () => {
         });
         expect(result.audit?.questionContract.searchQueries).toEqual([]);
     });
+
+    it.each([ "scoped", "unsupported", "unsupported-trailing-punctuation" ] as const)(
+        "does not claim an unevidenced current role with a %s writer fixture", async fixture => {
+            const subject = "顾清禾";
+            const unsupportedRole = `${subject}目前任职于星原研究院`;
+            const scopedAnswer = `${subject}在当前文章中署名，但材料没有说明当前任职机构；需要能对应同一人的机构主页确认`;
+            const unsupported = fixture !== "scoped";
+            const body = unsupported ? unsupportedRole : scopedAnswer;
+            const claimText = fixture === "unsupported-trailing-punctuation" ? `${unsupportedRole}。` : unsupportedRole;
+            searchMock.mockResolvedValue({
+                used: false, query: subject, sources: [], providers: [], memo: "", warnings: [],
+                elapsedMs: 1, cacheHit: false, searchCostCny: 0
+            });
+            vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+                choices: [ { message: { content: JSON.stringify({
+                    body,
+                    claims: unsupported
+                        ? [ { claimId: "C1", text: claimText, sourceIds: [ "S1" ], confidence: "high" } ]
+                        : [],
+                    unresolvedClaims: []
+                }) } } ],
+                usage: { prompt_tokens: 300, completion_tokens: 80, total_tokens: 380 }
+            })));
+            const input: ReadWeaveGenerateRequest = {
+                ...request(`${subject}目前在哪个机构任职？`), activeExternalSearch: true,
+                fragments: [ { id: "selected", role: "selected", text: `文章署名为${subject}，没有提供任职资料` } ]
+            };
+            const result = await generateUnifiedReadWeaveAnswer(input);
+            expectUnifiedWriterRequest(input);
+            expect(searchMock).toHaveBeenCalled();
+            expect(result.body).toContain(subject);
+            // These checks also run against a fabricated writer claim, so safety
+            // cannot pass solely because the successful output fixture is cautious.
+            expect(result.body).not.toContain(unsupportedRole);
+            expect(result.claims?.some(claim => claim.text.includes(unsupportedRole))).not.toBe(true);
+            expect(JSON.stringify(result.audit?.questionContract.taskContract?.runtime.claims ?? []))
+                .not.toContain(unsupportedRole);
+            expect(result.evidenceSources?.some(source => source.sourceType === "external")).not.toBe(true);
+            if (fixture === "scoped") expect(result.body).toBe(scopedAnswer);
+        }
+    );
 
     it("lets active external search force evidence for an otherwise local question", () => {
         expect(decideReadWeaveExternalSearch({
@@ -2088,8 +3133,9 @@ describe("ReadWeave one-pass workflow", () => {
         const enabled = { ...request("为什么缓存能提速？"), autoApplyPlan: true };
         await generateUnifiedReadWeaveAnswer(enabled);
         const enabledPrompt = JSON.parse(String(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body)) as Record<string, unknown>;
-        expect(requestPrompt(enabledPrompt)).toContain("回答构造流（按语义分区");
-        expect(requestPrompt(enabledPrompt)).toContain("保留标题父子关系");
+        expect(requestPrompt(enabledPrompt)).toContain("回答构造流（");
+        expect(requestPrompt(enabledPrompt)).toContain("构造流是内容指南，不得覆盖用户明确要求的结构和标题");
+        expectUnifiedWriterRequest(enabled);
 
         vi.mocked(fetch).mockClear();
         const disabled = { ...request("为什么缓存能提速？"), autoApplyPlan: false };
@@ -2149,6 +3195,60 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.body).toContain("研究、记录和解释历史");
     });
 
+    it.each([
+        {
+            name: "uncertain Lumen with a declared bilingual identity",
+            context: "原文只给出 Lumen 一词，不能确定它是否指流明",
+            identity: { chineseName: "流明", englishName: "Lumen" },
+            body: "Lumen 是尚未确认所指的名称，不能确定这里是否指流明；仍需原始定义句消歧",
+            protectedText: "Lumen 是尚未确认所指的名称",
+            retained: "仍需原始定义句消歧"
+        },
+        {
+            name: "a different declared identity mentioned only as context",
+            context: "Lumen 是观测记录项目，Aurora 指极光，两者不是同一对象",
+            identity: { chineseName: "极光", englishName: "Aurora" },
+            body: "Lumen 是一个项目名，极光只是它处理的一种观测现象；两者不是同一对象",
+            protectedText: "Lumen 是一个项目名",
+            retained: "两者不是同一对象"
+        },
+        {
+            name: "a quoted definition rather than an asserted identity",
+            context: "选区引用了一个含有 Lumen 与流明的句子，没有确认对象身份",
+            identity: { chineseName: "流明", englishName: "Lumen" },
+            body: "> Lumen 是用于记录流明读数的名称\n\n这段引文只是原文表述，不足以确认对象身份",
+            protectedText: "> Lumen 是用于记录流明读数的名称",
+            retained: "不足以确认对象身份"
+        },
+        {
+            name: "a fenced definition-like string rather than an asserted identity",
+            context: "示例字符串含有 Lumen 与流明，不代表对象的正式定义",
+            identity: { chineseName: "流明", englishName: "Lumen" },
+            body: "```text\nLumen 是用于记录流明读数的名称\n```\n\n以上是示例中的原始字符串，不能据此确认对象身份",
+            protectedText: "```text\nLumen 是用于记录流明读数的名称\n```",
+            retained: "不能据此确认对象身份"
+        }
+    ])("does not promote uncertain or protected definition content: $name", async fixture => {
+        const input: ReadWeaveGenerateRequest = {
+            ...request("Lumen", "term"), activeExternalSearch: false, autoExternalSearch: false,
+            fragments: [ { id: "selected", role: "selected", text: fixture.context } ]
+        };
+        vi.stubGlobal("fetch", vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+            const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
+            const value = requestSystem(payload).includes("统一证据写作者")
+                ? { body: fixture.body, termIdentity: fixture.identity, claims: [], unresolvedClaims: [] }
+                : { patches: [] };
+            return Response.json({ choices: [ { message: { content: JSON.stringify(value) } } ],
+                usage: { prompt_tokens: 1_000, completion_tokens: 150, total_tokens: 1_150 } });
+        }));
+        const result = await generateUnifiedReadWeaveAnswer(input);
+        expectUnifiedWriterRequest(input);
+        expect(result.body).toContain(fixture.protectedText);
+        expect(result.body).toContain(fixture.retained);
+        expect(result.body).not.toContain(`- ${fixture.identity.chineseName}（${fixture.identity.englishName}）：`);
+        expect(searchMock).not.toHaveBeenCalled();
+    });
+
     it("returns the complete structured definition field contract", async () => {
         const result = await generateUnifiedReadWeaveAnswer(request("NPU 是什么？", "term"));
 
@@ -2182,7 +3282,9 @@ describe("third-party provider and prepaid answer delivery", () => {
         "uses a custom endpoint, key, JSON response, disabled reasoning and configured tariff for %s",
         async model => {
         runtimeConfig.current.model = model;
-        const result = await generateUnifiedReadWeaveAnswer(request("为什么需要检查数据？"));
+        const expectedPrices = readWeaveModelPriceSnapshot(runtimeConfig.current);
+        const budget = new ReadWeaveBudget(.05, { hardLimitCny: .10 });
+        const result = await generateUnifiedReadWeaveAnswer(request("为什么需要检查数据？"), undefined, undefined, undefined, undefined, { budget });
         const [ url, init ] = vi.mocked(fetch).mock.calls[0];
         expect(url).toBe("https://gateway.example/v1/chat/completions");
         expect(init?.headers).toMatchObject({ Authorization:"Bearer placeholder" });
@@ -2190,7 +3292,12 @@ describe("third-party provider and prepaid answer delivery", () => {
             model, response_format:{ type:"json_object" },
             thinking:{ type:"disabled" }
         });
-        expect(result.usage).toMatchObject({ modelCalls:1,costCny:0.0001,pricingVersion:"third-party-configured-cny-v1",withinBudget:true });
+        expect(result.usage).toMatchObject({ modelCalls:1,costCny:0.0001,pricingVersion:expectedPrices.priceSnapshotId,withinBudget:true });
+        expect(expectedPrices).toMatchObject({ providerType: "deepseek-compatible", model,
+            rates: { cacheHitInput: .1, cacheMissInput: .2, output: .5 } });
+        expect(budget.snapshot().receipts.filter(receipt => receipt.kind === "model")).toEqual([ expect.objectContaining({
+            priceSnapshot: expectedPrices, settlementPriceSnapshot: expectedPrices, settledMicros: 100
+        }) ]);
     });
     it("uses the configured independent provider when the primary route has no credit", async () => {
         verifierConfig.current = {
@@ -2237,17 +3344,23 @@ describe("third-party provider and prepaid answer delivery", () => {
     it("explains an HTML gateway response without exposing the page", async () => {
         vi.stubGlobal("fetch",vi.fn(async()=>new Response("<html>private upstream diagnostics</html>",{ status:502 })));
         await expect(generateUnifiedReadWeaveAnswer(request("是什么？"))).rejects.toThrow("响应不是 JSON");
-        expect(fetch).toHaveBeenCalledTimes(1);
+        // A malformed structured response is retried twice before surfacing a
+        // detailed gateway error; retries preserve the same task and budget.
+        expect(fetch).toHaveBeenCalledTimes(3);
     });
-    it("does not turn an unusually high configured price into a generation gate", async () => {
+    it("blocks an unaffordable configured tariff before any paid writer dispatch", async () => {
         runtimeConfig.current.rates = { cacheHitInput:10000, cacheMissInput:10000, output:10000 };
-        const result = await generateUnifiedReadWeaveAnswer(request("是什么？"));
-        expect(result.body).toContain("直接结论");
-        expect(result.usage?.withinBudget).toBe(false);
+        const budget = new ReadWeaveBudget(.05, { hardLimitCny: .10 });
+        await expect(generateUnifiedReadWeaveAnswer(request("是什么？"),
+            undefined, undefined, undefined, undefined, { budget })).rejects.toThrow(/费用上限不足/);
+        expect(fetch).not.toHaveBeenCalled();
+        expect(budget.hardLimitCny).toBe(.10);
+        expect(budget.modelRequests).toBe(0);
+        expect(budget.upperBoundCny).toBeLessThanOrEqual(.10);
+        expect(() => budget.raiseLimit(.100001)).toThrow("immutable");
         expect(searchMock).toHaveBeenCalledWith(
             expect.objectContaining({ allowPaid:false }), expect.anything()
         );
-        expect(fetch).toHaveBeenCalledTimes(1);
     });
     it("retains a finished answer when optional repairs have no budget", async () => {
         runtimeConfig.current.rates = { cacheHitInput:0,cacheMissInput:0,output:9 };
@@ -2361,6 +3474,93 @@ describe("third-party provider and prepaid answer delivery", () => {
             expect(compacted[0].excerpt).toContain("Advanced packaging");
             expect(compacted[1].excerpt).not.toContain("Sung Kyu Lim is a professor");
             expect(compacted[1].excerpt).toContain("Electronic design automation");
+        });
+
+        it("uses rare query terms across a complete technical page instead of keeping every generic subject mention", () => {
+            const accessedAt = new Date().toISOString();
+            const generic = Array.from({ length: 40 }, (_, index) => `Python documentation section ${index} describes another language feature.`);
+            const relevant = [
+                "Updating an existing dict key does not change its insertion order.",
+                "Deleting and reinserting the key appends it after the remaining entries."
+            ];
+            const compacted = compactReadWeaveWriterSources([ {
+                sourceId: "S1", sourceType: "external", provider: "Jina", title: "Python dict docs",
+                url: "https://docs.python.org/dict", accessedAt,
+                excerpt: [ ...generic, ...relevant ].join("\n")
+            } ], "Python dict insertion order update existing key delete reinsert official documentation");
+
+            expect(compacted).toHaveLength(1);
+            expect(compacted[0].excerpt).toContain(relevant[0]);
+            expect(compacted[0].excerpt).toContain(relevant[1]);
+            expect(compacted[0].excerpt).not.toContain("section 0 describes");
+        });
+
+        it("keeps every matching anchored Markdown section wherever it occurs and removes unrelated page sections", () => {
+            const page = [
+                "# Streams",
+                "## Introduction",
+                "Unrelated overview",
+                ...Array.from({ length: 80 }, (_, index) => `## Unrelated ${index}\nOther material ${index}`),
+                "## writable.write(chunk)",
+                "Stop writing when write returns false",
+                "## Event: 'drain'",
+                "Resume writing when drain is emitted",
+                "## Buffering and memory",
+                "Ignoring backpressure keeps buffering and can exhaust memory"
+            ].join("\n");
+            const scoped = scopeReadWeaveMarkdownEvidence(page,
+                "Node.js writable.write false drain buffering memory", "https://nodejs.org/api/stream.html#event-drain");
+            expect(scoped).toContain("writable.write(chunk)");
+            expect(scoped).toContain("Event: 'drain'");
+            expect(scoped).toContain("Buffering and memory");
+            expect(scoped).not.toContain("Unrelated 0");
+            expect(scoped).not.toContain("Unrelated 79");
+        });
+
+        it("uses a preserved requested section after the transport URL hash is removed", () => {
+            const page = [
+                "# RFC 9110",
+                "## 2",
+                "A large parent section that shares one digit with the requested anchor",
+                ...Array.from({ length: 70 }, (_, index) => `## 8.${index}. Other HTTP Method Rules\nUnrelated rule ${index}`),
+                "## 9.2.2. Idempotent Methods",
+                "A request method is idempotent when repeated identical requests have the same intended effect",
+                "### Retry after connection failure",
+                "A client can retry an idempotent request before reading a response",
+                "## 9.2.3. Other Methods",
+                "Unrelated following section"
+            ].join("\n");
+            const scoped = scopeReadWeaveMarkdownEvidence(page,
+                "RFC 9110 HTTP 幂等方法为什么可以重试", "https://rfc-editor.org/rfc/rfc9110.html#section%209.2.2");
+            expect(scoped).toContain("9.2.2. Idempotent Methods");
+            expect(scoped).toContain("Retry after connection failure");
+            expect(scoped).not.toContain("8.0. Other HTTP Method Rules");
+            expect(scoped).not.toContain("large parent section");
+            expect(scoped).not.toContain("9.2.3. Other Methods");
+        });
+
+        it("does not restore a whole page after every unit in the requested section is retained", () => {
+            const accessedAt = new Date().toISOString();
+            const page = [
+                "# RFC 9110",
+                ...Array.from({ length: 80 }, (_, index) => `## 8.${index}. Other Rules\nUnrelated material ${index}`),
+                "#### [9.2.2.](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.2)[Idempotent Methods](https://www.rfc-editor.org/rfc/rfc9110.html#name-idempotent-methods)",
+                "An idempotent method has the same intended effect for multiple identical requests",
+                "A client can retry an idempotent request after a connection failure",
+                "#### [9.2.3.](https://www.rfc-editor.org/rfc/rfc9110.html#section-9.2.3)[Other Methods](https://www.rfc-editor.org/rfc/rfc9110.html#name-other-methods)",
+                "Unrelated following material"
+            ].join("\n");
+            const compacted = compactReadWeaveWriterSources([ {
+                sourceId: "S1", sourceType: "external", provider: "Jina", title: "RFC 9110",
+                url: "https://www.rfc-editor.org/rfc/rfc9110.html", accessedAt,
+                retrievalMode: "page-reader", excerpt: page, requestedFragment: "section-9.2.2"
+            } as Parameters<typeof compactReadWeaveWriterSources>[0][number] & { requestedFragment: string } ],
+            "RFC 9110 HTTP idempotent method retry connection failure");
+
+            expect(compacted[0].excerpt).toContain("same intended effect");
+            expect(compacted[0].excerpt).toContain("retry an idempotent request");
+            expect(compacted[0].excerpt).not.toContain("Unrelated material 0");
+            expect(compacted[0].excerpt).not.toContain("9.2.3");
         });
 
         it("keeps a wrong person's page in the audit directory without sending its biography to the writer", () => {

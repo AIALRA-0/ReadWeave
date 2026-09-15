@@ -232,32 +232,35 @@ const TRAILING_ACRONYM_NAME = new RegExp(
  * or lexical content is introduced by this operation. */
 export function formatReadWeaveCanonicalEntities(body: string): string {
     return mapReadWeaveProse(body, text => text
+        // Reorder only aliases already supplied together, independently of task classification.
+        .replace(/\b([A-Z][A-Za-z'’.-]+(?:\s+[A-Z][A-Za-z'’.-]+){1,5})\s*[（(]([\p{Script=Han}]{2,4}(?:·[\p{Script=Han}]{1,8})?)(?:\s*[，,]\s*[A-Za-z.'’ -]{1,40}为姓)?[）)]/gu,
+            (_match, latin: string, chinese: string) => `${chinese}（${latin}）`)
+        .replace(/\b([A-Z][A-Za-z'’.-]+(?:\s+[A-Z][A-Za-z'’.-]+){1,5})\s*[（(]\1[）)]/gu, "$1")
         .replace(/(?:水平)?并排\s*[（(]\s*2\.5D\s*[）)]/gu, "水平并排")
         .replace(/垂直堆叠\s*[（(]\s*3D\s*[）)]/gu, "垂直堆叠")
         .replace(/(?<![\p{Script=Latin}\p{N}_.-])3D\s+IC(?![\p{Script=Latin}\p{N}_-])/gu, "三维集成电路")
         .replace(/(?<![\p{Script=Latin}\p{N}_.-])3D\s*(?=(?:芯片|集成|封装|堆叠|结构|器件|系统|布局|加速器))/gu, "三维")
         .replace(/(?<![\p{Script=Latin}\p{N}_.-])3D(?![\p{Script=Latin}\p{N}_-])/gu, "三维")
         .replace(/(?<=[\p{Script=Han}])\s*三维\s*(?=[\p{Script=Han}])/gu, "三维")
-        .replace(/(?<![\p{Script=Latin}\p{N}_.-])ML\s*(?=(?:模型|算法|方法|系统|加速器|工作负载))/gu, "机器学习")
         .replace(
-        /^([ \t]*(?:[-*+][ \t]+)?)([A-Z][A-Z0-9-]{1,15})[ \t]*(?:(?:的)?(?:官方|正式|完整|英文|中文)*全称(?:是|为)|即|是|指的是|表示)[ \t]*([\p{Script=Han}][\p{Script=Han} ]{1,49})（([A-Za-z][A-Za-z'’ .&+/#_-]*)）/gmu,
-        (_original, prefix: string, abbreviation: string, chineseName: string, englishName: string) =>
-            `${prefix}${abbreviation} ${chineseName.trim()}（${englishName.trim()}）`
-    ).replace(
-        TRAILING_ACRONYM_NAME,
-        (original, rawLabel: string, englishName: string, abbreviation: string) => {
+            /^([ \t]*(?:[-*+][ \t]+)?)([A-Z][A-Z0-9-]{1,15})[ \t]*(?:(?:的)?(?:官方|正式|完整|英文|中文)*全称(?:是|为)|即|是|指的是|表示)[ \t]*([\p{Script=Han}][\p{Script=Han} ]{1,49})（([A-Za-z][A-Za-z'’ .&+/#_-]*)）/gmu,
+            (_original, prefix: string, abbreviation: string, chineseName: string, englishName: string) =>
+                `${prefix}${abbreviation} ${chineseName.trim()}（${englishName.trim()}）`
+        ).replace(
+            TRAILING_ACRONYM_NAME,
+            (original, rawLabel: string, englishName: string, abbreviation: string) => {
             // All three fields are already explicitly paired by the author.
             // Moving the short label does not assert a new expansion. Valid
             // short forms such as LG (legalization) are not always initialisms.
-            const sentence = /^[A-Z]/u.test(rawLabel) ? undefined : rawLabel.match(
-                /^(.*?(?:属于|涉及|采用|使用|通过|基于|面向|以及|和|与|是|为))([\p{Script=Han}]{2,30})$/u
-            );
-            const connector = sentence?.[1] ?? "";
-            const label = sentence?.[2] ?? rawLabel;
-            if (!label || !/\p{Script=Han}/u.test(label)) return original;
-            return `${connector}${connector ? " " : ""}${abbreviation} ${label}（${englishName}）`;
-        }
-    ));
+                const sentence = /^[A-Z]/u.test(rawLabel) ? undefined : rawLabel.match(
+                    /^(.*?(?:属于|涉及|采用|使用|通过|基于|面向|以及|和|与|是|为))([\p{Script=Han}]{2,30})$/u
+                );
+                const connector = sentence?.[1] ?? "";
+                const label = sentence?.[2] ?? rawLabel;
+                if (!label || !/\p{Script=Han}/u.test(label)) return original;
+                return `${connector}${connector ? " " : ""}${abbreviation} ${label}（${englishName}）`;
+            }
+        ));
 }
 
 /** The renderer controls size; Markdown depth preserves semantic ownership.
@@ -343,7 +346,7 @@ export function formatReadWeaveCodeCopies(body: string, sourceBlocks: string[] =
             token.raw = token.raw.replace(token.text, aligned);
             if (!tokens.some(item => item.type === "code" && item.lang === lang
                 && item.text === original.lines.join("\n"))) {
-                token.raw = original.raw.trimEnd() + "\n\n" + token.raw;
+                token.raw = `${original.raw.trimEnd()  }\n\n${  token.raw}`;
             }
             break;
         }
@@ -505,7 +508,8 @@ function describesReadWeaveName(after: string): boolean {
     return /^(?:的(?:官方|正式|完整|英文|中文)*(?:全称|缩写|简称|简写|名称|拼写)|(?:是|为)[^\n。；;！？]*?(?:缩写|简称|简写)|中的(?:字母|字符)|这个名称)/u.test(after.trimStart());
 }
 
-/** Use Chinese for ordinary later references, but retain tokens whose spelling is discussed. */
+/** Shorten only repeated, explicitly identical labels. A bare token does not
+ * inherit the first label's meaning; the occurrence resolver owns that decision. */
 export function formatReadWeaveTermReferences(
     body: string,
     identity?: { abbreviation?: string; chineseName?: string; englishName?: string }
@@ -518,30 +522,16 @@ export function formatReadWeaveTermReferences(
     const escapedChinese = chineseName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
     const escapedEnglish = englishName.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
     const canonicalSource = `${escapedToken}\\s+${escapedChinese}（${escapedEnglish}）`;
-    const tokenSource = `(?<![\\p{Script=Latin}\\p{N}_.])${escapedToken}(?![\\p{Script=Latin}\\p{N}_])`;
-    const reference = new RegExp(
-        `${canonicalSource}|${tokenSource}[ \\t]*(?=[\\p{Script=Han}，；。：、！？])|${tokenSource}`,
-        "gu"
-    );
+    const reference = new RegExp(`(?<![\\p{Script=Latin}\\p{N}_.])${canonicalSource}`, "gu");
     let keptCanonical = false;
-    const annotation = `${abbreviation} ${chineseName}（${englishName}）`;
     return mapReadWeaveProse(body, prose => prose.replace(reference, (value, offset: number) => {
         const after = prose.slice(offset + value.length);
-        const pairedName = after.match(/^[ \t]*[（(]([A-Za-z][A-Za-z'’ .&+/#_-]*)[）)]/u)?.[1];
-        if (pairedName && pairedName !== englishName) return value;
-        const spelling = describesReadWeaveName(after);
-        if (new RegExp(`^${canonicalSource}$`, "u").test(value)) {
-            if (!keptCanonical) {
-                keptCanonical = true;
-                return value;
-            }
-            return spelling ? value : chineseName;
+        if (!keptCanonical) {
+            keptCanonical = true;
+            return value;
         }
-        return keptCanonical ? spelling ? annotation : chineseName : value.trimEnd();
-    }).replace(
-        new RegExp(`([\\p{Script=Han}，；。：、！？])[ \\t]+(?=${escapedChinese})`, "gu"),
-        "$1"
-    ));
+        return describesReadWeaveName(after) ? value : chineseName;
+    }));
 }
 
 /** A stale or overlapping patch batch is rejected atomically. */
@@ -730,63 +720,80 @@ export interface ReadWeaveTermRepairContext {
     articleContext?: string;
 }
 
+export interface ReadWeaveTermRepairTarget {
+    /** Echo this ID with token in the response; it addresses one input occurrence. */
+    occurrenceId: string;
+    token: string;
+    before: string;
+    after: string;
+}
+
 /** Annotate an incidental conventional initialism, never invent a project's
  * etymology or rewrite a sentence. Pass articleContext through the resolver's
  * second argument into its prompt; answer-local text is not source evidence. */
 export async function repairReadWeaveConventionalTerms(
     original: string, question: string,
     resolve: (
-        targets: Array<{ token:string;before:string;after:string }>,
+        targets: ReadWeaveTermRepairTarget[],
         context: ReadWeaveTermRepairContext
     ) => Promise<unknown>,
     signal?: AbortSignal,
     articleContext?: string,
     protectedNames: readonly string[] = []
 ) {
-    original = formatReadWeaveCanonicalEntities(original);
+    const protectedSpellings = [...new Set(protectedNames.filter(Boolean)
+        .flatMap(name => [name, name.normalize("NFKC")]))].sort((a, b) => b.length - a.length);
+    if (protectedSpellings.length) {
+        const names = new RegExp(`(${protectedSpellings.map(name => name.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")).join("|")})`, "gu");
+        original = mapReadWeaveProse(original, prose => prose.split(names)
+            .map((part, index) => index % 2 ? part : formatReadWeaveCanonicalEntities(part)).join(""));
+    } else original = formatReadWeaveCanonicalEntities(original);
     const occurrences = readWeaveProseRanges(original).flatMap(range => Array.from(
         original.slice(range.start, range.end)
             .matchAll(/(?<![\p{Script=Latin}\p{N}_.])(?:I\/O|[A-Z][A-Z0-9+#_-]{1,15}(?:\.[A-Za-z0-9]+)?|dB|SoC|NoC|IPv[46])(?![\p{Script=Latin}\p{N}_])/gu),
         match => ({ token: match[0], start: range.start + (match.index ?? 0), rangeStart: range.start })
     ));
-    const firstByToken = new Map<string, { token:string;start:number;before:string;after:string }>();
-    const introduced = new Set<string>();
+    const protectedRanges = protectedNames.filter(Boolean).flatMap(name => {
+        const ranges: Array<{ start: number; end: number }> = [];
+        // Match both supplied spelling and its normalized variant without changing text.
+        for (const spelling of new Set([name, name.normalize("NFKC")])) {
+            for (let start = original.indexOf(spelling); start >= 0; start = original.indexOf(spelling, start + spelling.length))
+                ranges.push({ start, end: start + spelling.length });
+        }
+        return ranges;
+    });
+    const protectedSpan = (start: number, end: number) => protectedRanges.some(range => start < range.end && end > range.start);
+    const targets: Array<ReadWeaveTermRepairTarget & { start: number; rangeStart: number }> = [];
     for (const occurrence of occurrences) {
-        if (protectedNames.some(name => {
-            const normalizedName = name.normalize("NFKC");
-            for (let start = original.indexOf(normalizedName); start >= 0;
-                start = original.indexOf(normalizedName, start + normalizedName.length)) {
-                if (occurrence.start >= start && occurrence.start < start + normalizedName.length) return true;
-            }
-            return false;
-        })) continue;
+        if (protectedSpan(occurrence.start, occurrence.start + occurrence.token.length)) continue;
         // Programming-language names are literal names, not initialisms.
         if (occurrence.token === "C++" || occurrence.token === "C#") continue;
-        if (introduced.has(occurrence.token) || firstByToken.has(occurrence.token)) continue;
         const before = original.slice(Math.max(0, occurrence.start - 150), occurrence.start);
         const after = original.slice(occurrence.start + occurrence.token.length, occurrence.start + occurrence.token.length + 150);
+        // A slash-connected literal such as C++/CUDA is not a standalone label.
+        if (occurrence.token !== "I/O" && (/[A-Za-z+#]\/$/u.test(before) || /^\/[A-Za-z]/u.test(after))) continue;
         if (before.lastIndexOf("《") > before.lastIndexOf("》")) continue;
         const proseBefore = original.slice(occurrence.rangeStart, occurrence.start);
         const openParenthesis = Math.max(proseBefore.lastIndexOf("（"), proseBefore.lastIndexOf("("))
             > Math.max(proseBefore.lastIndexOf("）"), proseBefore.lastIndexOf(")"));
         const reversedShortLabel = /[\p{Script=Han}]{2,40}（$/u.test(before) && after.startsWith("）");
         if (openParenthesis && !reversedShortLabel) continue;
+        // Already supplied English names are evidence, not correction targets.
+        if (/^[ \t]*[（(][A-Za-z][A-Za-z'’ .&+/#_-]*[）)]/u.test(after)) continue;
         const canonical = new RegExp(
-            `^\\s+([\\p{Script=Han}][\\p{Script=Han}· ]{1,79})（[A-Za-z][A-Za-z'’ .&+/#_-]*）`, "u"
+            `^[ \\t]*([\\p{Script=Han}][\\p{Script=Han}· ]{1,79})[（(][A-Za-z][A-Za-z'’ .&+/#_-]*[）)]`, "u"
         );
         const canonicalMatch = after.match(canonical);
         if (canonicalMatch && !/(?:全称|即|指的是|语境|领域中|在.+中|是)/u.test(canonicalMatch[1])) {
-            introduced.add(occurrence.token);
             continue;
         }
-        firstByToken.set(occurrence.token, { ...occurrence, before, after });
+        targets.push({ ...occurrence, occurrenceId: `term-${occurrence.start}`, before, after });
     }
-    const targets = [ ...firstByToken.values() ];
     if (!targets.length) return {
         body:original,rounds:0,knowledgeTerms:[] as string[],warnings:[] as string[]
     };
     signal?.throwIfAborted();
-    const result = await resolve(targets.map(({ token,before,after })=>({ token,before,after })), {
+    const result = await resolve(targets.map(({ occurrenceId, token,before,after })=>({ occurrenceId, token,before,after })), {
         question, ...(articleContext === undefined ? {} : { articleContext })
     });
     signal?.throwIfAborted();
@@ -795,10 +802,15 @@ export async function repairReadWeaveConventionalTerms(
     const warnings: string[] = [];
     if (!Array.isArray(result)) warnings.push("局部术语响应缺少 terms 数组，未应用");
     const patches: Array<{ start:number; original:string; replacement:string }> = [];
+    const introducedMeanings = new Set<string>();
     if (Array.isArray(result)) for (const target of targets) {
-        const matches = result.filter(item=>item?.token === target.token);
-        if (matches.length !== 1) {
-            warnings.push(`${target.token}：局部术语响应缺项或重复，未应用`);
+        // Legacy token-only responses are unambiguous only when the token occurs
+        // once in the input, including explicit/protected occurrences.
+        const uniqueToken = occurrences.filter(item => item.token === target.token).length === 1;
+        const matches = result.filter(item=>item?.occurrenceId === target.occurrenceId
+            || uniqueToken && item?.occurrenceId === undefined && item?.token === target.token);
+        if (matches.length !== 1 || matches[0].token !== target.token) {
+            warnings.push(`${target.token}（${target.occurrenceId}）：局部术语响应位置缺项、重复或缩写不匹配，未应用`);
             continue;
         }
         const term = { ...matches[0] };
@@ -822,42 +834,45 @@ export async function repairReadWeaveConventionalTerms(
             continue;
         }
         const annotation = `${target.token} ${term.chineseName}（${term.englishName}）`;
-        const tokenOccurrences = occurrences.filter(item => item.token === target.token);
-        tokenOccurrences.forEach((occurrence, index) => {
-            const before = original.slice(0, occurrence.start);
-            const after = original.slice(occurrence.start + target.token.length);
-            // A contrast can use the same initialism with a different supplied
-            // expansion. Never apply the first meaning to that explicit pair.
-            const pairedName = after.match(/^[ \t]*[（(]([A-Za-z][A-Za-z'’ .&+/#_-]*)[）)]/u)?.[1];
-            if (pairedName && pairedName !== term.englishName) return;
-            const reversed = before.match(/([\p{Script=Han}]{2,40})（$/u);
-            if (reversed && after.startsWith("）")) {
-                const start = occurrence.start - reversed[0].length;
-                patches.push({
-                    start,
-                    original: `${reversed[1]}（${target.token}）`,
-                    replacement: annotation
-                });
-                return;
+        const before = original.slice(0, target.start);
+        const after = original.slice(target.start + target.token.length);
+        const reversed = before.match(/([\p{Script=Han}]{2,40})（$/u);
+        const meaning = JSON.stringify([target.token, term.chineseName, term.englishName]);
+        let patch: { start: number; original: string; replacement: string };
+        if (reversed && after.startsWith("）")) {
+            // Reordering may add the resolved English name, never replace the
+            // Chinese identity that the author already explicitly supplied.
+            if (reversed[1] !== term.chineseName) {
+                warnings.push(`${target.token}（${target.occurrenceId}）：名称与原文已给中文名称冲突，未应用`);
+                continue;
             }
-            const proseBefore = original.slice(occurrence.rangeStart, occurrence.start);
-            if (Math.max(proseBefore.lastIndexOf("（"), proseBefore.lastIndexOf("("))
-                > Math.max(proseBefore.lastIndexOf("）"), proseBefore.lastIndexOf(")"))) return;
+            patch = {
+                start: target.start - reversed[0].length,
+                original: `${reversed[1]}（${target.token}）`,
+                replacement: annotation
+            };
+        } else {
             const spacing = after.match(/^[ \t]+(?=[\p{Script=Han}，；。：、！？])/u)?.[0] ?? "";
-            const keepToken = index === 0 || describesReadWeaveName(after);
+            // Shorten only after this occurrence independently resolves to the
+            // same names. A matching token alone never authorizes substitution.
+            const keepToken = !introducedMeanings.has(meaning) || describesReadWeaveName(after);
             const leading = !keepToken
                 ? before.match(/(?<=[\p{Script=Han}，；。：、！？])[ \t]+$/u)?.[0] ?? ""
                 : "";
-            patches.push({
-                start: occurrence.start - leading.length,
+            patch = {
+                start: target.start - leading.length,
                 original: leading + target.token + spacing,
                 replacement: keepToken ? annotation : term.chineseName
-            });
-        });
-        knowledgeTerms.push(target.token);
+            };
+        }
+        if (protectedSpan(patch.start, patch.start + patch.original.length)) continue;
+        patches.push(patch);
+        introducedMeanings.add(meaning);
+        if (!knowledgeTerms.includes(target.token)) knowledgeTerms.push(target.token);
     }
     for (const patch of patches.toSorted((a,b)=>b.start-a.start)) {
-        if (body.slice(patch.start, patch.start + patch.original.length) !== patch.original) {
+        if (protectedSpan(patch.start, patch.start + patch.original.length)
+            || body.slice(patch.start, patch.start + patch.original.length) !== patch.original) {
             warnings.push(`${patch.original}：局部术语位置已经变化，未应用`);
             continue;
         }
@@ -912,7 +927,7 @@ export async function repairReadWeaveFormat(
 export async function repairReadWeaveFormatBatch(
     original: string,
     repair: (targets: Array<{ start: number; original: string; issues: string[] }>) =>
-        Promise<ReadWeaveTextPatch[]>,
+    Promise<ReadWeaveTextPatch[]>,
     signal?: AbortSignal,
     maxRounds = 2
 ): Promise<{ body: string; rounds: number; warnings: string[] }> {

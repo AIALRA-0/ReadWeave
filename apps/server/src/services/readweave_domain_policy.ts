@@ -157,6 +157,7 @@ export function enrichReadWeaveClaim(
         ...claim,
         claimType,
         timeScope,
-        status: claim.status ?? (claim.unresolved ? "unsupported" : "supported")
+        // Citation existence is provenance, not entailment verification.
+        status: claim.status ?? (claim.unresolved ? "unsupported" : "not-checked")
     };
 }

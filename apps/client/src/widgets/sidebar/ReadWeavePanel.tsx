@@ -919,22 +919,31 @@ export default function ReadWeavePanel() {
         let cancelled = false;
         let accumulated = generationProgress;
         let cursor = accumulated.at(-1)?.sequence ?? 0;
+        function clearMissingJob() {
+            if (cancelled || !isSelectionActionCurrent(target, polledJobId)) return;
+            // Invalidate in-flight history snapshots and detach only this poll's
+            // job. Keep the question/body/preferences as a retryable local draft.
+            generationJobsRequestRevision.current += 1;
+            activeGenerationJobId.current = undefined;
+            setGenerationJobs(current => {
+                const next = current.filter(candidate => candidate.jobId !== polledJobId);
+                generationJobsRef.current = next;
+                return next;
+            });
+            setGenerationJobId(undefined);
+            setGenerationProgress([]);
+            setNewQuestionDraft(true);
+            setBusy(false);
+        }
         async function poll() {
             while (!cancelled) {
                 if (!isSelectionActionCurrent(target, polledJobId)) return;
                 try {
-                    const response = await server.getWithSilentNotFound<{ job: ReadWeaveGenerationJob | null; events: ReadWeaveGenerationProgress[]; nextSequence: number }>(`readweave/generation-jobs/${encodeURIComponent(polledJobId)}/events?after=${cursor}`);
+                    const response = await server.getWithSilentNotFound<{ job: ReadWeaveGenerationJob | null; events: ReadWeaveGenerationProgress[]; nextSequence: number }>(`readweave/generation-jobs/${encodeURIComponent(polledJobId)}/events?after=${cursor}`, undefined, { preserveErrorStatus: true });
                     if (cancelled || !isSelectionActionCurrent(target, polledJobId)) return;
                     const job = response.job;
                     if (!job) {
-                        generationJobsRequestRevision.current += 1;
-                        setGenerationJobs(current => {
-                            const next = current.filter(candidate => candidate.jobId !== polledJobId);
-                            generationJobsRef.current = next;
-                            return next;
-                        });
-                        setGenerationJobId(undefined);
-                        setBusy(false);
+                        clearMissingJob();
                         return;
                     }
                     cursor = response.nextSequence;
@@ -980,6 +989,10 @@ export default function ReadWeavePanel() {
                     return;
                 } catch (error) {
                     if (cancelled || !isSelectionActionCurrent(target, polledJobId)) return;
+                    if (typeof error === "object" && error !== null && "status" in error && error.status === 404) {
+                        clearMissingJob();
+                        return;
+                    }
                     setStatus(readableError(error, t("readweave.generate_failed_no_fallback")));
                     setStatusTone("error");
                     setBusy(false);
@@ -2470,6 +2483,9 @@ export default function ReadWeavePanel() {
                                         calls: displayedJob.result.usage.modelCalls,
                                         tokens: displayedJob.result.usage.totalTokens.toLocaleString()
                                     })}
+                                    {(displayedJob.result.usage.pendingCostCny ?? 0) > 0 && (
+                                        <span>{t("readweave.usage_pending_cost", { cost: displayedJob.result.usage.pendingCostCny!.toFixed(4) })}</span>
+                                    )}
                                 </p>
                             )}
                             {displayedJob && (

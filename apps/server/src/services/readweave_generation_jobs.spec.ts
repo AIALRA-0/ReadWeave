@@ -2,7 +2,10 @@ import type { ReadWeaveGenerateRequest, ReadWeaveGenerateResponse, ReadWeaveSour
 import { cls, hidden_subtree as hiddenSubtreeService, note_service as noteService, protected_session as protectedSessionModule } from "@triliumnext/core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ReadWeaveBudget } from "./readweave_budget.js";
+import { openReadWeaveJobBudget } from "./readweave_durable_budget.js";
 import { NonRetryableReadWeaveError } from "./readweave_errors.js";
+import * as unifiedAi from "./readweave_unified_ai.js";
 
 const generateMock = vi.hoisted(() => vi.fn());
 const protectedSession = protectedSessionModule.default;
@@ -137,6 +140,76 @@ describe("ReadWeave persisted generation jobs", () => {
             .toThrow("请先审核并确认回答流程");
         expect(sql.getValue<number>("SELECT COUNT(*) FROM readweave_generation_jobs")).toBe(0);
         expect(generateMock).not.toHaveBeenCalled();
+    });
+
+    it("passes the server budget and detached original request through the real wrapper before normalization", async () => {
+        const actual = await vi.importActual<typeof import("./readweave_ai.js")>("./readweave_ai.js");
+        const unified = vi.spyOn(unifiedAi, "generateUnifiedReadWeaveAnswer").mockResolvedValue(result());
+        vi.stubEnv("READWEAVE_TEST_AI", "");
+        vi.stubEnv("READWEAVE_ENABLE_LEGACY_REPLAY", "");
+        try {
+            const input = { ...request, title: "  Mira Vale是什么  ",
+                fragments: [{ id: "selected", role: "selected" as const, text: "A&amp;B" }] };
+            const original = structuredClone(input);
+            const budget = new ReadWeaveBudget(.05, { hardLimitCny: .10 });
+            const signal = new AbortController().signal;
+            const progress = vi.fn();
+            await actual.generateReadWeaveAnswer(input, progress, signal, { budget });
+            const [normalized, passedProgress, checker, , passedSignal, execution] = unified.mock.calls[0];
+            expect(normalized.title).toBe("Mira Vale是什么");
+            expect(normalized.fragments[0].text).toBe("A&B");
+            expect(passedProgress).toBe(progress);
+            expect(passedSignal).toBe(signal);
+            expect(execution?.budget).toBe(budget);
+            expect(execution?.originalRequest).toEqual(original);
+            expect(execution?.originalRequest).not.toBe(input);
+            expect(execution?.originalRequest?.fragments[0]).not.toBe(input.fragments[0]);
+            expect(input).toEqual(original);
+
+            // Article words cannot change the quality check's subject classification.
+            const body = "Mira Vale 用于保存资料并按输入顺序输出已有内容，其功能由公开接口定义";
+            const baseline = checker!(body, normalized.title, "question");
+            await actual.generateReadWeaveAnswer({ ...input,
+                fragments: [{ id: "selected", role: "selected", text: "教授 professor researcher scientist engineer faculty" }] }, undefined, undefined, { budget });
+            const contextualChecker = unified.mock.calls[1][2]!;
+            expect(contextualChecker(body, normalized.title, "question")).toEqual(baseline);
+        } finally {
+            unified.mockRestore();
+            vi.unstubAllEnvs();
+        }
+    });
+
+    it("gives explicit regeneration a fresh allowance even within the same millisecond", async () => {
+        let oldBudget!: ReadWeaveBudget;
+        generateMock.mockImplementationOnce(async (_request, _progress, _signal, execution: unifiedAi.ReadWeaveUnifiedExecutionContext) => {
+            oldBudget = execution.budget!;
+            expect(oldBudget.limitCny).toBe(.05);
+            expect(oldBudget.hardLimitCny).toBe(.10);
+            expect(oldBudget.reserveModelRequest(.05)).toBe(1);
+            return result();
+        });
+        const started = startReadWeaveGenerationJob(request);
+        const completed = await waitForStatus(started.jobId, "ready-for-review");
+        expect(oldBudget.remainingCny).toBe(0);
+        let freshBudget!: ReadWeaveBudget;
+        generateMock.mockImplementationOnce(async (_request, _progress, _signal, execution: unifiedAi.ReadWeaveUnifiedExecutionContext) => {
+            freshBudget = execution.budget!;
+            expect(freshBudget.remainingCny).toBe(.05);
+            expect(freshBudget.modelRequests).toBe(0);
+            return result();
+        });
+        const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse(completed.createdAt));
+        try {
+            regenerateReadWeaveGenerationJob(started.jobId, { expectedStateVersion: completed.stateVersion });
+        } finally {
+            clock.mockRestore();
+        }
+        const regenerated = await waitForStatus(started.jobId, "ready-for-review");
+        expect(Date.parse(regenerated.createdAt)).toBeGreaterThan(Date.parse(completed.createdAt));
+        expect(freshBudget.remainingCny).toBe(.05);
+        expect(oldBudget.unreportedModelCostCny).toBe(.05);
+        expect(sql.getValue<number>("SELECT COUNT(*) FROM readweave_generation_budgets WHERE jobId IN (?, ?)",
+            [`${started.jobId}:${completed.createdAt}`, `${started.jobId}:${regenerated.createdAt}`])).toBe(2);
     });
 
     it("defaults auto-save off and rejects a non-boolean setting before model work", () => {
@@ -738,9 +811,33 @@ describe("ReadWeave persisted generation jobs", () => {
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'running', NULL, NULL, 0, NULL, ?, ?)
         `, [ jobId, request.articleId, request.anchorId, request.anchorType, request.kind, request.title, "测试片段", JSON.stringify(request), now, now ]);
 
+        const authorization = { requiredUpperBoundCny: .10, difficultWorkAuthorized: true, generationKey: now };
+        const interruptedBudget = openReadWeaveJobBudget(jobId, authorization);
+        interruptedBudget.raiseLimit(.10);
+        interruptedBudget.reserveModelRequest(.08); // Provider timed out without a receipt.
+        const settled = interruptedBudget.reserveModelRequest(.01)!;
+        interruptedBudget.reportModelUsage(settled, .005);
+        sql.execute("UPDATE readweave_generation_jobs SET activeAttemptId = ?, updatedAt = ? WHERE jobId = ?",
+            ["interrupted-attempt", "2026-01-01T00:00:00.000Z", jobId]);
+        generateMock.mockImplementationOnce(async (_request, _progress, _signal, execution: unifiedAi.ReadWeaveUnifiedExecutionContext) => {
+            const restored = execution.budget!;
+            expect(restored).not.toBe(interruptedBudget);
+            expect(restored.limitCny).toBe(.10);
+            expect(restored.unreportedModelCostCny).toBe(.08);
+            expect(restored.meteredEstimateCny).toBe(.005);
+            expect(restored.reserveModelRequest(.016)).toBeUndefined();
+            expect(restored.reportModelUsage(settled, .005)).toBe(true);
+            expect(restored.remainingCny).toBe(.015);
+            return result();
+        });
+
         initializeReadWeaveGenerationJobs();
         const recovered = await waitForStatus(jobId, "ready-for-review");
         expect(recovered.progress.some(event => event.message.includes("服务器恢复了未完成任务"))).toBe(true);
+        expect(recovered.createdAt).toBe(now);
+        expect(sql.getValue<string>("SELECT activeAttemptId FROM readweave_generation_jobs WHERE jobId = ?", [jobId]))
+            .not.toBe("interrupted-attempt");
+        expect(openReadWeaveJobBudget(jobId, authorization).unreportedModelCostCny).toBe(.08);
     });
 
     it("demotes legacy green drafts and recovers only interrupted verification protocols on startup", async () => {

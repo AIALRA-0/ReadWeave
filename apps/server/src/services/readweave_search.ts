@@ -1,6 +1,11 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import type { ReadWeaveObjectKind, ReadWeaveSearchTestResult } from "@triliumnext/commons";
+import ipaddr from "ipaddr.js";
+import { Agent, fetch as undiciFetch, type RequestInit as UndiciRequestInit } from "undici";
 
 import { getReadWeaveSearchRuntimeConfig, type ReadWeaveSearchRuntimeConfig } from "./readweave_settings.js";
+import { validateHostResolution } from "./safe_fetch.js";
 
 const PROVIDER_TIMEOUT_MS = 5_500;
 const SERPER_PROVIDER_TIMEOUT_MS = 10_000;
@@ -42,6 +47,8 @@ interface SearchInput {
     query: string;
     context?: string;
     kind?: ReadWeaveObjectKind;
+    /** Advisory resources for this query only; never a budget or permission grant. */
+    resourceHints?: readonly string[];
     force?: boolean;
     localEvidenceSufficient?: boolean;
     allowPaid?: boolean;
@@ -63,6 +70,132 @@ type SearchAdapter = (query: string, config: ReadWeaveSearchRuntimeConfig, fetch
 
 const cache = new Map<string, CachedEvidence>();
 const inFlight = new Map<string, Promise<ReadWeaveSearchEvidence>>();
+
+/** Pass the trusted TaskContract policy.permissions, plus the request signal.
+ * Source scopes currently supported by these adapters: public. */
+export interface ReadWeaveSearchPolicy {
+    externalSearch: "allowed" | "off" | "required";
+    allowedSourceScopes: readonly string[];
+    allowedCapabilities?: readonly string[];
+    signal?: AbortSignal;
+}
+
+const searchPolicy = new AsyncLocalStorage<{
+    policies: ReadWeaveSearchPolicy[];
+    cache: Map<string, CachedEvidence>;
+}>();
+
+export function withReadWeaveSearchPolicy<T>(policy: ReadWeaveSearchPolicy, callback: () => T): T {
+    return searchPolicy.run({
+        policies: [...(searchPolicy.getStore()?.policies ?? []), policy], cache: new Map()
+    }, callback);
+}
+
+type SearchCapability = "search" | "page_read";
+
+class SearchPolicyError extends Error {
+    constructor() { super("External retrieval is not permitted by the scoped policy."); }
+}
+
+function checkCancellation(signal?: AbortSignal): void {
+    signal?.throwIfAborted();
+    for (const policy of searchPolicy.getStore()?.policies ?? []) policy.signal?.throwIfAborted();
+}
+
+function canRetrieve(capability: SearchCapability, signal?: AbortSignal): boolean {
+    checkCancellation(signal);
+    return (searchPolicy.getStore()?.policies ?? []).every(policy =>
+            (policy.externalSearch === "allowed" || policy.externalSearch === "required")
+            && policy.allowedSourceScopes.includes("public")
+            && (!policy.allowedCapabilities || policy.allowedCapabilities.includes(capability)));
+}
+
+function requireRetrieval(capability: SearchCapability, signal?: AbortSignal): void {
+    if (!canRetrieve(capability, signal)) throw new SearchPolicyError();
+}
+
+function networkCapability(url: URL): SearchCapability {
+    const host = url.hostname;
+    return new Set([
+        "api.crossref.org", "api.openalex.org", "api.semanticscholar.org", "pub.orcid.org",
+        "api.unpaywall.org", "google.serper.dev", "api.exa.ai", "api.search.brave.com",
+        "api.tavily.com", "s.jina.ai", "export.arxiv.org"
+    ]).has(host)
+        || host.endsWith(".wikipedia.org") && url.pathname === "/w/api.php"
+        || host === "dblp.org" && url.pathname === "/search/publ/api"
+        || host === "www.ebi.ac.uk" && url.pathname.startsWith("/europepmc/webservices/")
+        ? "search" : "page_read";
+}
+
+/** One hop with validated, pinned DNS. Redirects belong to the policy wrapper,
+ * so no underlying client can follow a redirect outside the gateway. */
+async function fetchPublicHop(url: URL, init: RequestInit, check: () => void): Promise<Response> {
+    const addresses = await validateHostResolution(url.hostname.replace(/^\[|\]$/gu, ""));
+    if (!addresses.length) throw new Error("Could not resolve a public address.");
+    check();
+    const dispatcher = new Agent({ connect: { lookup: ((_host, options, callback) => {
+        const family = typeof options === "number" ? options : options.family;
+        const candidates = family ? addresses.filter(address => address.family === family) : addresses;
+        if (!candidates.length) { callback(new Error("No permitted address.")); return; }
+        if (typeof options === "object" && options.all) callback(null, candidates);
+        else callback(null, candidates[0].address, candidates[0].family);
+    }) as never } });
+    try {
+        const response = await undiciFetch(url, { ...init, dispatcher, redirect: "manual" } as UndiciRequestInit);
+        check();
+        const empty = [204, 205, 304].includes(response.status) || response.status >= 300 && response.status < 400;
+        const body = empty ? null : await response.arrayBuffer();
+        if (empty) await response.body?.cancel();
+        check();
+        return new Response(body, { status: response.status, statusText: response.statusText, headers: [...response.headers] });
+    } finally {
+        // Cleanup failures must not replace the request's evidence or error.
+        try { await dispatcher.destroy(); } catch { /* Preserve the request result. */ }
+    }
+}
+
+function policyFetcher(baseFetcher?: FetchLike, signal?: AbortSignal): FetchLike {
+    return async (resource, init: RequestInit = {}) => {
+        let current = resource instanceof Request ? resource.url : String(resource);
+        const signals = [signal, init.signal, resource instanceof Request ? resource.signal : undefined,
+            ...(searchPolicy.getStore()?.policies ?? []).map(policy => policy.signal)]
+            .filter((value): value is AbortSignal => !!value);
+        const combined = signals.length ? AbortSignal.any(signals) : AbortSignal.timeout(PROVIDER_TIMEOUT_MS);
+        const requestInit = { ...init, signal: combined, redirect: "manual" as const };
+        for (let hop = 0; hop <= 5; hop++) {
+            const normalized = safeUrl(current);
+            if (!normalized) throw new Error("Non-public retrieval URL rejected.");
+            const url = new URL(normalized);
+            const capability = networkCapability(url);
+            const check = () => requireRetrieval(capability, combined);
+            check();
+            if (url.hostname === "r.jina.ai") {
+                const target = safeUrl(url.pathname.slice(1) + url.search);
+                if (!target) throw new Error("Non-public page target rejected.");
+                if (new URL(target).hostname === "r.jina.ai") throw new Error("Nested reader target rejected.");
+                // Injected transports are test seams. Production also checks the
+                // reader's embedded destination, not merely the proxy hostname.
+                if (!baseFetcher) await validateHostResolution(new URL(target).hostname.replace(/^\[|\]$/gu, ""));
+                check();
+            }
+            const response = baseFetcher
+                ? await baseFetcher(url.href, requestInit)
+                : await fetchPublicHop(url, requestInit, check);
+            try { check(); } catch (error) { await response.body?.cancel().catch(() => {}); throw error; }
+            if (response.status < 300 || response.status >= 400 || response.status === 304) return response;
+            const location = response.headers.get("location");
+            await response.body?.cancel().catch(() => {});
+            if (!location || hop === 5) throw new Error("Retrieval redirect could not be followed safely.");
+            const next = new URL(location, url);
+            // API credentials and metered POST bodies must never cross origins
+            // or be replayed by a provider redirect.
+            if (next.origin !== url.origin || (requestInit.method ?? "GET").toUpperCase() !== "GET")
+                throw new Error("Cross-origin or non-GET retrieval redirect rejected.");
+            current = next.href;
+        }
+        throw new Error("Retrieval redirect limit reached.");
+    };
+}
 
 function plainText(value: unknown, _maximum = 700): string {
     if (typeof value !== "string") return "";
@@ -87,6 +220,43 @@ function plainText(value: unknown, _maximum = 700): string {
         .trim();
 }
 
+/** Preserve complete page structure for semantic extraction. Search snippets
+ * may be flattened, but a page reader must retain headings and line boundaries
+ * so a URL fragment can resolve a section found anywhere in the document. */
+export function normalizeReadWeavePageContent(value: unknown, html = false): string {
+    if (typeof value !== "string") return "";
+    let decoded = html
+        ? value
+            .replace(/<(?:script|style)\b[^>]*>[\s\S]*?<\/(?:script|style)>/giu, " ")
+            .replace(/<h([1-6])\b[^>]*>/giu, (_match, level: string) => `\n${"#".repeat(Number(level))} `)
+            .replace(/<\/(?:h[1-6]|p|li|section|article|div|tr|table)>/giu, "\n")
+            .replace(/<br\s*\/?>/giu, "\n")
+            .replace(/<[^>]*>/gu, " ")
+        : value;
+    for (let pass = 0; pass < 3; pass++) {
+        const next = decoded
+            .replace(/&#x([0-9a-f]+);?/giu, (_match, hex: string) =>
+                safeSearchCodePoint(Number.parseInt(hex, 16)))
+            .replace(/&#([0-9]+);?/gu, (_match, decimal: string) =>
+                safeSearchCodePoint(Number.parseInt(decimal, 10)))
+            .replace(/&(?:nbsp|#160);?/giu, " ")
+            .replace(/&(?:amp|#38);?/giu, "&")
+            .replace(/&(?:lt|#60);?/giu, "<")
+            .replace(/&(?:gt|#62);?/giu, ">")
+            .replace(/&(?:quot|#34);?/giu, '"')
+            .replace(/&(?:apos|#39);?/giu, "'");
+        if (next === decoded) break;
+        decoded = next;
+    }
+    return decoded.normalize("NFKC")
+        .replace(/\r\n?/gu, "\n")
+        .split("\n")
+        .map(line => line.replace(/[ \t]+/gu, " ").trim())
+        .join("\n")
+        .replace(/\n{3,}/gu, "\n\n")
+        .trim();
+}
+
 function safeSearchCodePoint(value: number): string {
     if (!Number.isInteger(value) || value < 0 || value > 0x10FFFF
         || value >= 0xD800 && value <= 0xDFFF) return "";
@@ -97,7 +267,13 @@ function safeUrl(value: unknown): string {
     if (typeof value !== "string" || !value.trim()) return "";
     try {
         const url = new URL(value);
-        if (url.protocol !== "https:" && url.protocol !== "http:") return "";
+        if (url.protocol !== "https:" && url.protocol !== "http:" || url.username || url.password) return "";
+        const host = url.hostname.replace(/^\[|\]$/gu, "").replace(/\.$/u, "").toLowerCase();
+        if (ipaddr.isValid(host)) {
+            const address = ipaddr.parse(host);
+            if (address.range() !== "unicast") return "";
+        } else if (!host.includes(".") || /(?:^|\.)(?:localhost|local|localdomain|internal|invalid|test|lan|home|corp|onion|alt|arpa)$/u.test(host)
+            || /(?:^|\.)(?:nip\.io|sslip\.io|xip\.io|localtest\.me|lvh\.me)$/u.test(host)) return "";
         return url.toString();
     } catch {
         return "";
@@ -850,7 +1026,7 @@ const tavilySearch: SearchAdapter = async (query, config, fetcher) => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
             api_key: config.tavilyApiKey,
-            query: `${query} official primary source`,
+            query,
             search_depth: "basic",
             max_results: 5,
             include_answer: false,
@@ -894,44 +1070,57 @@ export async function readReadWeavePageWithJina(
     url: string,
     options: { fetcher?: FetchLike; signal?: AbortSignal; anonymous?: boolean } = {}
 ): Promise<string> {
+    if (!canRetrieve("page_read", options.signal)) return "";
     const config = getReadWeaveSearchRuntimeConfig();
     if (!config.jinaApiKey && !options.anonymous) return "";
     const normalizedUrl = safeUrl(url);
     if (!normalizedUrl) return "";
-    const fetcher = options.fetcher ?? fetch;
-    const response = await fetcher(`https://r.jina.ai/${normalizedUrl}`, {
-        headers: {
-            "Accept": "text/plain",
-            ...(!options.anonymous ? { Authorization: `Bearer ${config.jinaApiKey}` } : {}),
-            "X-Return-Format": "markdown",
-            // Token-Budget rejects an entire long page (HTTP 409), it does not
-            // truncate it. Anonymous reads have no paid token debit; trim them
-            // to a bounded document before choosing a question-relevant window.
-            ...(options.anonymous ? { "X-Max-Tokens": "12000" } : { "X-Token-Budget": "4000" })
-        },
-        signal: options.signal ? AbortSignal.any([ options.signal, AbortSignal.timeout(12_000) ]) : AbortSignal.timeout(12_000)
-    });
-    if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
-    return plainText(await response.text(), options.anonymous ? 48_000 : 24_000);
+    const fetcher = policyFetcher(options.fetcher, options.signal);
+    const signal = options.signal ? AbortSignal.any([ options.signal, AbortSignal.timeout(12_000) ]) : AbortSignal.timeout(12_000);
+    let content = "";
+    let markdown = false;
+    let readerError: unknown;
+    try {
+        const response = await fetcher(`https://r.jina.ai/${normalizedUrl}`, {
+            headers: {
+                "Accept": "text/plain",
+                ...(!options.anonymous ? { Authorization: `Bearer ${config.jinaApiKey}` } : {}),
+                "X-Return-Format": "markdown"
+            },
+            signal
+        });
+        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`.trim());
+        content = await response.text();
+        markdown = true;
+    } catch (error) {
+        readerError = error;
+    }
+    // Some standards and documentation sites reject reader proxies. Fall back
+    // to a direct, DNS-pinned public GET through the same SSRF policy; never
+    // forward the Jina credential or provider headers to the origin.
+    if (!content.trim()) {
+        try {
+            const direct = await fetcher(normalizedUrl, {
+                headers: { "Accept": "text/html,text/plain;q=0.9" }, signal
+            });
+            if (!direct.ok) throw new Error(`${direct.status} ${direct.statusText}`.trim());
+            content = await direct.text();
+            markdown = false;
+        } catch (directError) {
+            throw readerError ?? directError;
+        }
+    }
+    requireRetrieval("page_read", options.signal);
+    return normalizeReadWeavePageContent(content, !markdown);
 }
 
 function isCurrentQuery(query: string): boolean {
     return /(?:当前|目前|现任|最新|截至|今天|现在|版本|价格|发布|维护|状态|current|latest|today|now|20[2-9]\d)/iu.test(query);
 }
 
-function isPersonProfileQuery(query: string): boolean {
-    const normalized = plainText(query, 700);
-    const hasProfileIntent = /(?:人物|学者|教授|研究员|科学家|工程师|作者|是谁|是何人|现任机构|任职|个人简介|researcher|professor|faculty|biography|profile|current affiliation)/iu.test(normalized);
-    const looksLikeLatinPersonName = /\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,5}\b/u.test(normalized);
-    const chineseSubject = normalized.match(/^([\p{Script=Han}·]{2,6})(?=\s|是谁|是何人|现任|任职)/u)?.[1];
-    const looksLikeChinesePersonQuestion = !!chineseSubject
-        && !/^(?:某|该|本)/u.test(chineseSubject)
-        && !/(?:机构|大学|公司|组织|实验室|团队|部门)$/u.test(chineseSubject);
-    return hasProfileIntent && (looksLikeLatinPersonName || looksLikeChinesePersonQuestion);
-}
 
 function isFreshnessSensitiveQuery(query: string): boolean {
-    return isCurrentQuery(query) || isPersonProfileQuery(query);
+    return isCurrentQuery(query);
 }
 
 function isAcademicQuery(query: string): boolean {
@@ -939,7 +1128,7 @@ function isAcademicQuery(query: string): boolean {
 }
 
 function automaticSearchWanted(input: SearchInput): boolean {
-    const text = `${input.query}\n${input.context ?? ""}`;
+    const text = input.query;
     if (input.localEvidenceSufficient && !isAcademicQuery(text) && !isFreshnessSensitiveQuery(text)) return false;
     return isAcademicQuery(text)
         || isFreshnessSensitiveQuery(text)
@@ -952,88 +1141,20 @@ function normalizeQuery(query: string): string {
 }
 
 export function buildFocusedGeneralSearchQuery(query: string): string {
-    const normalized = normalizeQuery(query);
-    if (!normalized) return "";
-    // The research layer already prepared this precise query. Selecting its
-    // longest English phrase as a new anchor drops the quoted subject and then
-    // duplicates the intent. Keep prepared English queries; person queries
-    // retain their existing disambiguation path below.
-    if (!/\p{Script=Han}/u.test(normalized) && !isPersonProfileQuery(normalized))
-        return normalized;
-
-    const years = Array.from(normalized.matchAll(/\b(20[0-3]\d)\b/gu), match => match[1]);
-    const withoutTemporalLead = normalized
-        .replace(
-            /^(?:截至|截止(?:到)?|到)\s*(?:20[0-3]\d)(?:\s*年)?(?:\s*\d{1,2}\s*月)?(?:\s*\d{1,2}\s*日)?\s*[，,、:：-]?\s*/u,
-            ""
-        )
-        .trim();
-    const semanticQuery = withoutTemporalLead || normalized;
-    const latinAnchors = Array.from(
-        semanticQuery.matchAll(/\b[A-Za-z][A-Za-z0-9+._/-]*(?:\s+[A-Za-z][A-Za-z0-9+._/-]*){0,5}\b/gu),
-        match => match[0].trim()
-    )
-        .filter(value => !/^(?:current|latest|official|primary|source)$/iu.test(value))
-        .toSorted((left, right) => right.length - left.length);
-    const personProfile = isPersonProfileQuery(semanticQuery);
-    const personName = personProfile
-        ? semanticQuery.match(/\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,5}\b/u)?.[0]
-        : undefined;
-    const chinesePersonName = personProfile
-        ? semanticQuery.match(/^([\p{Script=Han}·]{2,6})(?=\s|是谁|是何人|现任|任职)/u)?.[1]
-        : undefined;
-    const primaryAnchor = personName ? `"${personName}"`
-        : chinesePersonName ? `"${chinesePersonName}"` : latinAnchors[0];
-
-    let intent = "";
-    if (personProfile) intent = "researcher profile current affiliation";
-    else if (/(?:是什么|全称|名称含义|缩写含义|定义|what is|meaning|full name|acronym)/iu.test(semanticQuery)) intent = "official definition meaning full name";
-    else if (/(?:模型名称|正式模型|可用模型|模型列表)/u.test(semanticQuery)) intent = "official current model names";
-    else if (/(?:现任机构|当前任职|现任|任职)/u.test(semanticQuery)) intent = "official current affiliation";
-    else if (/(?:最新版本|当前版本|正式版本)/u.test(semanticQuery)) intent = "official latest version";
-    else if (/(?:价格|定价|费用)/u.test(semanticQuery)) intent = "official current pricing";
-    else if (/(?:发布日期|发布时间|发布)/u.test(semanticQuery)) intent = "official release";
-
-    const parts = [
-        primaryAnchor,
-        intent,
-        years.at(-1),
-        semanticQuery,
-        "official primary source"
-    ].filter((value): value is string => !!value);
-    return Array.from(new Set(parts)).join(" ").replace(/\s+/gu, " ").trim();
+    // The caller owns the evidence question. Classification cannot substitute
+    // a biography, an assumed definition, or another task for that question.
+    return normalizeQuery(query);
 }
 
 function deduplicateAndRank(sources: ReadWeaveSearchSource[], query: string): ReadWeaveSearchSource[] {
     const seen = new Set<string>();
     const currentYear = new Date().getUTCFullYear();
     const freshnessSensitive = isFreshnessSensitiveQuery(query);
-    const personProfile = isPersonProfileQuery(query);
-    const latinPerson = personProfile
-        ? query.match(/\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,5}\b/u)?.[0].toLocaleLowerCase()
-        : undefined;
-    const chinesePerson = personProfile
-        ? query.match(/["“]?([\p{Script=Han}·]{2,6})["”]?(?=\s|是谁|是何人|现任|任职)/u)?.[1]
-        : undefined;
-    const personTokens = latinPerson?.split(/\s+/u).filter(Boolean)
-        ?? (chinesePerson ? [ chinesePerson ] : []);
     return sources
         .filter(item => item.title && item.url)
         .map((item, index) => {
             let authority = item.score;
             const evidenceText = `${item.title}\n${item.snippet}\n${item.publishedAt ?? ""}`;
-            if (personTokens.length > 0) {
-                const normalizedEvidence = evidenceText.toLocaleLowerCase();
-                const normalizedTokens = personTokens.map(token => token.toLocaleLowerCase());
-                const mentionsPerson = normalizedTokens.every(token => normalizedEvidence.includes(token));
-                const titleMentionsPerson = normalizedTokens.every(token => item.title.toLocaleLowerCase().includes(token));
-                if (mentionsPerson) {
-                    authority += 70;
-                    if (titleMentionsPerson) authority += 20;
-                } else {
-                    authority -= 70;
-                }
-            }
             try {
                 const hostname = new URL(item.url).hostname;
                 if (/(?:doi\.org|crossref\.org|dblp\.org|openalex\.org|semanticscholar\.org|arxiv\.org|europepmc\.org|nih\.gov|\.edu(?:\.[a-z]{2})?|\.gov(?:\.[a-z]{2})?)$/iu.test(hostname)) authority += 12;
@@ -1042,12 +1163,7 @@ function deduplicateAndRank(sources: ReadWeaveSearchSource[], query: string): Re
                 } else if (/\.org$/iu.test(hostname)) {
                     authority += 3;
                 }
-                if (personProfile) {
-                    if (/\.edu(?:\.[a-z]{2})?$/iu.test(hostname) && /(?:faculty|people|person|profile|directory|professor|homepage)/iu.test(item.url)) authority += 18;
-                    if (/^(?:orcid\.org|www\.orcid\.org)$/iu.test(hostname)) authority += 16;
-                    if (/(?:crossref|dblp|openalex|semanticscholar|arxiv|europepmc)/iu.test(item.provider)) authority -= 28;
-                    if (/(?:About\s+None|Experience\s+N\/A|Education\s+N\/A|Publications\s+N\/A){2,}/iu.test(evidenceText)) authority -= 140;
-                }
+
             } catch {
                 // Invalid URLs were already removed.
             }
@@ -1062,8 +1178,6 @@ function deduplicateAndRank(sources: ReadWeaveSearchSource[], query: string): Re
                 else if (latestYear > 0 && latestYear <= currentYear - 6) authority -= 10;
             }
             const classification = classifySearchSource(item, query);
-            if (personProfile && classification.sourceCategory === "first-party-personal") authority += 24;
-            if (personProfile && classification.evidenceFamily === "SELF") authority += 6;
             return {
                 ...item,
                 ...classification,
@@ -1095,14 +1209,15 @@ function buildEvidenceMemo(query: string, sources: ReadWeaveSearchSource[]): str
 }
 
 function putCache(key: string, value: ReadWeaveSearchEvidence) {
-    cache.set(key, {
+    const target = searchPolicy.getStore()?.cache ?? cache;
+    target.set(key, {
         expiresAt: Date.now() + (isFreshnessSensitiveQuery(value.query) ? CURRENT_CACHE_TTL_MS : CACHE_TTL_MS),
         value
     });
-    while (cache.size > MAX_CACHE_ENTRIES) {
-        const oldest = cache.keys().next().value as string | undefined;
+    while (target.size > MAX_CACHE_ENTRIES) {
+        const oldest = target.keys().next().value as string | undefined;
         if (!oldest) break;
-        cache.delete(oldest);
+        target.delete(oldest);
     }
 }
 
@@ -1116,16 +1231,25 @@ async function runAdapter(
     try {
         return { sources: await adapter(query, config, fetcher) };
     } catch (error) {
-        return { sources: [], warning: `${name}：${error instanceof Error ? error.message : "请求失败"}` };
+        checkCancellation();
+        if (error instanceof DOMException && error.name === "AbortError") throw error;
+        const status = error instanceof Error ? error.message.match(/\b[45]\d{2}\b/u)?.[0] : undefined;
+        return { sources: [], warning: `${name}: ${error instanceof SearchPolicyError ? "not permitted" : status ? `HTTP ${status}` : "request failed"}` };
     }
 }
 
 async function searchUncached(input: SearchInput, fetcher: FetchLike): Promise<ReadWeaveSearchEvidence> {
     const startedAt = Date.now();
     const storedConfig = getReadWeaveSearchRuntimeConfig();
-    const config = { ...storedConfig, budgetCny: input.budgetCny === undefined ? storedConfig.budgetCny : Math.max(0, Math.min(input.budgetCny, 0.10)) };
+    const allowance = input.budgetCny ?? storedConfig.budgetCny;
+    const config = { ...storedConfig, budgetCny: Number.isFinite(allowance) ? Math.max(0, Math.min(allowance, 0.10)) : 0 };
     const query = normalizeQuery(input.query);
-    if (!query || config.mode === "off" || (!input.force && config.mode === "automatic" && !automaticSearchWanted(input))) {
+    // Per-task permission is authoritative. `force` here is issued only after
+    // the TaskContract has allowed retrieval, so an obsolete global `off`
+    // option must not silently cancel a current automatic/explicit search.
+    // A user's “关闭外部搜索” choice is enforced earlier by SearchPolicy and
+    // cannot reach this function as an allowed forced request.
+    if (!query || (!input.force && (config.mode === "off" || config.mode === "automatic" && !automaticSearchWanted(input)))) {
         return {
             used: false,
             query,
@@ -1139,8 +1263,8 @@ async function searchUncached(input: SearchInput, fetcher: FetchLike): Promise<R
         };
     }
 
-    const academic = isAcademicQuery(`${query}\n${input.context ?? ""}`);
-    const orcidId = `${query}\n${input.context ?? ""}`
+    const academic = isAcademicQuery(query);
+    const orcidId = query
         .match(/\b\d{4}-\d{4}-\d{4}-\d{3}[\dX]\b/iu)?.[0]?.toLocaleUpperCase();
     const freeAdapters: Array<[string, SearchAdapter]> = [
         ...(isDeepSeekOfficialModelQuery(query)
@@ -1156,7 +1280,7 @@ async function searchUncached(input: SearchInput, fetcher: FetchLike): Promise<R
             ? [ [ "Linux kernel DAX documentation", linuxKernelDaxOfficialSearch ] as [string, SearchAdapter] ]
             : []),
         [ "Wikipedia", wikipediaSearch ],
-        ...(isPersonProfileQuery(query)
+        ...(input.resourceHints?.includes("person") || orcidId
             ? [
                 [ "OpenAlex Authors", openAlexAuthorSearch ] as [string, SearchAdapter],
                 [ "ORCID", orcidEmploymentSearch ] as [string, SearchAdapter]
@@ -1188,7 +1312,6 @@ async function searchUncached(input: SearchInput, fetcher: FetchLike): Promise<R
         && (input.forcePaidFallback === true || isFreshnessSensitiveQuery(query) || sources.length < 2 || config.mode === "always");
     if (needsGeneralSearch) {
         const focusedQuery = buildFocusedGeneralSearchQuery(query);
-        const personProfile = isPersonProfileQuery(query);
         const paidFallbacks: Array<[string, SearchAdapter, number, boolean]> = [
             // Tavily's Researcher plan has a monthly free quota and pay-as-you-go
             // is off by default. Exhaustion therefore fails closed rather than billing.
@@ -1197,51 +1320,21 @@ async function searchUncached(input: SearchInput, fetcher: FetchLike): Promise<R
             [ "Brave Search", braveSearch, 0.005 * CNY_PER_USD, !!config.braveApiKey ],
             [ "Jina Search", jinaSearch, 0.001 * CNY_PER_USD, !!config.jinaApiKey ]
         ];
-        if (personProfile && config.exaApiKey) {
-            const serper = paidFallbacks.find(([ name ]) => name === "Serper");
-            const personAdapters: Array<[string, SearchAdapter, number]> = [
-                ...(serper && serper[3] ? [ [ serper[0], serper[1], serper[2] ] as [string, SearchAdapter, number] ] : []),
-                [ "Exa People", exaPeopleSearch, 0.007 * CNY_PER_USD ]
-            ];
-            let remaining = config.budgetCny - searchCostCny;
-            const affordable = personAdapters.filter(([ , , estimatedCost ]) => {
-                if (estimatedCost > remaining) return false;
-                remaining -= estimatedCost;
-                return true;
-            });
-            if (affordable.length === 0) {
-                warnings.push("Exa 人物搜索因本次搜索预算不足而跳过");
-            } else {
-                if (affordable.length < personAdapters.length) warnings.push("部分人物搜索源因本次搜索预算不足而跳过");
-                const results = await Promise.all(affordable.map(async ([ name, adapter, estimatedCost ]) => ({
-                    name,
-                    estimatedCost,
-                    result: await runAdapter(name, adapter, focusedQuery, config, fetcher)
-                })));
-                searchCostCny += results.reduce((sum, item) => sum + item.estimatedCost, 0);
-                results.forEach(item => {
-                    if (item.result.warning) warnings.push(item.result.warning);
-                });
-                const paidSources = results.flatMap(item => item.result.sources);
-                if (paidSources.length > 0) sources = deduplicateAndRank([ ...freeSources, ...paidSources ], query);
-            }
-        } else {
-            for (const [ name, adapter, estimatedCost, configured ] of paidFallbacks) {
-                if (!configured || searchCostCny + estimatedCost > config.budgetCny) continue;
-                const fallback = await runAdapter(name, adapter, focusedQuery, config, fetcher);
-                // A metered search request can be billable even when it returns no
-                // rows. Account for the request when it is sent rather than only
-                // when it succeeds, otherwise a chain of empty fallbacks can hide
-                // real cost from the per-generation budget gate.
-                searchCostCny += estimatedCost;
-                if (fallback.warning) warnings.push(fallback.warning);
-                if (fallback.sources.length > 0) {
-                    // Re-rank from raw adapter scores. Re-ranking the already ranked
-                    // free rows would apply authority and entity boosts twice and
-                    // could keep a stale generic result above a direct current one.
-                    sources = deduplicateAndRank([ ...freeSources, ...fallback.sources ], query);
-                    break;
-                }
+        if (input.resourceHints?.includes("person") && config.exaApiKey)
+            paidFallbacks.push(["Exa People", exaPeopleSearch, 0.007 * CNY_PER_USD, true]);
+        // One shared fallback chain. An advisory person resource can supply an
+        // additional candidate, but never replace general search or raise budget.
+        for (const [name, adapter, estimatedCost, configured] of paidFallbacks) {
+            if (!configured || searchCostCny + estimatedCost > config.budgetCny) continue;
+            requireRetrieval("search");
+            const fallback = await runAdapter(name, adapter, focusedQuery, config, fetcher);
+            // These are conservative configured-rate estimates, including
+            // uncertain failed requests. They are not provider-confirmed bills.
+            searchCostCny += estimatedCost;
+            if (fallback.warning) warnings.push(fallback.warning);
+            if (fallback.sources.length > 0) {
+                sources = deduplicateAndRank([...freeSources, ...fallback.sources], query);
+                break;
             }
         }
     }
@@ -1264,13 +1357,20 @@ export async function searchReadWeaveEvidence(
     input: SearchInput,
     options: { fetcher?: FetchLike; bypassCache?: boolean; signal?: AbortSignal } = {}
 ): Promise<ReadWeaveSearchEvidence> {
-    options.signal?.throwIfAborted();
+    checkCancellation(options.signal);
     const config = getReadWeaveSearchRuntimeConfig();
     const normalized = normalizeQuery(input.query);
+    if (!canRetrieve("search", options.signal)) return {
+        used: false, query: normalized, sources: [], providers: [], memo: "",
+        warnings: [], elapsedMs: 0, cacheHit: false, searchCostCny: 0
+    };
+    const scoped = searchPolicy.getStore();
     const cacheKey = JSON.stringify({
         query: normalized.toLocaleLowerCase(),
         context: plainText(input.context, 600).toLocaleLowerCase(),
-        kind: input.kind,
+        resourceHints: input.resourceHints,
+        scopedPermissions: scoped?.policies.map(({ externalSearch, allowedSourceScopes, allowedCapabilities }) =>
+            ({ externalSearch, allowedSourceScopes, allowedCapabilities })),
         localEvidenceSufficient: !!input.localEvidenceSufficient,
         allowPaid: input.allowPaid !== false,
         forcePaidFallback: input.forcePaidFallback === true,
@@ -1288,89 +1388,37 @@ export async function searchReadWeaveEvidence(
         ]
     });
     if (!options.bypassCache) {
-        const cached = cache.get(cacheKey);
+        const cached = (scoped?.cache ?? cache).get(cacheKey);
         if (cached && cached.expiresAt > Date.now()) {
             return { ...cached.value, elapsedMs: 0, cacheHit: true, searchCostCny: 0 };
         }
-        const existing = options.signal ? undefined : inFlight.get(cacheKey);
+        const existing = options.signal || scoped ? undefined : inFlight.get(cacheKey);
         if (existing) return { ...(await existing), cacheHit: true, searchCostCny: 0 };
     }
-    const baseFetcher = options.fetcher ?? fetch;
-    const fetcher: FetchLike = options.signal
-        ? (resource, init: RequestInit = {}) => baseFetcher(resource, {
-            ...init,
-            signal: init.signal ? AbortSignal.any([ options.signal!, init.signal ]) : options.signal
-        })
-        : baseFetcher;
+    const fetcher = policyFetcher(options.fetcher, options.signal);
     const operation = searchUncached(input, fetcher);
-    if (!options.signal) inFlight.set(cacheKey, operation);
+    if (!options.signal && !scoped) inFlight.set(cacheKey, operation);
     try {
         const result = await operation;
-        options.signal?.throwIfAborted();
+        checkCancellation(options.signal);
         if (result.used) putCache(cacheKey, result);
         return result;
     } finally {
-        if (!options.signal) inFlight.delete(cacheKey);
+        if (!options.signal && !scoped) inFlight.delete(cacheKey);
     }
 }
 
 export function buildReadWeaveSearchVariants(query: string): string[] {
     const normalized = normalizeQuery(query);
-    if (!normalized) return [];
-    const variants = [ normalized ];
-    const doi = normalized.match(/\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+\b/iu)?.[0];
-    if (doi) {
-        variants.push(doi, `"${doi}" DOI publication`);
-    }
-    const latinPerson = normalized.match(/\b[A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,3}\b/u)?.[0];
-    const chinesePerson = normalized.match(/^([\p{Script=Han}·]{2,8})(?=\s|是谁|是何人|现任|任职)/u)?.[1];
-    const person = latinPerson || chinesePerson;
-    if (person && isPersonProfileQuery(normalized)) {
-        variants.push(
-            person,
-            `${person} official faculty profile current affiliation`,
-            `${person} ORCID researcher`
-        );
-    }
-    const abbreviation = normalized.match(/\b[A-Z][A-Z0-9.-]{1,15}\b/u)?.[0];
-    if (abbreviation && !doi && !/\bdblp\b/iu.test(normalized)) {
-        variants.push(
-            `${abbreviation} official definition full name`,
-            `${abbreviation} acronym history official`
-        );
-    }
-    return Array.from(new Set(variants.map(item => normalizeQuery(item)).filter(Boolean)));
+    // Evidence-need scheduling supplies alternatives explicitly.
+    return normalized ? [normalized] : [];
 }
 
 export async function searchReadWeaveEvidencePlan(
     input: SearchInput,
     options: { fetcher?: FetchLike; bypassCache?: boolean; signal?: AbortSignal } = {}
 ): Promise<ReadWeaveSearchEvidence> {
-    options.signal?.throwIfAborted();
-    const startedAt = Date.now();
-    const variants = buildReadWeaveSearchVariants(input.query);
-    if (variants.length <= 1) return searchReadWeaveEvidence(input, options);
-    const results = await Promise.all(variants.map((query, index) => searchReadWeaveEvidence({
-        ...input,
-        query,
-        allowPaid: index === 0 ? input.allowPaid : false
-    }, options)));
-    options.signal?.throwIfAborted();
-    const sources = deduplicateAndRank(results.flatMap(result => result.sources), input.query);
-    return {
-        used: sources.length > 0,
-        query: normalizeQuery(input.query),
-        sources,
-        providers: Array.from(new Set(sources.map(item => item.provider))),
-        memo: buildEvidenceMemo(
-            variants.map((variant, index) => `${index + 1}. ${variant}`).join("\n"),
-            sources
-        ),
-        warnings: Array.from(new Set(results.flatMap(result => result.warnings))),
-        elapsedMs: Date.now() - startedAt,
-        cacheHit: results.every(result => result.cacheHit),
-        searchCostCny: results.reduce((sum, result) => sum + result.searchCostCny, 0)
-    };
+    return searchReadWeaveEvidence(input, options);
 }
 
 export async function testReadWeaveSearch(query: string): Promise<ReadWeaveSearchTestResult> {

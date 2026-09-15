@@ -1,5 +1,5 @@
 import type {
-    ReadWeaveAnswerPlan, ReadWeaveQuestionContract, ReadWeaveContentType
+    ReadWeaveAnswerPlan, ReadWeaveQuestionContract, ReadWeaveContentType, ReadWeaveTaskContract
 } from "@triliumnext/commons";
 
 function answerTypeFor(contract: ReadWeaveQuestionContract): ReadWeaveAnswerPlan["answerType"] {
@@ -52,11 +52,65 @@ function explicitExclusion(clause: string): boolean {
     return /^\s*(?:请)?(?:不要|不必|无需|不用|禁止|不得|请勿|别|不(?:介绍|展开|讨论|解释|涉及|包含|添加))/u.test(clause);
 }
 
+function taskAnswerPlan(
+    contract: ReadWeaveQuestionContract,
+    taskContract: ReadWeaveTaskContract,
+    autoApplied: boolean
+): ReadWeaveAnswerPlan {
+    // The proposal is validated upstream. Hints describe tasks; they do not select templates.
+    const { proposal } = taskContract.interpretation;
+    const proposedPlan = proposal.answerPlan;
+    const root = taskContract.rootRequirement.instruction;
+    const tasksById = new Map(proposal.tasks.map(task => [ task.id, task ]));
+    const orderedIds = new Set([
+        ...(proposedPlan?.orderedTaskIds ?? []),
+        ...proposal.tasks.map(task => task.id)
+    ]);
+    const tasks = [ ...orderedIds ].flatMap(id => {
+        const task = tasksById.get(id);
+        return task ? [ task ] : [];
+    });
+    const steps = tasks.map(task => task.expectedDeliverable.trim() || task.instruction.trim() || "直接回答问题");
+    if (steps.length === 0) steps.push("直接回答问题");
+
+    return {
+        version: 1,
+        reviewStatus: autoApplied ? "auto-applied" : "draft",
+        answerType: "general",
+        objective: proposedPlan?.objective.trim() || root,
+        // A partial interpretation must never replace the original request.
+        answerRequirements: [ ...new Set([
+            root,
+            ...(proposal.requirements?.filter(requirement => requirement.mustAddress)
+                .map(requirement => requirement.instruction) ?? []),
+            ...(proposedPlan?.requiredPoints ?? []),
+            ...tasks.map(task => task.instruction),
+            ...steps
+        ].filter(point => point.trim())) ],
+        exclusions: [ ...new Set([
+            ...[ root, contract.normalizedQuestion ].flatMap(question => question.split(/[，,。；;！？?\n]/u)
+                .filter(explicitExclusion).map(clause => clause.trim())),
+            ...contract.exclusions,
+            ...(proposedPlan?.exclusions ?? [])
+        ]) ],
+        searchQueries: contract.searchQueries,
+        steps,
+        summary: steps.join(" → "),
+        autoApplied,
+        provenance: [ {
+            kind: "local",
+            note: "根据原始请求和已验证的任务提案确定回答顺序"
+        } ]
+    };
+}
+
 export function buildReadWeaveAnswerPlan(
     contract: ReadWeaveQuestionContract,
     autoApplied = true,
     contentType?: ReadWeaveContentType
 ): ReadWeaveAnswerPlan {
+    if (contract.taskContract) return taskAnswerPlan(contract, contract.taskContract, autoApplied);
+
     const summarySteps = contentType === "key-point" ? [
         "提取选区中的独立知识点，不补外部背景",
         "每项保留对应数值、否定、条件与关系，按原有顺序输出列表"

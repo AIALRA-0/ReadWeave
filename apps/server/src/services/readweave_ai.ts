@@ -11,7 +11,7 @@ import type {
 } from "@triliumnext/commons";
 import { ValidationError } from "@triliumnext/core";
 
-import { readWeaveModelRates, READWEAVE_PRICING_VERSION } from "./readweave_budget.js";
+import { READWEAVE_PRICING_VERSION, readWeaveModelRates } from "./readweave_budget.js";
 import { selectReadWeaveContext } from "./readweave_engine.js";
 import { formatReadWeavePersonNameOrder } from "./readweave_format.js";
 import { getPublishedReadWeaveHarnessProfile } from "./readweave_harness.js";
@@ -22,7 +22,7 @@ import {
 import { getReadWeaveRuntimeConfig } from "./readweave_settings.js";
 import { HUMAN_READABLE_CHINESE_STYLE_CONTRACT } from "./readweave_style_contract.js";
 import { KNOWN_ENTITY_NAMING_NOTES, KNOWN_PRODUCT_CANONICAL_FORMS } from "./readweave_term_catalog.js";
-import { generateUnifiedReadWeaveAnswer } from "./readweave_unified_ai.js";
+import { generateUnifiedReadWeaveAnswer, type ReadWeaveUnifiedExecutionContext } from "./readweave_unified_ai.js";
 
 interface ChatCompletionResponse {
     model?: string;
@@ -254,6 +254,12 @@ export interface ReadWeaveTaskProfile {
 }
 
 export interface ReadWeaveQualityOptions {
+    /** Keep catalog meaning assertions isolated from the open-domain writer. */
+    openDomain?: boolean;
+    /** Server-preserved request, before model normalization can omit constraints. */
+    originalQuestion?: string;
+    /** Original, unnormalized article evidence; a catalog token alone is not evidence. */
+    articleContext?: string;
     kind?: ReadWeaveGenerateRequest["kind"];
     subject?: string;
     knowledgeScope?: ReadWeaveTaskProfile["knowledgeScope"];
@@ -1621,6 +1627,7 @@ export function findReadWeaveQualityIssues(
     options: ReadWeaveQualityOptions = {}
 ): string[] {
     const kind = options.kind ?? "question";
+    if (options.openDomain) objective = options.originalQuestion ?? objective;
     const issues = new Set(findReadWeaveBaseQualityIssues(
         body,
         objective,
@@ -1628,7 +1635,8 @@ export function findReadWeaveQualityIssues(
         options.subject,
         options.termIdentity,
         options.verifiedNonExpandableArtifact,
-        options.entityType
+        options.entityType,
+        options.openDomain
     ));
     if (objective.trim()) {
         for (const issue of findProfessionalAnswerIssues(body, objective, kind)) issues.add(issue);
@@ -1649,7 +1657,7 @@ export function findReadWeaveQualityIssues(
         issues.add("回答包含被删词后留下的连接词残片，或相邻语义单元缺少分隔符");
         issues.add(`连接词残片位置：${malformedConnector}`);
     }
-    if (UNGROUNDED_SIGNIFICANCE_OR_STABILITY_PATTERN.test(body)
+    if (!options.openDomain && UNGROUNDED_SIGNIFICANCE_OR_STABILITY_PATTERN.test(body)
         && !/(?:显著性|置信区间|统计检验|假设检验|p\s*[<=>]|方差|标准差|误差范围)/iu.test(body)
         && !/(?:显著性|是否显著|稳定性|是否稳定)/u.test(objective)) {
         issues.add("回答在没有统计检验或稳定性证据时声称结果显著或稳定");
@@ -1659,7 +1667,7 @@ export function findReadWeaveQualityIssues(
         && !QUESTION_SHAPE_ANSWER_PATTERN.test(body.normalize("NFKC").slice(0, 320))) {
         issues.add("问题询问对象的具体形态，但回答只讲作用或机制，没有说明对象以何种物理或逻辑形式存在");
     }
-    if (kind === "question"
+    if (!options.openDomain && kind === "question"
         && /(?<![\p{Script=Latin}\p{N}_])DAX(?![\p{Script=Latin}\p{N}_])/u.test(objective)
         && /(?:是什么意思|是什么|指什么|什么是|是啥|定义)/u.test(objective)
         && (!/(?:Linux|操作系统内核|内核)/u.test(body)
@@ -1751,6 +1759,22 @@ export function findReadWeaveQualityIssues(
             issues.add("定义开头堆叠了多层机制动作，应先讲通俗作用再展开技术机制");
         }
     }
+    // These checks describe observable text and request obligations, not a
+    // catalog's preferred answer. Run them before the legacy semantic rubrics.
+    for (const issue of findReadWeaveCommonSurfaceIssues(body, kind, definitionShaped, options)) issues.add(issue);
+    if (options.openDomain) {
+        const evidence = `${objective}\n${options.articleContext ?? ""}`;
+        // An explicit absence of a test can contradict an asserted test result.
+        // Ordinary convergence/stability language is not statistical significance.
+        const noStatisticalTest = /(?:未|没有|尚未)(?:做|进行|实施)?(?:过)?统计检验/u.test(evidence);
+        const positiveSignificance = body.split(/[。；\n]/u).some(clause =>
+            /(?:统计上显著|具有统计显著性|达到统计显著)/u.test(clause)
+            && !/(?:不|未|无|没有|不能|无法|尚不|尚未|是否|假设|如果)/u.test(clause));
+        if (noStatisticalTest && positiveSignificance) {
+            issues.add("原问题或文章明确未进行统计检验，回答却断言具有统计显著性");
+        }
+        return Array.from(issues);
+    }
     if (knowledgeScope === "general") {
         const normalizedBody = body.normalize("NFKC");
         const taskText = `${objective}\n${options.subject ?? ""}`.normalize("NFKC");
@@ -1840,12 +1864,6 @@ export function findReadWeaveQualityIssues(
         if (generalPersonOverview && GENERAL_PERSON_LOWERCASE_ENGLISH_NAME_PATTERN.test(normalizedBody)) {
             issues.add("人物介绍中的普通英文名称没有使用规范首字母大写，或该英文名称并非必要");
         }
-        if (kind === "term" && RUN_ON_DEFINITION_BOUNDARY_PATTERN.test(normalizedBody)) {
-            issues.add("定义中的用途、组件或阶段边界缺少分隔符，句意发生粘连");
-        }
-        if (definitionShaped && GENERAL_DEFINITION_RUN_ON_ENTITY_PATTERN.test(normalizedBody)) {
-            issues.add("定义中的相邻实体职责缺少分隔符，句意发生粘连");
-        }
         if (kind === "term" && GENERAL_DEFINITION_PROMOTIONAL_CLAIM_PATTERN.test(normalizedBody)) {
             issues.add("通用定义包含无助于解释主体的宣传性或主观等级表述");
         }
@@ -1862,16 +1880,10 @@ export function findReadWeaveQualityIssues(
         if (definitionShaped && GENERAL_DEFINITION_NEGATIVE_SCOPE_BLOAT_PATTERN.test(normalizedBody)) {
             issues.add("通用定义加入了无助于识别主体的否定职责清单");
         }
-        if (kind === "term"
+        if (!options.openDomain && kind === "term"
             && options.subject?.normalize("NFKC").trim().toLocaleUpperCase() === "GPU"
             && !/并行/u.test(normalizedBody)) {
             issues.add("定义遗漏了所选术语的核心区别特征");
-        }
-        if (kind === "term" && DEFINITION_RUN_ON_METRIC_PATTERN.test(normalizedBody)) {
-            issues.add("定义中的相邻指标缺少分隔符，句意发生粘连");
-        }
-        if (definitionShaped && DEFINITION_PRONOUN_PREDICATE_PATTERN.test(normalizedBody)) {
-            issues.add("定义主语后直接连接代词谓语，句法不完整");
         }
         if (kind === "term"
             && options.entityType !== "person"
@@ -1881,23 +1893,9 @@ export function findReadWeaveQualityIssues(
         }
     }
     const normalizedFullBody = body.normalize("NFKC");
-    const proseSyntaxBody = normalizedFullBody.replace(
-        /\$\$[\s\S]*?\$\$|\$(?!\$)[^$\n]+?\$|`[^`\n]*`|https?:\/\/[^\s]+/gu,
-        ""
-    );
-    if (MALFORMED_MIXED_BILINGUAL_PARENTHETICAL_PATTERN.test(proseSyntaxBody)) {
-        issues.add("括号内混入了中文重复名称、逗号和英文全称，未使用统一的中英文名称格式");
-    }
-    if (MIXED_SCRIPT_PARENTHETICAL_PATTERN.test(proseSyntaxBody)) {
-        issues.add("括号内混合了中文与英文片段，应改为中文名称（English Name）或纯中文说明");
-    }
-    const repeatedFullName = options.termIdentity?.chineseName && options.termIdentity?.englishName
-        ? `${options.termIdentity.chineseName}（${options.termIdentity.englishName}）`.normalize("NFKC")
-        : "";
-    if (definitionShaped && repeatedFullName
-        && new RegExp(`全称(?:是|为)\\s*${escapeTermDefinitionPattern(repeatedFullName)}`, "u").test(normalizedFullBody)) {
-        issues.add("规范中英文名称已经出现，不应再用“全称为”重复一次");
-    }
+    // Catalog facts and fixed-topic completeness rubrics below are legacy-only.
+    // The open-domain route checks semantic support/coverage against its task
+    // and evidence, never by entering one of these named-topic branches.
     if (kind === "term"
         && options.subject?.normalize("NFKC").trim().toLocaleUpperCase() === "REST") {
         if (!/(?:架构|约束)/u.test(normalizedFullBody)
@@ -1947,10 +1945,6 @@ export function findReadWeaveQualityIssues(
         issues.add("芯粒定义遗漏了独立晶粒通过封装互连组合成系统这一核心特征");
     }
     if (kind === "term"
-        && /(?:操作|性质|特征|结果|机制|分解|矩阵|方法|系统|协议|模型|步骤|过程)该对象/u.test(normalizedFullBody)) {
-        issues.add("定义中的相邻语义单元与“该对象”粘连，句意不通");
-    }
-    if (kind === "term"
         && options.subject?.normalize("NFKC").trim() === "边可分性"
         && /(?:图论与网络分析|边介数|移除该边|最短路径比例)/u.test(normalizedFullBody)) {
         issues.add("边可分性定义加入了选区未支持的泛化图论义项或相邻指标");
@@ -1995,6 +1989,43 @@ export function findReadWeaveQualityIssues(
     return Array.from(issues);
 }
 
+function findReadWeaveCommonSurfaceIssues(
+    body: string, kind: ReadWeaveGenerateRequest["kind"], definitionShaped: boolean, options: ReadWeaveQualityOptions
+): string[] {
+    const issues: string[] = [];
+    const normalizedBody = body.normalize("NFKC");
+    const prose = normalizedBody.replace(/\$\$[\s\S]*?\$\$|\$(?!\$)[^$\n]+?\$|`[^`\n]*`|https?:\/\/[^\s]+/gu, "");
+    if (MALFORMED_MIXED_BILINGUAL_PARENTHETICAL_PATTERN.test(prose)) {
+        issues.push("括号内混入了中文重复名称、逗号和英文全称，未使用统一的中英文名称格式");
+    }
+    if (MIXED_SCRIPT_PARENTHETICAL_PATTERN.test(prose)) {
+        issues.push("括号内混合了中文与英文片段，应改为中文名称（English Name）或纯中文说明");
+    }
+    const repeatedFullName = options.termIdentity?.chineseName && options.termIdentity?.englishName
+        ? `${options.termIdentity.chineseName}（${options.termIdentity.englishName}）`.normalize("NFKC") : "";
+    if (definitionShaped && repeatedFullName
+        && new RegExp(`全称(?:是|为)\\s*${escapeTermDefinitionPattern(repeatedFullName)}`, "u").test(normalizedBody)) {
+        issues.push("规范中英文名称已经出现，不应再用“全称为”重复一次");
+    }
+    if (kind === "term" && RUN_ON_DEFINITION_BOUNDARY_PATTERN.test(normalizedBody)) {
+        issues.push("定义中的用途、组件或阶段边界缺少分隔符，句意发生粘连");
+    }
+    if (definitionShaped && GENERAL_DEFINITION_RUN_ON_ENTITY_PATTERN.test(normalizedBody)) {
+        issues.push("定义中的相邻实体职责缺少分隔符，句意发生粘连");
+    }
+    if (kind === "term" && DEFINITION_RUN_ON_METRIC_PATTERN.test(normalizedBody)) {
+        issues.push("定义中的相邻指标缺少分隔符，句意发生粘连");
+    }
+    if (definitionShaped && DEFINITION_PRONOUN_PREDICATE_PATTERN.test(normalizedBody)) {
+        issues.push("定义主语后直接连接代词谓语，句法不完整");
+    }
+    if (kind === "term"
+        && /(?:操作|性质|特征|结果|机制|分解|矩阵|方法|系统|协议|模型|步骤|过程)该对象/u.test(normalizedBody)) {
+        issues.push("定义中的相邻语义单元与“该对象”粘连，句意不通");
+    }
+    return issues;
+}
+
 function findReadWeaveBaseQualityIssues(
     body: string,
     objective: string,
@@ -2002,7 +2033,8 @@ function findReadWeaveBaseQualityIssues(
     subject?: string,
     termIdentity?: Partial<ReadWeaveTermIdentity>,
     verifiedNonExpandableArtifact?: ReadWeaveVerifiedNonExpandableArtifact,
-    entityType?: ReadWeaveEvidencePlan["entityType"]
+    entityType?: ReadWeaveEvidencePlan["entityType"],
+    openDomain = false
 ): string[] {
     const issues = new Set<string>();
     const normalizedBody = body.trim();
@@ -2085,7 +2117,7 @@ function findReadWeaveBaseQualityIssues(
             issues.add("方法原名后的定义重复了完整中文功能名称，没有说明机制或边界");
         }
     }
-    if (kind === "term" && subject && /[-‐–—‑−]/u.test(subject) && /\d/u.test(subject)
+    if (!openDomain && kind === "term" && subject && /[-‐–—‑−]/u.test(subject) && /\d/u.test(subject)
         && new RegExp(`[（(]\\s*${escapeTermDefinitionPattern(subject)}\\s*[）)]`, "iu").test(normalizedBody)) {
         issues.add("方法或系统代号被错误放入英文全称括号；没有经核验的英文全称时必须以代号直接起句");
     }
@@ -2150,7 +2182,7 @@ function findReadWeaveBaseQualityIssues(
     // Only validate known product names deterministically. A greedy Latin-word
     // matcher cannot distinguish a technical term from an author, paper title,
     // venue or degree and previously produced dozens of false positives.
-    for (const product of NON_EXPANDABLE_PRODUCT_NAMES) {
+    for (const product of openDomain ? [] : NON_EXPANDABLE_PRODUCT_NAMES) {
         let index = normalizedBody.indexOf(product);
         while (index >= 0) {
             if (!isInsideCanonicalEnglishName(normalizedBody, index, product)
@@ -2160,27 +2192,27 @@ function findReadWeaveBaseQualityIssues(
             index = normalizedBody.indexOf(product, index + product.length);
         }
     }
-    if (UNGROUNDED_HYPOTHETICAL_PATTERNS.some(pattern => pattern.test(normalizedBody))) {
+    if (!openDomain && UNGROUNDED_HYPOTHETICAL_PATTERNS.some(pattern => pattern.test(normalizedBody))) {
         issues.add("答案包含无证据的假设或估算");
     }
-    if (MARKETING_PERFORMANCE_PATTERNS.some(pattern => pattern.test(normalizedBody))) {
+    if (!openDomain && MARKETING_PERFORMANCE_PATTERNS.some(pattern => pattern.test(normalizedBody))) {
         issues.add("答案包含用户未要求的营销式性能数字");
     }
-    if (!/(?:官方|正式|校验|验证|认证|标准|规范|来源|出处|证据)/u.test(objective)
+    if (!openDomain && !/(?:官方|正式|校验|验证|认证|标准|规范|来源|出处|证据)/u.test(objective)
         && UNREQUESTED_OFFICIAL_NEGATIVE_PATTERN.test(normalizedBody)) {
         issues.add("答案包含用户未要求的官方性、标准化或校验负面附注");
     }
-    if (!/(?:来源|文献|论文|作者|引用|出处|哪年|年份)/u.test(objective) && ACADEMIC_CITATION_PATTERN.test(normalizedBody)) {
+    if (!openDomain && !/(?:来源|文献|论文|作者|引用|出处|哪年|年份)/u.test(objective) && ACADEMIC_CITATION_PATTERN.test(normalizedBody)) {
         issues.add("答案包含用户未要求的论文作者或年份引用");
     }
     const generalDefinitionQuestion = kind === "question"
         && /(?:是什么意思|是什么|指什么|什么是|请解释|解释一下)/u.test(objective)
         && !EXPLICIT_CONTEXT_SCOPE_PATTERN.test(objective);
-    if (generalDefinitionQuestion
+    if (!openDomain && generalDefinitionQuestion
         && hasOutOfScopeTermBibliographicMetadata(normalizedBody, subject, termIdentity)) {
         issues.add("通用解释包含题目未要求的论文题名、作者、年份或出版信息");
     }
-    if (generalDefinitionQuestion
+    if (!openDomain && generalDefinitionQuestion
         && !EXPLICIT_QUANTIFICATION_REQUEST_PATTERN.test(objective)
         && /(?:实验结果|实验表明|性能提升|性能提高|减少|降低)[^；。\n]{0,80}\d+(?:\.\d+)?\s*[%％]/u.test(normalizedBody)) {
         issues.add("通用解释被题目未要求的论文实验数据和性能数字劫持");
@@ -2193,7 +2225,8 @@ function findReadWeaveBaseQualityIssues(
         && /(?:权衡|机制|方法|边界)实验结果/u.test(normalizedBody)) {
         issues.add("通用解释中的定义、机制与实验结果缺少清晰分隔");
     }
-    for (const [ sourceName, canonical ] of KNOWN_PRODUCT_CANONICAL_FORMS) {
+    // Generic abbreviation syntax is checked above, without catalog meanings.
+    for (const [ sourceName, canonical ] of openDomain ? [] : KNOWN_PRODUCT_CANONICAL_FORMS) {
         const identity = parseFormattedReadWeaveTermIdentity(canonical);
         if (!identity?.abbreviation || !identity.chineseName || !identity.englishName
             || !hasStandaloneEnglishItemMention(normalizedBody, sourceName)) continue;
@@ -2246,7 +2279,7 @@ function findReadWeaveBaseQualityIssues(
     }
     if (kind === "term") {
         const validatedIdentity = termIdentity ? validateReadWeaveTermIdentity(termIdentity) : undefined;
-        const knownIdentity = knownCanonicalTermIdentity(subject);
+        const knownIdentity = openDomain ? undefined : knownCanonicalTermIdentity(subject);
         if (validatedIdentity && knownIdentity
             && ([ "abbreviation", "chineseName", "englishName" ] as const).some(field =>
                 normalizeTermIdentityPart(validatedIdentity[field])
@@ -2272,20 +2305,22 @@ function findReadWeaveBaseQualityIssues(
             || isEntityShapedButContentFreeDefinition(normalizedBody)) {
             issues.add("定义只是同义反复，没有说明对象角色或边界");
         }
-        if (UNRESOLVED_TERM_DEFINITION_PATTERNS.some(pattern => pattern.test(normalizedBody))) {
-            issues.add("定义仍保留多个可能义项，尚未完成当前语境消歧");
-        }
-        if (hasOutOfScopeTermBibliographicMetadata(normalizedBody, subject, termIdentity)) {
-            issues.add("定义包含无助于解释术语的履历或书目元数据");
-        }
-        if (TERM_SCOPE_BLOAT_PATTERN.test(normalizedBody)) {
-            issues.add("定义包含无助于解释术语的历史、城市、赞助或主席等范围外信息");
-        }
-        if (TERM_DEFINITION_META_EXCLUSION_PATTERN.test(normalizedBody)) {
-            issues.add("定义包含只用于消歧的排除性元说明，应只保留主体的正面定义");
-        }
-        if (hasOutOfScopeTermNegativeAnnotation(normalizedBody, entityType)) {
-            issues.add(TERM_PERIPHERAL_NEGATIVE_ANNOTATION_ISSUE);
+        if (!openDomain) {
+            if (UNRESOLVED_TERM_DEFINITION_PATTERNS.some(pattern => pattern.test(normalizedBody))) {
+                issues.add("定义仍保留多个可能义项，尚未完成当前语境消歧");
+            }
+            if (hasOutOfScopeTermBibliographicMetadata(normalizedBody, subject, termIdentity)) {
+                issues.add("定义包含无助于解释术语的履历或书目元数据");
+            }
+            if (TERM_SCOPE_BLOAT_PATTERN.test(normalizedBody)) {
+                issues.add("定义包含无助于解释术语的历史、城市、赞助或主席等范围外信息");
+            }
+            if (TERM_DEFINITION_META_EXCLUSION_PATTERN.test(normalizedBody)) {
+                issues.add("定义包含只用于消歧的排除性元说明，应只保留主体的正面定义");
+            }
+            if (hasOutOfScopeTermNegativeAnnotation(normalizedBody, entityType)) {
+                issues.add(TERM_PERIPHERAL_NEGATIVE_ANNOTATION_ISSUE);
+            }
         }
         const expectedSubject = verifiedNonExpandableArtifact?.originalName
             || (standaloneArtifactCodeIdentity ? subject?.trim() : "")
@@ -2307,38 +2342,37 @@ function findReadWeaveBaseQualityIssues(
         ).test(normalizedBody)) {
             issues.add("定义只写了适用边界，没有先说明对象的核心角色或机制");
         }
-        if (/(?:计算公式|公式)(?:为|是)?[^；\n]{0,80}(?:股价|市场价格)\s*每股收益/u.test(normalizedBody)
+        if (!openDomain && /(?:计算公式|公式)(?:为|是)?[^；\n]{0,80}(?:股价|市场价格)\s*每股收益/u.test(normalizedBody)
             && !/(?:计算公式|公式)(?:为|是)?[^；\n]{0,80}(?:除以|÷|\/)/u.test(normalizedBody)) {
             issues.add("比率公式缺少除法运算符");
         }
-        if (subject?.normalize("NFKC").trim().toLocaleUpperCase() === "P/E"
-            && /(?:收回投资|回本|回收期)/u.test(normalizedBody)) {
-            issues.add("市盈率被误写成投资回收期");
-        }
-        if (subject?.normalize("NFKC").trim().toLocaleUpperCase() === "P/E"
-            && !/(?:股价|市场价格)[^；\n]{0,30}(?:除以|÷|\/)[^；\n]{0,30}每股收益/u.test(normalizedBody)) {
-            issues.add("市盈率定义遗漏价格除以每股收益这一核心关系");
-        }
-        if (subject?.normalize("NFKC").trim().toLocaleUpperCase() === "MRNA"
-            && (!/(?:遗传信息|信息传递|翻译模板|蛋白质翻译|指导核糖体|连接基因与蛋白质|基因表达)/u.test(normalizedBody)
-                || !/(?:蛋白质|翻译|多肽|组装氨基酸)/u.test(normalizedBody))) {
-            issues.add("信使核糖核酸定义遗漏遗传信息到蛋白质翻译的核心角色");
-        }
-        if (subject?.normalize("NFKC").trim().toLocaleUpperCase() === "TLS"
-            && /(?:运行在表示层|由两层组成|前身是安全套接层)/u.test(normalizedBody)) {
-            issues.add("传输层安全协议定义加入了不准确或无关的分层与历史说明");
-        }
-        if (subject?.normalize("NFKC").trim().toLocaleUpperCase() === "TLS"
-            && !/(?:身份认证|身份验证|认证|真实性)/u.test(normalizedBody)) {
-            issues.add("传输层安全协议定义遗漏身份认证目标");
-        }
-        // A verified name still does not prove that the predicate defines the
-        // same entity. Keep the class gate active so a nearby journal, circuit
-        // or other homonym cannot inherit a canonical organization/conference
-        // label and pass as a fluent but semantically wrong definition.
-        if (subject && termIdentity
-            && !termDefinitionMatchesIdentityClass(normalizedBody, termIdentity)) {
-            issues.add("结构化名词身份与定义正文的实体类别或义项不一致");
+        if (!openDomain) {
+            if (subject?.normalize("NFKC").trim().toLocaleUpperCase() === "P/E"
+                && /(?:收回投资|回本|回收期)/u.test(normalizedBody)) {
+                issues.add("市盈率被误写成投资回收期");
+            }
+            if (subject?.normalize("NFKC").trim().toLocaleUpperCase() === "P/E"
+                && !/(?:股价|市场价格)[^；\n]{0,30}(?:除以|÷|\/)[^；\n]{0,30}每股收益/u.test(normalizedBody)) {
+                issues.add("市盈率定义遗漏价格除以每股收益这一核心关系");
+            }
+            if (subject?.normalize("NFKC").trim().toLocaleUpperCase() === "MRNA"
+                && (!/(?:遗传信息|信息传递|翻译模板|蛋白质翻译|指导核糖体|连接基因与蛋白质|基因表达)/u.test(normalizedBody)
+                    || !/(?:蛋白质|翻译|多肽|组装氨基酸)/u.test(normalizedBody))) {
+                issues.add("信使核糖核酸定义遗漏遗传信息到蛋白质翻译的核心角色");
+            }
+            if (subject?.normalize("NFKC").trim().toLocaleUpperCase() === "TLS"
+                && /(?:运行在表示层|由两层组成|前身是安全套接层)/u.test(normalizedBody)) {
+                issues.add("传输层安全协议定义加入了不准确或无关的分层与历史说明");
+            }
+            if (subject?.normalize("NFKC").trim().toLocaleUpperCase() === "TLS"
+                && !/(?:身份认证|身份验证|认证|真实性)/u.test(normalizedBody)) {
+                issues.add("传输层安全协议定义遗漏身份认证目标");
+            }
+            // Legacy class rubrics are not evidence about an open-domain referent.
+            if (subject && termIdentity
+                && !termDefinitionMatchesIdentityClass(normalizedBody, termIdentity)) {
+                issues.add("结构化名词身份与定义正文的实体类别或义项不一致");
+            }
         }
         if (termIdentity?.englishName && !termIdentity.chineseName && !termIdentity.abbreviation
             && !personIdentity) {
@@ -7513,9 +7547,11 @@ async function generateLowCostReadWeaveAnswer(
 export async function generateReadWeaveAnswer(
     request: ReadWeaveGenerateRequest,
     onProgress?: (progress: ReadWeaveGenerationProgress) => void,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    execution?: ReadWeaveUnifiedExecutionContext
 ): Promise<ReadWeaveGenerateResponse> {
     validateRequest(request);
+    const originalRequest = structuredClone(execution?.originalRequest ?? request);
     request = normalizeReadWeaveRequestText(request);
     validateRequest(request);
     let progressRound = 0;
@@ -7619,19 +7655,18 @@ export async function generateReadWeaveAnswer(
     if (legacyReplayRetired) {
         const harness = getPublishedReadWeaveHarnessProfile();
         const profile = buildReadWeaveTaskProfile(request.kind, request.title);
-        const contextualPerson = request.fragments.some(fragment =>
-            /(?:教授|学者|研究者|科学家|工程师|任职|任教|院士|博士|个人主页|\bprofessor\b|\bresearcher\b|\bscientist\b|\bengineer\b|\bfaculty\b)/iu.test(fragment.text)
-        );
         return generateUnifiedReadWeaveAnswer(request, onProgress,
             (body, objective, kind, termIdentity, verifiedNonExpandableArtifact) =>
                 findReadWeaveQualityIssues(body, objective, {
+                    openDomain: true,
+                    originalQuestion: originalRequest.title,
+                    articleContext: originalRequest.fragments.map(fragment => fragment.text).join("\n"),
                     kind,
                     subject: profile.subject ?? request.title,
                     knowledgeScope: profile.knowledgeScope,
                     termIdentity,
-                    verifiedNonExpandableArtifact,
-                    entityType: contextualPerson ? "person" : undefined
-                }), harness, signal);
+                    verifiedNonExpandableArtifact
+                }), harness, signal, { ...execution, originalRequest });
     }
 
     // Explicitly isolated migration replay only; production and normal tests never enter this branch.

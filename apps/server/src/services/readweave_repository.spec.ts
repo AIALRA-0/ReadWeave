@@ -1,4 +1,6 @@
+import type { ReadWeaveGenerationAudit } from "@triliumnext/commons";
 import { becca, cls, hidden_subtree as hiddenSubtreeService, note_service as noteService } from "@triliumnext/core";
+import { createHash } from "node:crypto";
 import { beforeAll, describe, expect, it } from "vitest";
 
 import {
@@ -8,10 +10,12 @@ import {
     getAnchorSummaries,
     getEntriesForAnchor,
     getReadWeaveImpact,
+    getReadWeaveObject,
     saveReadWeaveEntry,
     validateReadWeaveFollowUp
 } from "./readweave_repository.js";
 import sqlInit from "./sql_init.js";
+import { captureReadWeaveTask } from "./readweave_task_contract.js";
 
 function professionalAnswer(conclusion: string): string {
     return `${[
@@ -123,6 +127,92 @@ describe("ReadWeave repository", () => {
             expect(exported.integrity).toMatchObject({ valid: true, articleCount: 1, anchorCount: 1, objectCount: 1, linkCount: 1 });
             expect(exported.integrity.contentSha256).toMatch(/^[a-f0-9]{64}$/);
             expect(becca.getNote("_readweaveObjects")).not.toBeNull();
+        });
+    });
+
+    it.each(["article", "all"] as const)("strips only server task contracts from %s exports of reused and revised objects", scope => {
+        cls.init(() => {
+            const sentinel = `PRIVATE_ARTICLE_A_CONTEXT_${scope}`;
+            const firstArticle = noteService.createNewNote({
+                parentNoteId: "root", title: "Portable source A", type: "text", mime: "text/html",
+                content: `<p>Public selection.</p><p>${sentinel}</p>`
+            }).note;
+            const secondArticle = noteService.createNewNote({
+                parentNoteId: "root", title: "Portable destination B", type: "text", mime: "text/html",
+                content: "<p>Destination selection.</p>"
+            }).note;
+            const taskContract = captureReadWeaveTask({
+                articleId: firstArticle.noteId, anchorId: "portable_a", anchorType: "range", kind: "question",
+                title: "Explain the public selection.", fragments: [
+                    { id: "selection", role: "selected", text: "Public selection." },
+                    { id: "article", role: "document", text: sentinel }
+                ]
+            }, false);
+            const publicAudit: ReadWeaveGenerationAudit = {
+                workflowVersion: "unified-evidence-v1",
+                questionContract: {
+                    normalizedQuestion: "Explain the public selection.", objective: "Explain it",
+                    answerRequirements: ["Keep the answer"], exclusions: [], searchQueries: [], requiresCurrentEvidence: false
+                },
+                searchQueries: [], unresolvedClaims: [], validationIssues: [], citationsVerified: false,
+                generatedAt: "2026-01-01T00:00:00.000Z"
+            };
+            const privateAudit = { ...publicAudit, questionContract: { ...publicAudit.questionContract, taskContract } };
+            // Retained/legacy extensions can nest audits in candidates and revisions.
+            // Answer strings mentioning the reserved field are legitimate user content.
+            const candidateBody = 'The JSON field "taskContract" is discussed in this answer.';
+            const audit = {
+                ...privateAudit,
+                candidates: [{ body: candidateBody, audit: privateAudit }],
+                revisions: [{ revision: 0, body: "Keep the previous answer.", candidateAudit: privateAudit }]
+            };
+            const portableAudit = {
+                ...publicAudit,
+                candidates: [{ body: candidateBody, audit: publicAudit }],
+                revisions: [{ revision: 0, body: "Keep the previous answer.", candidateAudit: publicAudit }]
+            };
+            const first = saveReadWeaveEntry({
+                articleId: firstArticle.noteId, anchorId: "portable_a", anchorType: "range", kind: "question",
+                title: "Explain the public selection.", body: "Keep the original answer.", sourceExcerpt: "Public selection.",
+                calloutType: "note", audit,
+                evidenceSources: [{ sourceId: "S1", sourceType: "local", provider: "article", title: "Public evidence",
+                    excerpt: "Public selection.", accessedAt: publicAudit.generatedAt }],
+                claims: [{ claimId: "C1", text: "Keep this claim.", sourceIds: ["S1"], confidence: "high" }]
+            });
+            const second = saveReadWeaveEntry({
+                articleId: secondArticle.noteId, anchorId: "portable_b", anchorType: "range", kind: "question",
+                title: first.title, body: first.body, sourceExcerpt: "Destination selection.", calloutType: "note",
+                reuseObjectId: first.objectId
+            });
+            expect(second.objectId).toBe(first.objectId);
+            const objectNote = becca.getNoteOrThrow(first.objectId);
+            const exportCurrent = (expectedAudit: typeof portableAudit) => {
+                const savedBefore = objectNote.getContent();
+                const revisionsBefore = objectNote.getRevisions().map(revision => revision.getContent());
+                const recordBefore = getReadWeaveObject(first.objectId);
+                const exported = exportReadWeave(scope === "article" ? secondArticle.noteId : undefined);
+                const portableObject = exported.objects.find(object => object.objectId === first.objectId)!;
+                expect(JSON.stringify(exported)).not.toContain(sentinel);
+                expect(portableObject).toEqual({ ...recordBefore, audit: expectedAudit });
+                expect(exported.links.find(link => link.linkId === second.linkId)?.objectId).toBe(first.objectId);
+                expect(exported.integrity.valid).toBe(true);
+                const { articles, anchors, objects, links } = exported;
+                expect(exported.integrity.contentSha256).toBe(createHash("sha256")
+                    .update(JSON.stringify({ articles, anchors, objects, links })).digest("hex"));
+                expect(objectNote.getContent()).toBe(savedBefore);
+                expect(objectNote.getRevisions().map(revision => revision.getContent())).toEqual(revisionsBefore);
+                expect(getReadWeaveObject(first.objectId)).toEqual(recordBefore);
+                expect(recordBefore.audit?.questionContract.taskContract).toEqual(taskContract);
+                expect(first.audit).toEqual(audit);
+            };
+            exportCurrent(portableAudit);
+            const storedRevision = objectNote.saveRevision();
+            expect(storedRevision.getContent()).toContain(sentinel);
+            editReadWeaveLink(first.linkId, {
+                mode: "global", title: first.title, body: "Keep the revised answer.", calloutType: "note"
+            });
+            expect(getReadWeaveObject(first.objectId).revision).toBe(2);
+            exportCurrent({ ...portableAudit, manuallyEdited: true });
         });
     });
 
@@ -451,6 +541,8 @@ describe("ReadWeave repository", () => {
             expect(saved.evidenceSources?.[0]).toMatchObject({ sourceId: "S1", title: "Official source" });
             expect(saved.claims?.[0]).toMatchObject({ claimId: "C1", sourceIds: [ "S1" ] });
             expect(saved.audit?.workflowVersion).toBe("unified-evidence-v1");
+            // Older audits have no taskContract: keep their complete portable shape.
+            expect(exportReadWeave(article.noteId).objects).toEqual([getReadWeaveObject(saved.objectId)]);
         });
     });
 

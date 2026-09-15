@@ -7,14 +7,15 @@ import {
     formatReadWeaveCodeCopies,
     formatReadWeaveDefinitionBlock,
     formatReadWeaveFullNameOpening,
-    groupReadWeaveFormatTargets,
     formatReadWeaveMarkdown,
     formatReadWeaveNameParentheses,
     formatReadWeavePersonNameOrder,
     formatReadWeaveTermReferences,
-    readWeaveFormatIssues,
+    groupReadWeaveFormatTargets,
     readWeaveDisplayFormulas,
+    readWeaveFormatIssues,
     readWeaveNameReviewTargets,
+    type ReadWeaveTermRepairTarget,
     repairReadWeaveConventionalTerms,
     repairReadWeaveFormat,
     repairReadWeaveFormatBatch,
@@ -22,14 +23,166 @@ import {
 import { HUMAN_READABLE_CHINESE_STYLE_CONTRACT, READWEAVE_WRITING_SKILL_REVISION } from "./readweave_style_contract.js";
 import { readWeaveWritingSkill } from "./readweave_writing_skill.js";
 
+describe("occurrence-scoped term meanings", () => {
+    const term = (target: ReadWeaveTermRepairTarget, chineseName: string, englishName: string) => ({
+        occurrenceId: target.occurrenceId, token: target.token, chineseName, englishName,
+        confidence: "high", basis: "established-usage", contextReason: "The supplied occurrence context identifies this meaning"
+    });
+
+    it.each([
+        ["IP", "IP 传输网络数据；IP 可授权给芯片设计公司", "网际协议", "Internet Protocol", "知识产权", "Intellectual Property"],
+        ["GP", "GP 接诊患者；GP 优化芯片线长", "全科医生", "General Practitioner", "全局布局", "Global Placement"]
+    ])("resolves each %s occurrence in one batch even when responses arrive in reverse order", async (token, body, firstChinese, firstEnglish, secondChinese, secondEnglish) => {
+        const resolve = vi.fn(async (targets: ReadWeaveTermRepairTarget[], context) => {
+            expect(targets.map(target => target.token)).toEqual([token, token]);
+            expect(new Set(targets.map(target => target.occurrenceId)).size).toBe(2);
+            expect(targets[0].before).toBe("");
+            expect(targets[1].before).toContain("；");
+            expect(context).toEqual({ question: "比较这两种用法", articleContext: body });
+            return [term(targets[1], secondChinese, secondEnglish), term(targets[0], firstChinese, firstEnglish)];
+        });
+        const result = await repairReadWeaveConventionalTerms(body, "比较这两种用法", resolve, undefined, body);
+        expect(resolve).toHaveBeenCalledTimes(1);
+        expect(result.body).toContain(`${token} ${firstChinese}（${firstEnglish}）`);
+        expect(result.body).toContain(`${token} ${secondChinese}（${secondEnglish}）`);
+        expect(result.warnings).toEqual([]);
+    });
+
+    it("never applies one occurrence's response to an unanswered occurrence", async () => {
+        const result = await repairReadWeaveConventionalTerms("GP 接诊患者；GP 优化芯片线长", "两种用法", async targets =>
+            [term(targets[0], "全科医生", "General Practitioner")]);
+        expect(result.body).toBe("GP 全科医生（General Practitioner）接诊患者；GP 优化芯片线长");
+        expect(result.warnings).toHaveLength(1);
+    });
+
+    it.each(["missing", "duplicate", "wrong-token", "unknown-id", "numeric-id"])("rejects %s occurrence attribution", async mode => {
+        const body = "GP 接诊患者；GP 优化芯片线长";
+        const result = await repairReadWeaveConventionalTerms(body, "两种用法", async targets => {
+            const answer = term(targets[0], "全科医生", "General Practitioner");
+            if (mode === "duplicate") return [answer, answer];
+            if (mode === "wrong-token") return [{ ...answer, token: "IP" }];
+            if (mode === "unknown-id") return [{ ...answer, occurrenceId: "not-an-input-occurrence" }];
+            if (mode === "numeric-id") return [{ ...answer, occurrenceId: 0 }];
+            return [{ ...answer, occurrenceId: undefined }];
+        });
+        expect(result.body).toBe(body);
+        expect(result.knowledgeTerms).toEqual([]);
+        expect(result.warnings).toHaveLength(2);
+    });
+
+    it.each([
+        "IP（Intellectual Property）可授权复用", "IP 知识产权（Intellectual Property）可授权复用",
+        "IP知识产权（Intellectual Property）可授权复用", "IP 知识产权(Intellectual Property)可授权复用"
+    ])("protects an explicit alternate label while resolving a separate bare token: %s", async alternate => {
+        const resolve = vi.fn(async (targets: ReadWeaveTermRepairTarget[]) => {
+            expect(targets).toHaveLength(1);
+            return [term(targets[0], "网际协议", "Internet Protocol")];
+        });
+        const result = await repairReadWeaveConventionalTerms(`IP 负责网络传输；${alternate}`, "比较用法", resolve);
+        expect(result.body).toBe(`IP 网际协议（Internet Protocol）负责网络传输；${alternate}`);
+        expect(result.warnings).toEqual([]);
+    });
+
+    it.each([
+        ["IP", "知识产权", "网际协议", "Internet Protocol"],
+        ["GP", "全局布局", "全科医生", "General Practitioner"]
+    ])("does not replace the supplied Chinese identity of %s with another occurrence's meaning", async (token, suppliedChinese, wrongChinese, wrongEnglish) => {
+        const alternate = `${suppliedChinese}（${token}）用于芯片设计`;
+        const result = await repairReadWeaveConventionalTerms(`${token} 有另一种用法；${alternate}`, "比较用法", async targets =>
+            targets.map(target => term(target, wrongChinese, wrongEnglish)));
+        expect(result.body).toContain(alternate);
+        expect(result.warnings).toHaveLength(1);
+    });
+
+    it("leaves explicit Power BI and Linux DAX names intact without choosing a catalog meaning", async () => {
+        const body = "Power BI 中 DAX（Data Analysis Expressions）用于度量值；Linux 中 DAX 直接访问（Direct Access）绕过页缓存";
+        const resolve = vi.fn(async (_targets: ReadWeaveTermRepairTarget[]) => []);
+        const result = await repairReadWeaveConventionalTerms(body, "比较两种 DAX", resolve);
+        expect(result.body).toBe(body);
+        expect(resolve.mock.calls.flatMap(([targets]) => targets).some(target => target.token === "DAX")).toBe(false);
+    });
+
+    it("protects a named artifact when an unprotected occurrence of the same token is resolved", async () => {
+        const body = "GP 接诊患者；GP Practice 是本文引用的书名";
+        const result = await repairReadWeaveConventionalTerms(body, "说明用法", async targets => {
+            expect(targets).toHaveLength(1);
+            return [term(targets[0], "全科医生", "General Practitioner"),
+                { ...term(targets[0], "全科医生", "General Practitioner"), occurrenceId: `term-${body.lastIndexOf("GP")}` }];
+        }, undefined, body, ["GP Practice", ""]);
+        expect(result.body).toBe("GP 全科医生（General Practitioner）接诊患者；GP Practice 是本文引用的书名");
+    });
+
+    it("checks the entire replacement span against protected names at apply time", async () => {
+        const body = "知识产权（IP）用于保护创作成果";
+        const result = await repairReadWeaveConventionalTerms(body, "说明用法", async targets => {
+            expect(targets).toHaveLength(1); // The token is outside the protected Chinese name.
+            return [term(targets[0], "知识产权", "Intellectual Property")];
+        }, undefined, body, ["知识产权"]);
+        expect(result.body).toBe(body);
+        expect(result.knowledgeTerms).toEqual([]);
+    });
+
+    it("protects literal names before generic name-order normalization too", async () => {
+        const body = "3D IC 是这里指定的原始产品名";
+        const resolve = vi.fn();
+        expect((await repairReadWeaveConventionalTerms(body, "说明名称", resolve, undefined, body, ["3D IC"])).body).toBe(body);
+        expect(resolve).not.toHaveBeenCalled();
+    });
+
+    it("does not treat a token-only response as unique when another explicit occurrence exists", async () => {
+        const body = "IP 负责传输；IP（Intellectual Property）指知识产权";
+        const result = await repairReadWeaveConventionalTerms(body, "两种用法", async targets =>
+            [{ ...term(targets[0], "网际协议", "Internet Protocol"), occurrenceId: undefined }]);
+        expect(result.body).toBe(body);
+        expect(result.warnings).toHaveLength(1);
+    });
+
+    it("keeps every occurrence in the existing batch without a first-N cutoff", async () => {
+        const body = Array.from({ length: 25 }, (_, index) => `GP 用法${index}`).join("；");
+        const resolve = vi.fn(async (targets: ReadWeaveTermRepairTarget[]) => targets.map(target => term(target, "全科医生", "General Practitioner")));
+        const result = await repairReadWeaveConventionalTerms(body, "说明用法", resolve);
+        expect(resolve).toHaveBeenCalledTimes(1);
+        expect(resolve.mock.calls[0][0]).toHaveLength(25);
+        expect(result.body).toContain("全科医生用法24");
+        expect(result.warnings).toEqual([]);
+    });
+
+    it("preserves literal and quoted occurrences alongside independently resolved prose", async () => {
+        const opaque = ["`GP`", "> GP 接诊患者", "```text\nGP literal\n```", "[GP](https://example.com/GP)"];
+        const body = `GP 接诊患者\n\n${opaque.join("\n\n")}`;
+        const result = await repairReadWeaveConventionalTerms(body, "说明用法", async targets => {
+            expect(targets).toHaveLength(1);
+            return [term(targets[0], "全科医生", "General Practitioner")];
+        });
+        for (const literal of opaque) expect(result.body).toContain(literal);
+    });
+
+    it("does not let the later reference formatter assign a meaning to a bare alternate token", () => {
+        const body = "IP 网际协议（Internet Protocol）负责传输；芯片设计中的 IP 可以授权复用";
+        expect(formatReadWeaveTermReferences(body, { abbreviation: "IP", chineseName: "网际协议", englishName: "Internet Protocol" })).toBe(body);
+    });
+
+    it.each(["before", "during"])("honors cancellation %s the resolver without applying a response", async phase => {
+        const controller = new AbortController();
+        if (phase === "before") controller.abort();
+        const resolve = vi.fn(async (targets: ReadWeaveTermRepairTarget[]) => {
+            controller.abort();
+            return [term(targets[0], "全科医生", "General Practitioner")];
+        });
+        await expect(repairReadWeaveConventionalTerms("GP 接诊患者", "说明用法", resolve, controller.signal)).rejects.toThrow();
+        expect(resolve).toHaveBeenCalledTimes(phase === "before" ? 0 : 1);
+    });
+});
+
 describe("versioned formatting contract", () => {
     it("loads the complete bundled entry, formatting, explanation and formula rules", () => {
         const { prompt, revision } = readWeaveWritingSkill();
         expect(revision).toMatch(/^[a-f0-9]{64}$/u);
-        for (const marker of [ "# 中文格式与零基础解释", "FMT-001", "FMT-121",
-            "EXPL-001", "EXPL-014", "## 八、交付前复核", "官方名称本身含有逗号" ])
+        for (const marker of [ "# 顶层格式规则", "# 零基础解释框架", "# 公式解释规则",
+            "FMT-001", "FMT-121", "EXPL-001", "EXPL-014", "## 八、交付前复核",
+            "不得包含中文别名、解释、缩写、逗号、分隔符" ])
             expect(prompt).toContain(marker);
-        expect(prompt).toContain("即使用户没有直接询问公式，只要作者主动引入公式");
+        expect(prompt).toContain("附带公式至少说明整体用途、首次符号、关键组分、结果含义和当前条件");
     });
     it("splits independent long reasons while preserving each complete statement", () => {
         const source = "同时存在两类固定开销：线程之间的同步与通信随线程数增加而增长，全局归约、原子操作和缓存一致性开销会抵消一部分并行收益；此外线程数增加会加剧内存带宽与访存的竞争，使得每个线程的有效吞吐下降";
@@ -89,7 +242,7 @@ describe("versioned formatting contract", () => {
     });
     it("groups a long review across every finding without a first-N cutoff", () => {
         const targets = Array.from({ length: 11 }, (_, index) =>
-            ({ original: String(index) + "：" + "x".repeat(400), index }));
+            ({ original: `${String(index)  }：${  "x".repeat(400)}`, index }));
         const groups = groupReadWeaveFormatTargets(targets);
         expect(groups.length).toBeGreaterThan(1);
         expect(groups.flat().map(target => target.index)).toEqual(targets.map(target => target.index));
@@ -130,16 +283,15 @@ describe("versioned formatting contract", () => {
             const identity = { abbreviation:"IP",chineseName:"知识产权",englishName:"Intellectual Property" };
             const label = "IP 知识产权（Intellectual Property）";
             const body = `## IP 是什么\n\nIP ${statement}\n\nIP 用于电路复用\n\n> IP ${statement}`;
-            const repaired = await repairReadWeaveConventionalTerms(body,"IP 全称是什么？",async()=>[{
-                token:"IP",...identity,confidence:"high",basis:"established-usage",contextReason:"原文提供该名称"
-            }]);
+            const repaired = await repairReadWeaveConventionalTerms(body,"IP 全称是什么？",async targets=>targets.map(target=>({
+                occurrenceId:target.occurrenceId,token:"IP",...identity,confidence:"high",basis:"established-usage",contextReason:"原文提供该名称"
+            })));
             expect(repaired.body).toContain(`${label}${statement}`);
             expect(repaired.body).toContain("知识产权用于电路复用");
             expect(repaired.body).toContain(`> IP ${statement}`);
             const direct = `## ${label}\n\nIP ${statement}\n\nIP 用于电路复用`;
             const referenced = formatReadWeaveTermReferences(direct,identity);
-            expect(referenced).toContain(`${label}${statement}`);
-            expect(referenced).toContain("知识产权用于电路复用");
+            expect(referenced).toBe(direct);
             expect(formatReadWeaveTermReferences(referenced,identity)).toBe(referenced);
         }
     );
@@ -290,7 +442,7 @@ describe("versioned formatting contract", () => {
         const legacy = vi.fn(async () => []);
         await repairReadWeaveConventionalTerms("IP 用于网络传输", question, legacy);
         expect(legacy.mock.calls[0]).toEqual([
-            [ { token: "IP", before: "", after: " 用于网络传输" } ], { question }
+            [ { occurrenceId: "term-0", token: "IP", before: "", after: " 用于网络传输" } ], { question }
         ]);
     });
     it("grounds meanings in the article while limiting explicit article framing", () => {
@@ -363,9 +515,11 @@ describe("versioned formatting contract", () => {
         );
     });
 
-    it("uses readable Chinese for dimensional and machine-learning modifiers instead of leaving bare abbreviations", () => {
+    it("formats dimensional labels without assigning ML a meaning", () => {
         expect(formatReadWeaveCanonicalEntities("3D 芯片采用3D堆叠ML加速器"))
-            .toBe("三维芯片采用三维堆叠机器学习加速器");
+            .toBe("三维芯片采用三维堆叠ML加速器");
+        expect(formatReadWeaveCanonicalEntities("最大似然估计采用 ML 模型"))
+            .toBe("最大似然估计采用 ML 模型");
         expect(formatReadWeaveCanonicalEntities("这里的 3D 表示沿垂直方向集成"))
             .toBe("这里的三维表示沿垂直方向集成");
         expect(formatReadWeaveCanonicalEntities("DPO-3D 与 3D-MAPS 是方法原名"))
@@ -473,7 +627,8 @@ describe("versioned formatting contract", () => {
     it("repairs every abbreviation in one batched request and simplifies later uses", async () => {
         const tokens = [ "ABC", "DEF", "GHI", "JKL", "MNO", "PQR", "STU", "VWX", "YZA", "BCD" ];
         const body = `${tokens.join("、")}；再次使用 ABC`;
-        const resolve = vi.fn(async (targets: Array<{ token:string }>) => targets.map(target => ({
+        const resolve = vi.fn(async (targets: Array<{ occurrenceId:string; token:string }>) => targets.map(target => ({
+            occurrenceId:target.occurrenceId,
             token:target.token,
             chineseName:"示例术语",
             englishName:target.token.split("").map(letter=>`${letter}word`).join(" "),
@@ -481,7 +636,7 @@ describe("versioned formatting contract", () => {
         })));
         const result = await repairReadWeaveConventionalTerms(body,"这些缩写是什么意思？",resolve);
         expect(resolve).toHaveBeenCalledTimes(1);
-        expect(resolve.mock.calls[0][0]).toHaveLength(10);
+        expect(resolve.mock.calls[0][0]).toHaveLength(11);
         expect(result.body).toContain("ABC 示例术语（Aword Bword Cword）");
         expect(result.body.endsWith("再次使用示例术语")).toBe(true);
     });
@@ -492,11 +647,11 @@ describe("versioned formatting contract", () => {
         } ]);
         expect(result.body).toBe("IP 知识产权（Intellectual Property）用于保护创作成果");
     });
-    it("keeps one primary term definition and replaces later bare abbreviations", () => {
+    it("keeps bare references for occurrence resolution instead of inheriting the first label", () => {
         expect(formatReadWeaveTermReferences(
             "- NPU 神经网络处理单元（Neural Processing Unit）：NPU 负责运算；NPU 不是存储器",
             { abbreviation:"NPU",chineseName:"神经网络处理单元",englishName:"Neural Processing Unit" }
-        )).toBe("- NPU 神经网络处理单元（Neural Processing Unit）：神经网络处理单元负责运算；神经网络处理单元不是存储器");
+        )).toBe("- NPU 神经网络处理单元（Neural Processing Unit）：NPU 负责运算；NPU 不是存储器");
     });
     it("accepts concise context and trimmed names without mutating payload", async () => {
         const term = Object.freeze({ token:"ABC",chineseName:" 示例连接 ",

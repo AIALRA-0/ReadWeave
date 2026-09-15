@@ -1,15 +1,21 @@
-import type { ReadWeaveQuestionContract } from "@triliumnext/commons";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReadWeaveQuestionContract, ReadWeaveSemanticProposal, ReadWeaveTaskContract as TaskContract } from "@triliumnext/commons";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { ReadWeaveBudget } from "./readweave_budget.js";
+import { captureReadWeaveTask } from "./readweave_task_contract.js";
 const { search, read } = vi.hoisted(() => ({ search: vi.fn(), read: vi.fn() }));
 vi.mock("./readweave_search.js", () => ({
     searchReadWeaveEvidence: search,
     readReadWeavePageWithJina: read,
 }));
 import {
+    extractReadWeavePageEvidence,
+    scopeReadWeavePageFragment,
+    readWeaveExplicitUrls,
     readWeaveEvidenceWindow,
     readWeaveMissingNamingFacts,
-    readWeaveNamingRequirements,
     readWeaveNamingReferences,
+    readWeaveNamingRequirements,
     readWeaveNamingSourceGuidance,
     readWeaveWritingEvidence,
     researchReadWeaveEvidence,
@@ -33,6 +39,100 @@ const result = (snippet: string, cost = 0.0072) => ({
     searchCostCny: cost,
 });
 describe("bounded targeted research", () => {
+    it("stops explicit URLs before adjacent Chinese prose and punctuation", () => {
+        expect(readWeaveExplicitUrls(
+            "请查 https://www.sqlite.org/wal.html。这里没有摘录；另见 https://nodejs.org/api/stream.html#event-drain）后续"
+        )).toEqual([
+            "https://www.sqlite.org/wal.html",
+            "https://nodejs.org/api/stream.html#event-drain"
+        ]);
+    });
+
+    it("extracts every matching page region instead of retaining a leading window", () => {
+        const content = [
+            ...Array.from({ length: 30 }, (_, index) => `Python documentation section ${index} covers another feature.`),
+            "Updating an existing dict key does not affect insertion order.",
+            "The next paragraph explains the exception.",
+            ...Array.from({ length: 20 }, (_, index) => `Appendix ${index} contains unrelated material.`),
+            "Deleting and reinserting a dict key appends it after the remaining keys.",
+            "This final condition completes the rule."
+        ].join("\n");
+        const extracted = extractReadWeavePageEvidence(
+            content,
+            "Python dict insertion order update existing key delete reinsert",
+            "fallback"
+        );
+
+        expect(extracted).toContain("Updating an existing dict key");
+        expect(extracted).toContain("Deleting and reinserting a dict key");
+        expect(extracted).toContain("final condition");
+        expect(extracted).not.toContain("section 0 covers");
+    });
+
+    it("uses an explicit section fragment before language-dependent lexical extraction", () => {
+        const content = [
+            "# RFC 9110",
+            "## 2",
+            "A very large parent section that must not match section 9.2.2 by one digit",
+            ...Array.from({ length: 90 }, (_, index) => `#### [8.${index}.](https://example.test/#section-8.${index})[Other Rules]\nUnrelated HTTP material ${index}`),
+            "#### [9.2.2.](https://example.test/#section-9.2.2)[Idempotent Methods]",
+            "Repeated identical requests have the same intended effect as one request.",
+            "A PUT request can be retried after a connection failure before its response is read.",
+            "#### [9.2.3.](https://example.test/#section-9.2.3)[Other Methods]",
+            "Unrelated following material"
+        ].join("\n");
+
+        const scoped = scopeReadWeavePageFragment(content, "section 9.2.2");
+        expect(scoped).toContain("same intended effect");
+        expect(scoped).toContain("PUT request can be retried");
+        expect(scoped).not.toContain("Unrelated HTTP material");
+        expect(scoped).not.toContain("very large parent section");
+        expect(scoped).not.toContain("9.2.3");
+        expect(extractReadWeavePageEvidence(content, "请解释幂等", "fallback", "section 9.2.2"))
+            .toBe(scoped);
+    });
+
+    it("resolves reader headings represented by a title followed by a bare marker", () => {
+        const content = [
+            "Table of contents",
+            "Event: 'drain'",
+            "Other table entry",
+            "Class: stream.Writable",
+            "#",
+            "General writable text",
+            "Event: 'drain'",
+            "#",
+            "After write() returns false, resume on drain; otherwise buffering can exhaust memory.",
+            "Event: 'finish'",
+            "#",
+            "Unrelated following event"
+        ].join("\n");
+        const scoped = scopeReadWeavePageFragment(content, "event drain");
+        expect(scoped).toContain("resume on drain");
+        expect(scoped).not.toContain("Table of contents");
+        expect(scoped).not.toContain("Unrelated following event");
+    });
+
+    it("scopes a plain-text numbered standards section without retaining the whole document", () => {
+        const content = [
+            "9.2.1. Safe Methods",
+            "Unrelated safety text",
+            "9.2.2. Idempotent Methods",
+            "Repeated identical requests have the same intended effect as one request.",
+            "A PUT request can be retried after a connection failure before reading the response.",
+            "9.2.3. Other Methods",
+            "Unrelated following section",
+            ...Array.from({ length: 200 }, (_, index) => `${10 + index}.1. Other Section\nUnrelated ${index}`)
+        ].join("\n");
+
+        const scoped = scopeReadWeavePageFragment(content, "section 9.2.2");
+        expect(scoped).toContain("same intended effect");
+        expect(scoped).toContain("PUT request can be retried");
+        expect(scoped).not.toContain("Unrelated safety text");
+        expect(scoped).not.toContain("Unrelated following section");
+        expect(scoped!.length).toBeLessThan(500);
+    });
+
     it("deduplicates complete full-name passages but preserves conflicting expansions", () => {
         const base = { sourceType:"external",title:"Reference",provider:"Serper",
             url:"https://example.org/reference",excerpt:"Example Packet Transfer (XPT)." };
@@ -57,66 +157,10 @@ describe("bounded targeted research", () => {
         expect(readWeaveNamingRequirements("Lumen 从何得名？")).toEqual(["origin"]);
         expect(readWeaveNamingRequirements('"Lumen" origin of name', false)).toEqual([ "origin" ]);
     });
-    it("searches the short subject and stops after a direct full-name source", async () => {
-        search.mockResolvedValue(result("Example Packet Transfer (XPT) is the formal name."));
-        const r = await researchReadWeaveEvidence({ ...contract, normalizedQuestion:"XPT 的官方英文全称是什么？请解释这些词，不要猜测名称来历" }, "XPT", .02, true, ()=>{}, undefined, "XPT");
-        expect(search).toHaveBeenCalledTimes(1);
-        expect(search.mock.calls[0][0].query).toBe('"XPT" full name official documentation');
-        expect(r.audit.stopReason).toBe("sufficient");
-        expect(r.audit.missingFacts).toEqual([]);
-        expect(r.searchCostCny).toBe(.0072);
-    });
-    it("does not force naming searches into a documentation-only wording", async () => {
-        search.mockResolvedValue({ ...result("unused"), sources:[ {
-            ...result("Lumen is named after a light unit").sources[0], url:"https://lumen.org/name"
-        } ] });
-        read.mockResolvedValue("Lumen is named after a light unit");
-        const r = await researchReadWeaveEvidence(
-            { ...contract,normalizedQuestion:"Lumen 从何得名？" },
-            "", .07, true, ()=>{}, undefined, "Lumen"
-        );
-        expect(search.mock.calls[0][0].query).toBe("Lumen origin of name official primary source");
-        expect(search).toHaveBeenCalledTimes(1);
-        expect(r.audit.stopReason).toBe("sufficient");
-        expect(r.sources[0].url).toBe("https://lumen.org/name");
-    });
     beforeEach(() => {
-        vi.clearAllMocks();
+        vi.resetAllMocks();
         search.mockResolvedValue(result("Lumen is a software library"));
         read.mockResolvedValue("");
-    });
-    it("follows a cited homepage to its naming page without another paid search", async () => {
-        search.mockResolvedValue(result("Lumen is named after a light unit"));
-        read.mockImplementation(async url => {
-            if (url === "https://example.org/lumen")
-                return "Lumen is named after a light unit [Website](https://lumen.org/)";
-            if (url === "https://lumen.org/")
-                return "[Origin of the name](https://lumen.org/about/name/)";
-            if (url === "https://lumen.org/about/name/")
-                return "Lumen is named after a light unit [History](https://lumen.org/history/)";
-            throw new Error("Must not follow a third reference");
-        });
-        const r = await researchReadWeaveEvidence(
-            { ...contract,normalizedQuestion:"Lumen 从何得名？" },
-            "", .07, true, ()=>{}, undefined, "Lumen"
-        );
-        expect(search).toHaveBeenCalledTimes(1);
-        expect(read).toHaveBeenCalledTimes(3);
-        expect(r.audit).toMatchObject({ pageReadCount:3,queryCount:1,searchCostCny:.0072 });
-        expect(readWeaveWritingEvidence(r.sources,"Lumen 从何得名？","Lumen")[0].url)
-            .toBe("https://lumen.org/about/name/");
-    });
-    it("does not navigate further after a complete subject-site source", async () => {
-        search.mockResolvedValue({ ...result("unused"),sources:[ {
-            ...result("unused").sources[0],url:"https://lumen.org/name"
-        } ] });
-        read.mockResolvedValue("Lumen is named after a light unit [Home](https://lumen.org/)");
-        const r = await researchReadWeaveEvidence(
-            { ...contract,normalizedQuestion:"Lumen 从何得名？" },
-            "", .07, true, ()=>{}, undefined, "Lumen"
-        );
-        expect(read).toHaveBeenCalledTimes(1);
-        expect(r.audit.stopReason).toBe("sufficient");
     });
     it("never follows unrelated, credentialed or lookalike naming links", () => {
         const links = [
@@ -150,75 +194,6 @@ describe("bounded targeted research", () => {
         expect(window).not.toContain("Cookie policy");
         expect(window).not.toContain("Navigation Home");
     });
-    it("continues person research until both current identity and professional field are evidenced", async () => {
-        search.mockResolvedValueOnce({ ...result("unused"), sources: [ {
-            url: "https://ait.example.edu/profile/mongkol",
-            title: "Mongkol Ekpanyapong - Faculty",
-            snippet: "Mongkol Ekpanyapong is an associate professor at Asian Institute of Technology",
-            provider: "Serper", score: 100, sourceCategory: "institution"
-        } ] }).mockResolvedValueOnce({ ...result("unused"), sources: [ {
-            url: "https://ait.example.edu/research/mongkol",
-            title: "Mongkol Ekpanyapong - Research",
-            snippet: "Mongkol Ekpanyapong research interests include computer architecture and embedded systems",
-            provider: "Serper", score: 100, sourceCategory: "official-profile"
-        } ] });
-        read.mockImplementation(async url => url.includes("research")
-            ? "Mongkol Ekpanyapong research interests include computer architecture and embedded systems"
-            : "Mongkol Ekpanyapong is an associate professor at Asian Institute of Technology");
-
-        const r = await researchReadWeaveEvidence({
-            ...contract,
-            normalizedQuestion: "Mongkol Ekpanyapong是谁？",
-            searchQueries: [
-                "Mongkol Ekpanyapong researcher profile current affiliation",
-                "Mongkol Ekpanyapong official profile research interests research areas"
-            ]
-        }, "", .02, false, () => {});
-
-        expect(search).toHaveBeenCalledTimes(2);
-        expect(r.audit.stopReason).toBe("sufficient");
-        expect(r.sources.map(source => source.excerpt).join("\n")).toMatch(/computer architecture/u);
-    });
-    it("uses two agreeing Latin profile titles to resolve a Chinese person without guessing", async () => {
-        search.mockResolvedValue({ ...result("unused"), sources: [ {
-            url: "https://example.edu/zhou", title: "Zhi-Hua Zhou's Homepage",
-            snippet: "Zhi-Hua Zhou, Professor of Computer Science and Artificial Intelligence",
-            provider: "Serper", score: 100, sourceCategory: "institution"
-        }, {
-            url: "https://openreview.net/profile?id=zhou", title: "Zhi-hua Zhou",
-            snippet: "Zhi-hua Zhou is a professor at Nanjing University; research interests include machine learning",
-            provider: "Exa", score: 95, sourceCategory: "registry"
-        } ] });
-        read.mockImplementation(async url => url.includes("openreview")
-            ? "Zhi-hua Zhou is a professor at Nanjing University; research interests include machine learning"
-            : "Zhi-Hua Zhou, Professor of Computer Science and Artificial Intelligence");
-
-        const r = await researchReadWeaveEvidence({
-            ...contract,
-            normalizedQuestion: "周志华是谁？",
-            searchQueries: [ "周志华 官方主页 大学 教授 研究方向" ]
-        }, "", .02, false, () => {});
-
-        expect(read).toHaveBeenCalledTimes(2);
-        expect(r.audit.stopReason).toBe("sufficient");
-        expect(r.sources.every(source => source.retrievalMode === "page-reader")).toBe(true);
-    });
-    it("reads past a contents list and stops at an explicit naming decision", async () => {
-        const text = `Why is it called Lumen? ${"Introduction ".repeat(2000)}`
-            + `The inspiration was a light unit. ${"Context ".repeat(50)}`
-            + "The author decided to call the tool Lumen after the light unit.";
-        read.mockResolvedValue(text);
-        const r = await researchReadWeaveEvidence(
-            { ...contract, normalizedQuestion: "Lumen 的名称来源是什么？" },
-            "Lumen", .07, true, () => {}, undefined, "Lumen"
-        );
-        expect(r.sources[0].excerpt).toContain("decided to call the tool Lumen");
-        expect(r.sources[0].excerpt).toContain("The inspiration was a light unit");
-        expect(r.audit.missingFacts).toEqual([]);
-        expect(r.audit.stopReason).toBe("sufficient");
-        expect(search).toHaveBeenCalledTimes(1);
-        expect(r.searchCostCny).toBe(.0072);
-    });
     it("does not treat a heading or a different object's naming decision as evidence", () => {
         const sources = [ {
             excerpt: "Why is it called Lumen? The author decided to call the tool Other."
@@ -226,46 +201,12 @@ describe("bounded targeted research", () => {
         expect(readWeaveMissingNamingFacts(sources as never, "Lumen", [ "origin" ]))
             .toEqual([ "命名来历" ]);
     });
-    it("prioritizes reading subject domains but does not trust URL substrings", async () => {
-        search.mockResolvedValue({ ...result("unused"), sources: [
-            { url:"https://lumen.com.attacker.example/origin",title:"Lumen",
-                snippet:"Lumen was named after a light unit",provider:"Serper",score:120 },
-            { url:"https://reference.example/lumen",title:"Lumen",
-                snippet:"Lumen was named after a light unit",provider:"Serper",score:100 },
-            { url:"https://lumen.org/about/name",title:"Lumen",
-                snippet:"The story of the name",provider:"Serper",score:90 }
-        ] });
-        read.mockResolvedValue("The author proposed Lumen as a name inspired by a light unit.");
-        const r = await researchReadWeaveEvidence(
-            { ...contract, normalizedQuestion:"Lumen 从何得名？" },
-            "", .07, true, ()=>{}, undefined, "Lumen"
-        );
-        expect(read.mock.calls[0][0]).toBe("https://lumen.org/about/name");
-        expect(r.sources[0].url).toBe("https://lumen.org/about/name");
-        expect(r.sources[0].authority).toBeUndefined();
-        expect(r.audit).toMatchObject({ queryCount:1,pageReadCount:3,stopReason:"sufficient" });
-    });
     it("does not infer an acronym from a publication title", () => {
         expect(
             readWeaveMissingNamingFacts([
                 { excerpt: "Lumen: A Low-latency Universal Memory ENgine" },
             ] as never),
         ).toHaveLength(2);
-    });
-    it("checks a direct account once when the first complete result is secondary", async () => {
-        search.mockResolvedValueOnce({ ...result("unused"),sources:[ {
-            ...result("Lumen is named after a light unit").sources[0],sourceCategory:"secondary"
-        } ] }).mockResolvedValueOnce({ ...result("unused"),sources:[ {
-            ...result("Lumen is named after a light unit").sources[0],url:"https://lumen.org/name"
-        } ] });
-        read.mockResolvedValue("Lumen is named after a light unit");
-        const r = await researchReadWeaveEvidence(
-            { ...contract,normalizedQuestion:"Lumen 从何得名？" },
-            "", .07, true, ()=>{}, undefined, "Lumen"
-        );
-        expect(search).toHaveBeenCalledTimes(2);
-        expect(r.audit).toMatchObject({ queryCount:2,stopReason:"sufficient",searchCostCny:.0144 });
-        expect(r.sources[0].url).toBe("https://lumen.org/name");
     });
     it("directs naming writing to the relevant first-hand-looking page, not rank one", () => {
         const source = { sourceType:"external",retrievalMode:"page-reader",title:"Name history",
@@ -291,55 +232,601 @@ describe("bounded targeted research", () => {
             { ...sources[1],excerpt:"Other is named after Lumen" }
         ] as never, "Unknown 从何得名？")).toBe("");
     });
-    it("stops within the available budget, not after twenty arbitrary calls", async () => {
-        const r = await researchReadWeaveEvidence(contract, "context", 0.015, true, () => {});
+});
+
+type EvidenceNeed = NonNullable<ReadWeaveSemanticProposal["evidenceNeeds"]>[number];
+
+function need(id: string, queryCandidates: string[] = []): EvidenceNeed {
+    return {
+        id, taskIds: [`${id  }-task`], subjectIds: [`${id  }-subject`],
+        questionToResolve: `What evidence answers ${  id  }?`,
+        candidateClaim: "An unverified assertion that must not become the query",
+        originRefs: [{ blockId: "question", locator: { kind: "whole" } }],
+        whyNeeded: "Answer the requested part", sourcePreferences: ["primary"],
+        queryCandidates, freshness: {
+            timeIntent: "current", asOf: "2026-09-15", maxAgeSecondsHint: 86400, versionHint: null
+        },
+        necessity: "needed_for_specific_claim", alternativeIfMissing: "Qualify this part only"
+    };
+}
+
+function withNeeds(evidenceNeeds: EvidenceNeed[]): ReadWeaveQuestionContract {
+    // Clone the complete captured contract so policy-boundary tests can mutate it.
+    const taskContract = structuredClone(captureReadWeaveTask({
+        articleId: "article", anchorId: "anchor", anchorType: "range", kind: "question",
+        title: "Explain the technology and check the author's current affiliation",
+        fragments: [], autoExternalSearch: true
+    }, true));
+    taskContract.interpretation.proposal = {
+        evidenceNeeds,
+        tasks: evidenceNeeds.map(item => ({
+            id: item.taskIds[0], instruction: item.questionToResolve, intentHints: [],
+            subjectIds: item.subjectIds, requirementIds: ["root"], originRefs: item.originRefs,
+            dependsOnTaskIds: [], expectedDeliverable: item.whyNeeded,
+            acceptanceCriteria: ["Address the evidence need"], scope: "original-request"
+        })),
+        subjects: evidenceNeeds.map(item => ({
+            id: item.subjectIds[0], surface: item.subjectIds[0], mentions: item.originRefs,
+            kindHints: ["person"], interpretation: "Advisory subject", aliases: [],
+            role: "target", introducedByTaskId: null
+        }))
+    };
+    return { ...contract, taskContract };
+}
+
+const runResearch = (input: ReadWeaveQuestionContract, budget = 0.1, signal?: AbortSignal) =>
+    researchReadWeaveEvidence(input, "Article context with Professor Ada's biography", budget, false, () => {}, signal);
+
+function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (reason: unknown) => void;
+    const promise = new Promise<T>((accept, fail) => { resolve = accept; reject = fail; });
+    return { promise, resolve, reject };
+}
+
+describe("research driven by explicit evidence needs", () => {
+    afterEach(() => vi.restoreAllMocks());
+    beforeEach(() => {
+        vi.resetAllMocks();
+        search.mockResolvedValue(result("Candidate evidence"));
+        read.mockResolvedValue("");
+    });
+
+    it("reads a user-specified page without buying a redundant broad search", async () => {
+        const input = withNeeds([need("direct")]);
+        input.normalizedQuestion = "请依据 https://docs.example.org/reference 回答";
+        read.mockResolvedValue("Direct primary evidence answers the question.");
+        const output = await researchReadWeaveEvidence(
+            input,
+            "用户指定 https://docs.example.org/reference 作为依据",
+            0.009,
+            false,
+            () => {}
+        );
+        expect(search).not.toHaveBeenCalled();
+        expect(read).toHaveBeenCalledWith("https://docs.example.org/reference", expect.objectContaining({ anonymous: true }));
+        expect(output.searchCostCny).toBe(0);
+        expect(output.sources).toEqual(expect.arrayContaining([
+            expect.objectContaining({ retrievalMode: "page-reader", excerpt: expect.stringContaining("Direct primary evidence") })
+        ]));
+    });
+
+    it("retrieves every mixed need without a global person identity or naming gate", async () => {
+        const technical = { ...need("technical"), questionToResolve: "How does SRAM work?" };
+        const person = { ...need("affiliation"), questionToResolve: "Who is Ada Example?" };
+        search.mockImplementation(async ({ query }) => ({
+            ...result("A technical result without a person's name"),
+            sources: [{ ...result("SRAM stores bits using bistable circuits").sources[0],
+                url: query.includes("SRAM") ? "https://example.org/sram" : "https://example.org/affiliation" }]
+        }));
+        read.mockResolvedValue("Technical explanation and a separate affiliation statement");
+        const input = withNeeds([technical, person]);
+        const r = await researchReadWeaveEvidence(input, "", .1, true, () => {}, undefined, "Wrong Person");
+        expect(search.mock.calls.map(([call]) => call.query)).toEqual([
+            technical.questionToResolve, person.questionToResolve
+        ]);
+        expect(read).toHaveBeenCalledTimes(2);
+        expect(r.audit.needs.map(item => item.sourceIds)).toEqual([["S1"], ["S2"]]);
+        expect(r.audit.needs.every(item => item.assessment === "unassessed")).toBe(true);
+        expect(r.audit.stopReason).toBe("exhausted");
+    });
+
+    it("starts from neutral questions, then rotates candidates and retains all metadata", async () => {
+        const items = [need("first", ["first alternative"]), need("second", ["second alternative"])];
+        const input = withNeeds(items);
+        const snapshot = structuredClone(input);
+        const r = await runResearch(input);
+        expect(r.queries).toEqual([
+            items[0].questionToResolve, items[1].questionToResolve, "first alternative", "second alternative"
+        ]);
+        for (const [index, item] of items.entries()) {
+            expect(r.audit.needs[index]).toMatchObject(item);
+            expect(r.sources[0].needIds).toContain(item.id);
+        }
+        expect(r.queries.join(" ")).not.toContain(items[0].candidateClaim);
+        expect(search.mock.calls.every(([call]) => call.kind === undefined)).toBe(true);
+        expect(input).toEqual(snapshot);
+    });
+
+    it("falls back to the original question rather than legacy profile queries", async () => {
+        const input = withNeeds([]);
+        const r = await runResearch(input);
+        expect(r.queries).toEqual([input.taskContract!.request.questionText]);
+        expect(r.audit.needs[0]).toMatchObject({
+            id: "root", questionToResolve: input.taskContract!.request.questionText, candidateClaim: null
+        });
+        expect(r.audit.needs[0].originRefs).toEqual([input.taskContract!.request.questionRef]);
+        const legacy = await runResearch(contract);
+        expect(legacy.queries).toEqual([contract.normalizedQuestion]);
+    });
+
+    it("keeps all needs and candidates when the budget leaves later work pending", async () => {
+        const items = Array.from({ length: 35 }, (_, i) => need(`need-${  i}`, [`follow-up-${  i}`]));
+        const r = await runResearch(withNeeds(items), .015);
         expect(search).toHaveBeenCalledTimes(2);
+        expect(r.searchCostCny).toBe(.0144);
         expect(r.audit.stopReason).toBe("budget");
-        expect(r.searchCostCny).toBe(0.0144);
-        expect(r.sources).toHaveLength(1);
+        expect(r.audit.needs).toHaveLength(35);
+        expect(r.audit.needs[34]).toMatchObject({ retrievalStatus: "unsearched", stopReason: "budget" });
+        expect(r.audit.needs[34].queries).toHaveLength(2);
+        expect(r.audit.needs[34].queries.every(query => query.status === "pending")).toBe(true);
+        expect(r.audit.missingFacts).toHaveLength(35);
     });
-    it("uses anonymous page extraction without consuming paid Jina tokens", async () => {
-        await researchReadWeaveEvidence(contract, "", 0.02, false, () => {});
-        expect(read).toHaveBeenCalledWith("https://example.org/lumen", {
-            signal: undefined,
-            anonymous: true,
-        });
-        expect(search).toHaveBeenCalledTimes(1);
-    });
-    it("counts cache hits separately from effective queries", async () => {
+
+    it("does not clip a large source catalogue when page actions run out", async () => {
         search.mockResolvedValue({
-            ...result("Lumen is not an acronym. Lumen is named after a light unit", 0),
-            cacheHit: true,
+            ...result("unused"),
+            sources: Array.from({ length: 30 }, (_, i) => ({
+                ...result(`Candidate ${  i}`).sources[0], url: `https://example.org/${  i}`, score: i
+            }))
         });
-        const r = await researchReadWeaveEvidence(contract, "", 0.05, true, () => {});
-        expect(r.audit.queryCount).toBe(0);
-        expect(r.audit.cacheHits).toBe(1);
-        expect(r.audit.stopReason).toBe("sufficient");
+        const r = await runResearch(withNeeds([need("many")]));
+        expect(r.sources).toHaveLength(30);
+        expect(r.audit.needs[0].sourceIds).toHaveLength(30);
+        expect(read).toHaveBeenCalledTimes(19);
+        expect(r.sources[29].pageReadStatus).toBe("pending");
+        expect(r.audit.stopReason).toBe("limit");
     });
-    it("does not spend after cancellation", async () => {
-        const controller = new AbortController();
-        controller.abort();
-        await expect(
-            researchReadWeaveEvidence(contract, "", 0.07, true, () => {}, controller.signal),
-        ).rejects.toThrow();
+
+    it("counts cached requests toward the action limit while retaining later needs", async () => {
+        search.mockResolvedValue({ ...result("cache", 0), cacheHit: true });
+        const r = await runResearch(withNeeds(Array.from({ length: 24 }, (_, i) => need(String(i)))));
+        expect(search).toHaveBeenCalledTimes(20);
+        expect(read).not.toHaveBeenCalled();
+        expect(r.audit).toMatchObject({ queryCount: 0, cacheHits: 20, stopReason: "limit" });
+        expect(r.audit.needs).toHaveLength(24);
+        expect(r.audit.needs[23].retrievalStatus).toBe("unsearched");
+    });
+
+    it("reuses identical queries and sources across needs without losing attribution", async () => {
+        const first = need("first");
+        const second = { ...need("second"), questionToResolve: first.questionToResolve };
+        const r = await runResearch(withNeeds([first, second]));
+        expect(search).toHaveBeenCalledTimes(1);
+        expect(read).toHaveBeenCalledTimes(1);
+        expect(r.sources[0].needIds).toEqual(["first", "second"]);
+        expect(r.audit.needs.map(item => item.sourceIds)).toEqual([["S1"], ["S1"]]);
+        expect(r.audit.needs[1].queries[0]).toMatchObject({ reused: true, sourceIds: ["S1"] });
+    });
+
+    it("retains different snippets from the same URL and links each query", async () => {
+        search.mockResolvedValueOnce(result("First statement")).mockResolvedValueOnce(result("Second statement"));
+        const r = await runResearch(withNeeds([need("one"), need("two")]));
+        expect(r.sources).toHaveLength(1);
+        expect(r.sources[0].excerpt).toBe("First statement\nSecond statement");
+        expect(r.sources[0].queries).toEqual(r.queries);
+        expect(read).toHaveBeenCalledTimes(1);
+    });
+
+    it("preserves every need-matching region when multiple needs share a complete page", async () => {
+        const content = `SRAM technical definition\n${  "Unrelated middle\n".repeat(2000)  }Ada's current affiliation`;
+        read.mockResolvedValue(content);
+        const r = await runResearch(withNeeds([need("technical"), need("affiliation")]));
+        expect(r.sources[0].excerpt).toContain("SRAM technical definition");
+        expect(r.sources[0].excerpt).toContain("Ada's current affiliation");
+        expect(r.sources[0].excerpt.length).toBeLessThan(content.length);
+        expect(r.sources[0]).toMatchObject({ retrievalMode: "page-reader", access: "excerpt", pageReadStatus: "read" });
+        expect(r.audit.needs.map(item => item.pageSourceIds)).toEqual([["S1"], ["S1"]]);
+        expect(r.audit.needs.every(item => item.assessment === "unassessed")).toBe(true);
+    });
+
+    it.each(["person", "technical_term", "institution", "unknown-random"])(
+        "does not let kindHints=%s affect queries, budgets or tool permissions", async hint => {
+            const input = withNeeds([need("target")]);
+            input.taskContract!.interpretation.proposal.subjects![0].kindHints = [hint];
+            const r = await runResearch(input, .015);
+            expect(search.mock.calls[0][0]).toMatchObject({
+                query: input.taskContract!.interpretation.proposal.evidenceNeeds![0].questionToResolve,
+                budgetCny: .009, allowPaid: true
+            });
+            expect(search).toHaveBeenCalledTimes(1);
+            expect(search.mock.calls[0][0].resourceHints).toEqual(hint === "person" ? ["person"] : []);
+            expect(read).toHaveBeenCalledTimes(1);
+            expect(r.searchCostCny).toBe(.0072);
+        }
+    );
+
+    it.each(["legacy", "request", "policy"])("honors external search off at the %s boundary", async boundary => {
+        const input = withNeeds([need("one"), need("two")]);
+        if (boundary === "legacy") input.externalSearchDecision = {
+            mode: "disabled", required: false, reason: "disabled", queries: [], executed: false, sourceCount: 0
+        };
+        if (boundary === "request") input.taskContract!.request.options.externalSearch = "off";
+        if (boundary === "policy") input.taskContract!.policy = {
+            permissions: { externalSearch: "off" }, budget: { deadlineAt: "2099-01-01" }
+        } as TaskContract["policy"];
+        const r = await runResearch(input);
         expect(search).not.toHaveBeenCalled();
         expect(read).not.toHaveBeenCalled();
+        expect(r.audit.stopReason).toBe("disabled");
+        expect(r.audit.needs.every(item => item.retrievalStatus === "unsearched")).toBe(true);
     });
-    it("keeps snippets when page reading fails", async () => {
-        read.mockRejectedValue(new Error("HTTP 429"));
-        const r = await researchReadWeaveEvidence(contract, "", 0.02, false, () => {});
-        expect(r.sources[0].excerpt).toBe("Lumen is a software library");
-        expect(r.warnings[0]).toContain("429");
+
+    it("rechecks search-off before page extraction after an in-flight search", async () => {
+        const input = withNeeds([need("one")]);
+        search.mockImplementation(async () => {
+            input.taskContract!.request.options.externalSearch = "off";
+            return result("Existing snippet");
+        });
+        const r = await runResearch(input);
+        expect(read).not.toHaveBeenCalled();
+        expect(r.audit.stopReason).toBe("disabled");
+        expect(r.sources[0].access).toBe("snippet");
     });
-    it("never exceeds twenty effective research actions", async () => {
-        const r = await researchReadWeaveEvidence(
-            { ...contract, searchQueries: Array.from({ length: 30 }, (_, i) => `query ${i}`) },
-            "",
-            0.1,
-            true,
-            () => {},
-        );
-        expect(r.audit.queryCount + r.audit.pageReadCount).toBeLessThanOrEqual(20);
-        expect(r.searchCostCny).toBeLessThanOrEqual(0.1);
+
+    it("enforces trusted search and page limits without hiding pending work", async () => {
+        const input = withNeeds([need("one"), need("two")]);
+        input.taskContract!.policy = {
+            permissions: { externalSearch: "allowed" },
+            budget: { deadlineAt: "2099-01-01", maxSearchRequests: 1, maxPageFetches: 0 }
+        } as TaskContract["policy"];
+        const r = await runResearch(input);
+        expect(search).toHaveBeenCalledTimes(1);
+        expect(read).not.toHaveBeenCalled();
+        expect(r.audit.stopReason).toBe("limit");
+        expect(r.audit.needs[1].retrievalStatus).toBe("unsearched");
+    });
+
+    it("starts no actions beyond the deadline", async () => {
+        const input = withNeeds([need("one")]);
+        input.taskContract!.policy = {
+            permissions: { externalSearch: "allowed" }, budget: { deadlineAt: "2000-01-01" }
+        } as TaskContract["policy"];
+        const r = await runResearch(input);
+        expect(search).not.toHaveBeenCalled();
+        expect(read).not.toHaveBeenCalled();
+        expect(r.audit.stopReason).toBe("limit");
+    });
+
+    it("retains uncertain search charges and continues other needs after a search error", async () => {
+        search.mockRejectedValueOnce(new Error("https://provider.test?key=DO_NOT_EXPOSE"))
+            .mockResolvedValueOnce(result("Other need's evidence"));
+        const r = await runResearch(withNeeds([need("failed"), need("other")]), .02);
+        expect(search).toHaveBeenCalledTimes(2);
+        expect(r.searchCostCny).toBe(.0072);
+        expect(r.unsettledCostCny).toBe(.009);
+        expect(r.audit.unsettledCostCny).toBe(.009);
+        expect(r.audit.needs[0]).toMatchObject({ retrievalStatus: "unavailable", stopReason: "unavailable" });
+        expect(r.audit.needs[1]).toMatchObject({ retrievalStatus: "retrieved", sourceIds: ["S1"] });
+        expect(r.warnings.join(" ")).not.toContain("DO_NOT_EXPOSE");
+    });
+
+    it("retains earlier evidence when a later query throws", async () => {
+        search.mockResolvedValueOnce(result("Keep this evidence")).mockRejectedValueOnce(new Error("offline"));
+        const r = await runResearch(withNeeds([need("first"), need("second")]), .02);
+        expect(r.sources[0].excerpt).toBe("Keep this evidence");
+        expect(r.audit.needs[0].sourceIds).toEqual(["S1"]);
+        expect(r.audit.needs[1].queries[0].status).toBe("failed");
+        expect(r.searchCostCny).toBe(.0072);
+        expect(r.unsettledCostCny).toBe(.009);
+    });
+
+    it("keeps snippets and associates page failures without exposing provider secrets", async () => {
+        read.mockRejectedValue(new Error("HTTP 429 https://provider.test?key=DO_NOT_EXPOSE"));
+        const r = await runResearch(withNeeds([need("one")]));
+        expect(r.sources[0]).toMatchObject({ excerpt: "Candidate evidence", access: "snippet", pageReadStatus: "failed" });
+        expect(r.warnings).toEqual(["Page extraction failed (HTTP 429)."]);
+        expect(r.audit.needs[0].stopReason).toBe("unavailable");
+    });
+
+    it("does not infer verification, page access or authority from search hits", async () => {
+        search.mockResolvedValue({
+            ...result("Definitely verified and current"),
+            sources: [{ ...result("Definitely verified and current").sources[0], retrievalMode: "page-reader" }]
+        });
+        const r = await runResearch(withNeeds([need("one")]));
+        expect(r.sources[0]).toMatchObject({ access: "snippet", retrievalMode: "raw-serp", pageReadStatus: "empty" });
+        expect(r.sources[0].authority).toBeUndefined();
+        expect(r.audit.needs[0].assessment).toBe("unassessed");
+        expect(r.audit.missingFacts).toEqual([need("one").questionToResolve]);
+        expect(r.audit.stopReason).not.toBe("sufficient");
+    });
+
+    it("tracks empty results per need while still searching later needs", async () => {
+        search.mockResolvedValueOnce({ ...result("unused"), sources: [] }).mockResolvedValueOnce(result("Evidence"));
+        const r = await runResearch(withNeeds([need("empty"), need("found")]));
+        expect(r.audit.needs.map(item => item.retrievalStatus)).toEqual(["no-results", "retrieved"]);
+    });
+
+    it.each([NaN, Infinity, -1, .5])("keeps the allowance unsettled for an invalid or excessive provider charge (%s)", async cost => {
+        search.mockResolvedValue(result("Keep the returned evidence", cost));
+        const r = await runResearch(withNeeds([need("one", ["later query"])]), .02);
+        expect(search).toHaveBeenCalledTimes(1);
+        expect(read).not.toHaveBeenCalled();
+        expect(r.audit.stopReason).toBe("budget");
+        expect(r.searchCostCny).toBe(0);
+        expect(r.unsettledCostCny).toBe(.009);
+        expect(r.audit.unsettledCostCny).toBe(.009);
+        expect(r.sources[0].excerpt).toBe("Keep the returned evidence");
+    });
+
+    it.each([0, .0072])("retains the allowance when an adapter catches a provider failure and reports %s", async cost => {
+        search.mockResolvedValue({ ...result("A remaining free-provider snippet", cost), warnings: ["Serper: HTTP 500"] });
+        const r = await runResearch(withNeeds([need("first", ["later query"])]));
+        expect(r.searchCostCny).toBe(0);
+        expect(r.unsettledCostCny).toBe(.009);
+        expect(r.audit.unsettledCostCny).toBe(.009);
+        expect(r.audit.needs[0].queries[1].status).toBe("pending");
+        expect(r.sources).toHaveLength(1);
+        expect(search).toHaveBeenCalledTimes(1);
+        expect(read).not.toHaveBeenCalled();
+    });
+
+    it.each([.0072, NaN, -1])("retains explicitly unsettled adapter cost without requiring warnings (%s)", async unsettledCostCny => {
+        search.mockResolvedValue({ ...result("Candidate snippet", 0), unsettledCostCny });
+        const r = await runResearch(withNeeds([need("first")]));
+        expect(r.searchCostCny).toBe(0);
+        expect(r.unsettledCostCny).toBe(.009);
+    });
+
+    it("does not reserve an earlier failed request again for a zero-cost cache hit", async () => {
+        search.mockResolvedValue({ ...result("Cached snippet", 0), cacheHit: true,
+            warnings: ["Serper: request failed"], unsettledCostCny: .0072 });
+        const r = await runResearch(withNeeds([need("first")]));
+        expect(r.searchCostCny).toBe(0);
+        expect(r.unsettledCostCny).toBe(0);
+        expect(r.audit.cacheHits).toBe(1);
+    });
+
+    it("preserves the initial zero-budget free/cache-capable attempt", async () => {
+        search.mockResolvedValue(result("Cached evidence", 0));
+        const r = await runResearch(withNeeds([need("one"), need("two")]), 0);
+        expect(search).toHaveBeenCalledTimes(1);
+        expect(search.mock.calls[0][0]).toMatchObject({ allowPaid: false, budgetCny: 0 });
+        expect(r.searchCostCny).toBe(0);
+        expect(r.audit.needs[1].retrievalStatus).toBe("unsearched");
+    });
+
+    it.each(["before", "search", "page"])("propagates cancellation %s and starts no further work", async phase => {
+        const controller = new AbortController();
+        if (phase === "before") controller.abort();
+        if (phase === "search") search.mockImplementation(async () => {
+            controller.abort();
+            return result("Hit");
+        });
+        if (phase === "page") read.mockImplementation(async () => {
+            controller.abort();
+            throw new Error("cancelled");
+        });
+        await expect(runResearch(withNeeds([need("one"), need("two")]), .1, controller.signal)).rejects.toThrow();
+        expect(search).toHaveBeenCalledTimes(phase === "before" ? 0 : phase === "search" ? 1 : 2);
+        expect(read).toHaveBeenCalledTimes(phase === "page" ? 1 : 0);
+    });
+
+    it("reads candidates round-robin across needs without a score or name gate", async () => {
+        search.mockResolvedValueOnce({
+            ...result("unused"),
+            sources: [0, 1, 2].map(i => ({
+                ...result("No profile names here").sources[0], url: `https://example.org/first-${  i}`, score: 100 - i * 50
+            }))
+        }).mockResolvedValueOnce({
+            ...result("unused"),
+            sources: [{ ...result("Another need").sources[0], url: "https://example.org/second" }]
+        });
+        await runResearch(withNeeds([need("first"), need("second")]));
+        expect(read.mock.calls.map(([url]) => url)).toEqual([
+            "https://example.org/first-0", "https://example.org/second",
+            "https://example.org/first-1", "https://example.org/first-2"
+        ]);
+        expect(read.mock.calls.every(([, options]) => options.anonymous === true)).toBe(true);
+    });
+
+    it("passes person resources only for the need linked to that subject and task", async () => {
+        const input = withNeeds([need("technical"), need("affiliation")]);
+        input.taskContract!.interpretation.proposal.subjects![0].kindHints = ["technical_term"];
+        await runResearch(input);
+        expect(search.mock.calls.map(([call]) => call.resourceHints)).toEqual([[], ["person"]]);
+        expect(search.mock.calls.map(([call]) => call.query)).toEqual([
+            need("technical").questionToResolve, need("affiliation").questionToResolve
+        ]);
+    });
+
+    it.each(["missing-subject", "missing-task", "task-subject-mismatch"])(
+        "does not use background person hints with a broken need anchor: %s", async broken => {
+            const input = withNeeds([need("target")]);
+            const proposal = input.taskContract!.interpretation.proposal;
+            if (broken === "missing-subject") proposal.evidenceNeeds![0].subjectIds = ["missing"];
+            if (broken === "missing-task") proposal.evidenceNeeds![0].taskIds = ["missing"];
+            if (broken === "task-subject-mismatch") proposal.tasks[0].subjectIds = [];
+            await runResearch(input);
+            expect(search.mock.calls[0][0].resourceHints).toEqual([]);
+        }
+    );
+
+    it("does not reuse a general query as a person-resource query for another need", async () => {
+        const first = need("technical"), second = { ...need("person"), questionToResolve: first.questionToResolve };
+        const input = withNeeds([first, second]);
+        input.taskContract!.interpretation.proposal.subjects![0].kindHints = ["technical_term"];
+        const r = await runResearch(input);
+        expect(search).toHaveBeenCalledTimes(2);
+        expect(search.mock.calls.map(([call]) => call.resourceHints)).toEqual([[], ["person"]]);
+        expect(r.audit.needs.every(item => !item.queries[0].reused)).toBe(true);
+        expect(r.sources[0].needIds).toEqual(["technical", "person"]);
+    });
+
+    it("reserves concurrent searches before launch and keeps the total bounded until settlement", async () => {
+        const reserve = vi.spyOn(ReadWeaveBudget.prototype, "reserveResourceRequest");
+        const gates = Array.from({ length: 5 }, () => deferred<ReturnType<typeof result>>());
+        let active = 0, maximum = 0, started = 0;
+        search.mockImplementation(async () => {
+            expect(reserve.mock.calls.length).toBeGreaterThan(started);
+            const ledger = reserve.mock.contexts[0] as ReadWeaveBudget;
+            expect(ledger.upperBoundCny).toBeLessThanOrEqual(.05);
+            active++;
+            maximum = Math.max(maximum, active);
+            const response = await gates[started++].promise;
+            active--;
+            return response;
+        });
+        const running = runResearch(withNeeds(Array.from({ length: 5 }, (_, index) => need(String(index)))), .05);
+        expect(search).toHaveBeenCalledTimes(2);
+        expect(reserve).toHaveBeenCalledTimes(2);
+        expect((reserve.mock.contexts[0] as ReadWeaveBudget).remainingCny).toBe(.032);
+        gates[1].resolve(result("Second finishes first"));
+        await Promise.resolve();
+        expect(search).toHaveBeenCalledTimes(2);
+        gates[0].resolve(result("First"));
+        await vi.waitFor(() => expect(search).toHaveBeenCalledTimes(4));
+        gates[2].resolve(result("Third"));
+        gates[3].resolve(result("Fourth"));
+        await vi.waitFor(() => expect(search).toHaveBeenCalledTimes(5));
+        gates[4].resolve(result("Fifth"));
+        const r = await running;
+        expect(maximum).toBe(2);
+        expect(r.searchCostCny).toBe(.036);
+        expect(r.unsettledCostCny).toBe(0);
+        expect(r.audit.unsettledCostCny).toBe(0);
+        expect(r.audit.needs.every(item => item.retrievalStatus === "retrieved")).toBe(true);
+        expect(r.queries).toEqual(Array.from({ length: 5 }, (_, index) => need(String(index)).questionToResolve));
+    });
+
+    it("waits for a tight reservation to settle before using the released remainder", async () => {
+        const gates = [deferred<ReturnType<typeof result>>(), deferred<ReturnType<typeof result>>()];
+        let index = 0;
+        search.mockImplementation(() => gates[index++].promise);
+        const running = runResearch(withNeeds([need("one"), need("two"), need("three")]), .015);
+        expect(search).toHaveBeenCalledTimes(1);
+        expect(search.mock.calls[0][0].budgetCny).toBe(.009);
+        gates[0].resolve(result("First"));
+        await vi.waitFor(() => expect(search).toHaveBeenCalledTimes(2));
+        expect(search.mock.calls[1][0].budgetCny).toBe(.0078);
+        gates[1].resolve(result("Second"));
+        const r = await running;
+        expect(r.searchCostCny + r.unsettledCostCny).toBe(.0144);
+        expect(r.audit.needs[2]).toMatchObject({ retrievalStatus: "unsearched", stopReason: "budget" });
+    });
+
+    it("keeps both failed concurrent reservations pending without spending them again", async () => {
+        const reserve = vi.spyOn(ReadWeaveBudget.prototype, "reserveResourceRequest");
+        search.mockRejectedValue(new Error("unavailable"));
+        const r = await runResearch(withNeeds([need("one"), need("two"), need("three")]), .02);
+        expect(search).toHaveBeenCalledTimes(2);
+        expect(r.searchCostCny).toBe(0);
+        expect(r.unsettledCostCny).toBe(.018);
+        expect(r.audit.unsettledCostCny).toBe(.018);
+        expect(r.audit.needs[2].queries[0].status).toBe("pending");
+        const receipts = (reserve.mock.contexts[0] as ReadWeaveBudget).snapshot().receipts;
+        expect(receipts).toHaveLength(2);
+        expect(receipts.every(receipt => receipt.settledMicros === undefined)).toBe(true);
+    });
+
+    it("settles valid concurrent work but retains the other allowance when its cost is invalid", async () => {
+        search.mockResolvedValueOnce(result("Invalid cost, real hit", NaN)).mockResolvedValueOnce(result("Valid cost"));
+        const r = await runResearch(withNeeds([need("one"), need("two"), need("three")]), .03);
+        expect(search).toHaveBeenCalledTimes(2);
+        expect(r.searchCostCny).toBe(.0072);
+        expect(r.unsettledCostCny).toBe(.009);
+        expect(r.audit.needs[2].queries[0].status).toBe("pending");
+        expect(read).not.toHaveBeenCalled();
+        expect(r.sources[0].excerpt).toContain("Invalid cost, real hit");
+        expect(r.sources[0].excerpt).toContain("Valid cost");
+    });
+
+    it("treats a missing search response as unsettled rather than a free request", async () => {
+        search.mockResolvedValue(undefined);
+        const r = await runResearch(withNeeds([need("one")]));
+        expect(r.searchCostCny).toBe(0);
+        expect(r.unsettledCostCny).toBe(.009);
+        expect(r.audit.needs[0].queries[0].status).toBe("failed");
+    });
+
+    it.each(["shared", "direct", "transitive"])("serializes searches linked by a %s task dependency", async relation => {
+        const input = withNeeds([need("one"), need("two")]);
+        const proposal = input.taskContract!.interpretation.proposal;
+        if (relation === "shared") proposal.evidenceNeeds![1].taskIds = [proposal.tasks[0].id];
+        if (relation === "direct") proposal.tasks[1].dependsOnTaskIds = [proposal.tasks[0].id];
+        if (relation === "transitive") {
+            proposal.tasks.push({ ...proposal.tasks[0], id: "middle", dependsOnTaskIds: [proposal.tasks[0].id] });
+            proposal.tasks[1].dependsOnTaskIds = ["middle"];
+        }
+        const first = deferred<ReturnType<typeof result>>();
+        search.mockImplementationOnce(() => first.promise).mockResolvedValueOnce(result("Second"));
+        const running = runResearch(input);
+        expect(search).toHaveBeenCalledTimes(1);
+        first.resolve(result("First"));
+        const r = await running;
+        expect(search).toHaveBeenCalledTimes(2);
+        expect(r.unsettledCostCny).toBe(0);
+    });
+
+    it("reads at most two anonymous pages concurrently and preserves all page records", async () => {
+        search.mockResolvedValue({ ...result("unused"), sources: Array.from({ length: 5 }, (_, index) => ({
+            ...result("Snippet").sources[0], url: `https://example.org/${index}`
+        })) });
+        const gates = Array.from({ length: 5 }, () => deferred<string>());
+        let active = 0, maximum = 0, index = 0;
+        read.mockImplementation(async (_url, options) => {
+            expect(options.anonymous).toBe(true);
+            active++;
+            maximum = Math.max(maximum, active);
+            const text = await gates[index++].promise;
+            active--;
+            return text;
+        });
+        const running = runResearch(withNeeds([need("one")]));
+        await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+        gates[0].resolve("Page 0");
+        gates[1].resolve("Page 1");
+        await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(4));
+        gates[2].resolve("Page 2");
+        gates[3].resolve("Page 3");
+        await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(5));
+        gates[4].resolve("Page 4");
+        const r = await running;
+        expect(maximum).toBe(2);
+        expect(r.audit.needs[0].pageSourceIds).toHaveLength(5);
+        expect(r.searchCostCny).toBe(.0072);
+        expect(r.unsettledCostCny).toBe(0);
+    });
+
+    it("drains already launched concurrent calls on cancellation without starting another need", async () => {
+        const controller = new AbortController();
+        const gates = [deferred<ReturnType<typeof result>>(), deferred<ReturnType<typeof result>>()];
+        let index = 0, ended = false;
+        search.mockImplementation(() => gates[index++].promise);
+        const running = runResearch(withNeeds([need("one"), need("two"), need("three")]), .03, controller.signal);
+        const rejected = expect(running).rejects.toThrow();
+        void running.then(() => { ended = true; }, () => { ended = true; });
+        expect(search).toHaveBeenCalledTimes(2);
+        controller.abort();
+        gates[0].resolve(result("Late first"));
+        await Promise.resolve();
+        expect(ended).toBe(false);
+        gates[1].resolve(result("Late second"));
+        await rejected;
+        expect(search).toHaveBeenCalledTimes(2);
+        expect(read).not.toHaveBeenCalled();
+    });
+
+    it("releases reservations for work disabled before launch and leaves its queries pending", async () => {
+        const input = withNeeds([need("one"), need("two")]);
+        const r = await researchReadWeaveEvidence(input, "", .03, false, () => {
+            input.taskContract!.request.options.externalSearch = "off";
+        });
+        expect(search).not.toHaveBeenCalled();
+        expect(r.searchCostCny).toBe(0);
+        expect(r.unsettledCostCny).toBe(0);
+        expect(r.audit.needs.every(item => item.queries[0].status === "pending")).toBe(true);
+        expect(r.audit.stopReason).toBe("disabled");
     });
 });

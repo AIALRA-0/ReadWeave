@@ -94,6 +94,12 @@ export interface ReadWeaveWorkflowSummary {
 
 export interface ReadWeaveUsageSummary {
     costBasis?: "configured-rate-estimate";
+    /** Settled provider charges, tariff estimates and unresolved reservations are distinct. */
+    knownCostCny?: number;
+    meteredEstimateCny?: number;
+    pendingCostCny?: number;
+    /** Token receipts cover this attempt; costs and calls include the generation's retries. */
+    usageScope?: "generation-cost-attempt-tokens";
     pricingVersion?: string;
     modelCalls: number;
     inputTokens: number;
@@ -109,6 +115,8 @@ export interface ReadWeaveUsageSummary {
 }
 
 export interface ReadWeaveQuestionContract {
+    /** Server-owned original request and advisory interpretation, never accepted from a client plan. */
+    taskContract?: import("./readweave_task_contract.js").TaskContract;
     normalizedQuestion: string;
     objective: string;
     answerRequirements: string[];
@@ -221,6 +229,9 @@ export interface ReadWeaveAnswerPlan {
 
 export interface ReadWeaveEvidenceSource {
     sourceId: string;
+    /** Retrieval provenance, not a declaration that the need has been answered. */
+    needIds?: string[];
+    queries?: string[];
     sourceType: "local" | "external";
     provider: string;
     title: string;
@@ -247,7 +258,7 @@ export interface ReadWeaveClaim {
     entityId?: string;
     claimType?: string;
     timeScope?: "current" | "historical" | "undated";
-    status?: "supported" | "unsupported" | "conflicted" | "out-of-scope";
+    status?: "supported" | "unsupported" | "conflicted" | "out-of-scope" | "not-checked";
 }
 
 export interface ReadWeaveGenerationAudit {
