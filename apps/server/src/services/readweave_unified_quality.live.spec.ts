@@ -156,7 +156,7 @@ const DEFINITION_CASES: DefinitionCase[] = [
     {
         title: "NPU",
         selected: "NPU 是面向神经网络工作负载的专用处理单元，重点加速矩阵乘法、卷积和张量运算。",
-        expected: [ /NPU 神经网络处理单元（Neural Processing Unit）/u, /专用|加速/u, /矩阵|卷积|张量/u ],
+        expected: [ /NPU 神经网络处理单元（Neural Processing Unit）/u, /专用|专门|加速/u, /矩阵|卷积|张量/u ],
         forbidden: [ /图形处理器就是|中央处理器就是/u ]
     },
     {

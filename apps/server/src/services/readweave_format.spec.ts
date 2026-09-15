@@ -48,6 +48,11 @@ describe("versioned formatting contract", () => {
         const definition = "算法（Algorithm）：输入一些数据；经过有限步骤得到结果";
         expect(formatReadWeaveMarkdown(definition)).not.toContain("\n- ");
     });
+    it("removes accidental spaces between Chinese words without touching protected content", () => {
+        const source = "神经网络处理单元 则只针对神经网络算子优化；神经网络处理单元 牺牲通用性；和 图形处理器不同\n\n`处理单元 则`";
+        expect(readWeaveFormatIssues(source)).toContain("FMT-048：连续中文词语之间存在多余空格");
+        expect(formatReadWeaveMarkdown(source)).toBe("神经网络处理单元则只针对神经网络算子优化；神经网络处理单元牺牲通用性；和图形处理器不同\n\n`处理单元 则`");
+    });
     it("keeps official punctuation but reports appended acronyms and ordinary lowercase labels", () => {
         expect(readWeaveFormatIssues("加州大学洛杉矶分校（University of California, Los Angeles）"))
             .not.toContain("FMT-121：英文名称括号不能混入缩写、别名或分隔说明，须核对已有名称而非编造展开");
@@ -181,7 +186,7 @@ describe("versioned formatting contract", () => {
         const question = `${label}是什么？`;
         const definition = `- ${label}：用于分析布局；仅在 2 个条件下适用；不能改变顺序`;
         const expectedQuestion = "布局消解（Layout Resolution）（也称 布局解析）是什么？";
-        const expectedDefinition = "- 布局消解（Layout Resolution）：也称 布局解析；用于分析布局；仅在 2 个条件下适用；不能改变顺序";
+        const expectedDefinition = "- 布局消解（Layout Resolution）：也称布局解析；用于分析布局；仅在 2 个条件下适用；不能改变顺序";
         expect(readWeaveFormatIssues(question)).toContain(
             "FMT-045/051：中文别名或说明不能混入英文名称括号，名称含义须结合文章核对"
         );

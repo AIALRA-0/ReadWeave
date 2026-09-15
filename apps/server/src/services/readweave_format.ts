@@ -42,7 +42,7 @@ function normalizeSimpleMathNotation(value: string): string {
 const INLINE_DATA = new RegExp([
     "((?<!`)(?<ticks>`+)(?!`)[\\s\\S]*?(?<!`)\\k<ticks>(?!`)|",
     String.raw`\$\$[\s\S]*?\$\$|\$(?!\$)[^$\n]+?\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]|`,
-    String.raw`!?\[[^\]\n]*\]\([^\n]*?\)|https?:\/\/[^\s<>，；。]+|`,
+    String.raw`!?\[[^\]\n]*\]\([^\n]*?\)|https?:\/\/(?:[^\s<>，；。（()）]|[（(][^）)\r\n]*[）)])+|`,
     String.raw`(?:[A-Za-z]:[\\/]|(?<![\p{L}\p{N}+])(?:\.{0,2})\/)[^\s，；。]+|[“「『][^”」』]*[”」』]|`,
     String.raw`"(?:\\.|[^"\\])*"|(?<![\p{L}\p{N}])'(?:\\.|[^'\\])*'(?![\p{L}\p{N}]))`
 ].join(""), "gu");
@@ -405,6 +405,7 @@ export function formatReadWeaveMarkdown(value: unknown): string {
             .replace(/(?<=\p{Script=Han})[ \t]*,[ \t]*/gu, "，")
             .replace(/,[ \t]*(?=\p{Script=Han})/gu, "，")
             .replace(/(?<=\p{Script=Han})[ \t]*;[ \t]*/gu, "；")
+            .replace(/(?<=\p{Script=Han})[ \t]+(?=\p{Script=Han})/gu, "")
             .replace(/(?<=\p{Script=Han})(?=[A-Za-z0-9])/gu, " ")
             .replace(/(?<=[A-Za-z0-9])(?=\p{Script=Han})/gu, " ")
             .replace(/\n(?:[ \t]*\n){2,}/gu, "\n\n")
@@ -622,6 +623,8 @@ export function readWeaveFormatIssues(body: string): string[] {
             issues.add("FMT-036：冒号后的两个以上独立并列项需要分行");
         if (/[\p{Script=Han}][A-Za-z0-9]|[A-Za-z0-9][\p{Script=Han}]/u.test(text))
             issues.add("FMT-047：中文与英文或数字之间缺少空格");
+        if (/(?<=\p{Script=Han})[ \t]+(?=\p{Script=Han})/u.test(text))
+            issues.add("FMT-048：连续中文词语之间存在多余空格");
         if (/(?<![\p{Script=Latin}\p{N}_])[A-Z][A-Za-z'’.-]+(?:\s+[A-Z][A-Za-z'’.-]+){1,5}\s*[（(]\s*[\p{Script=Han}]{2,4}(?:·[\p{Script=Han}]{1,8})?(?:\s*[，,][^）)]{1,40})?\s*[）)]/u.test(text))
             issues.add("FMT-044：人物姓名顺序必须为中文姓名（English or Pinyin Name）");
         return text;
