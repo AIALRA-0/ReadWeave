@@ -8,11 +8,18 @@ function article(html: string) {
 }
 
 describe("complete ReadWeave article context", () => {
+    it("locates repeated text in its actual chapter and keeps heading levels", () => {
+        const root = article("<h2>第一章</h2><p>same</p><h2>第二章</h2><p>same</p><h3>子节</h3><p>tail</p>");
+        const fragments = collectReadWeaveFragments(root, root.querySelectorAll("p")[1], "same");
+        expect(fragments.find(f => f.id === "current-block")?.documentBlockId).toBe("document-block-3");
+        expect(fragments.find(f => f.id === "heading")).toMatchObject({documentBlockId:"document-block-2",headingLevel:2});
+        expect(fragments.find(f => f.id === "document-block-4")).toMatchObject({role:"heading",headingLevel:3});
+    });
     it("retains exact selection, its full containing block, and tails beyond every old limit", () => {
         const long = "source ".repeat(15000) + "BLOCK TAIL";
         const root = article(`<h2>Heading</h2><p>${long}</p>${Array.from({ length: 180 }, (_, i) => `<p>block ${i}</p>`).join("")}<div>UNCLASSIFIED TAIL</div>bare text tail`);
         const fragments = collectReadWeaveFragments(root, root.querySelector("p")!, " exact\n  selected &amp; text ");
-        expect(fragments[0]).toEqual({ id: "selected", role: "selected", text: " exact\n  selected &amp; text " });
+        expect(fragments[0]).toEqual({ id: "selected", role: "selected", text: " exact\n  selected &amp; text ", documentBlockId:"document-block-1" });
         expect(fragments.find(item => item.id === "current-block")).toMatchObject({ role: "section", text: `<p>${long}</p>` });
         expect(fragments.map(item => item.text).join("\n")).toContain("block 179");
         expect(fragments.at(-1)?.text).toBe("bare text tail");

@@ -43,8 +43,10 @@ export class ReadWeaveActiveResources {
     }
 
     catalog() {
+        const positions = new Map(this.fragments.map(f => [f.id, f]));
         return [...this.sources.values()].map(({ sourceId, sourceType, title, url, excerpt }) => ({
-            id: sourceId, type: sourceType, title, url, characters: excerpt.length, opened: this.opened.has(sourceId)
+            id: sourceId, type: sourceType, title, url, characters: excerpt.length, opened: this.opened.has(sourceId),
+            documentBlockId:positions.get(sourceId)?.documentBlockId, headingLevel:positions.get(sourceId)?.headingLevel
         }));
     }
 
@@ -123,16 +125,20 @@ export class ReadWeaveActiveResources {
             return { sourceIds: ids, newSourceIds: [] };
         }
         if (action.tool === "article") return this.open(this.fragments.map(f => f.id), "article");
-        const index = this.fragments.findIndex(f => f.id === action.id);
+        const reference = this.fragments.find(f => f.id === action.id);
+        const documents = this.fragments.filter(f => f.id.startsWith("document-block-"));
+        const ordered = documents.length ? documents : this.fragments;
+        const index = ordered.findIndex(f => f.id === (reference?.documentBlockId ?? action.id));
         if (index < 0) throw new Error("文章定位标识不存在");
         if (action.tool === "neighbors") {
             if (!Number.isSafeInteger(action.radius) || action.radius < 1) throw new Error("相邻范围必须为正整数");
-            return this.open(this.fragments.filter((_, i) => Math.abs(i - index) <= action.radius).map(f => f.id), "neighbors");
+            return this.open(ordered.filter((_, i) => Math.abs(i - index) <= action.radius).map(f => f.id), "neighbors");
         }
         let start = index, end = index + 1;
-        while (start > 0 && this.fragments[start].role !== "heading") start--;
-        while (end < this.fragments.length && this.fragments[end].role !== "heading") end++;
-        return this.open(this.fragments.filter((_, i) => i >= start && i < end).map(f => f.id), "section");
+        while (start > 0 && ordered[start].role !== "heading") start--;
+        const level = ordered[start].headingLevel ?? 6;
+        while (end < ordered.length && !(ordered[end].role === "heading" && (ordered[end].headingLevel ?? 6) <= level)) end++;
+        return this.open(ordered.filter((_, i) => i >= start && i < end).map(f => f.id), "section");
     }
 
     allOpenedSources() { return [...this.opened].map(id => this.get(id)); }

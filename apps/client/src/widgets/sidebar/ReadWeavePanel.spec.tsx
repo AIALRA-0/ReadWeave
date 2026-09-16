@@ -86,7 +86,7 @@ describe("ReadWeave panel generation actions", () => {
         expect(button().getAttribute("aria-busy")).toBe("true");
         await vi.waitFor(() => expect(state.post).toHaveBeenCalledTimes(1));
         expect(state.post.mock.calls[0][1]).toMatchObject({ rootSourceExcerpt: "First selection", quoteSelectedText: true, autoSave: false });
-        expect(state.post.mock.calls[0][1].fragments).toContainEqual({ id: "current-block", role: "section", text: "<p>First selection</p>", distance: 0 });
+        expect(state.post.mock.calls[0][1].fragments).toContainEqual({ id: "current-block", role: "section", text: "<p>First selection</p>", distance: 0, documentBlockId: "document-block-0" });
         await act(() => reject(new Error("Provider unavailable")));
         await vi.waitFor(() => expect(host.textContent).toContain("Provider unavailable"));
         expect(button().disabled).toBe(false);

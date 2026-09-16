@@ -28,12 +28,17 @@ export function readWeaveContextText(node: Node | null | undefined): string {
 export function collectReadWeaveFragments(root: HTMLElement, block: HTMLElement, selectedText: string): ReadWeaveContextFragment[] {
     // Keep a table together: a selected cell needs its row, headers and spans.
     const current = block.closest<HTMLElement>("table") ?? block;
+    const documentNodes = Array.from(root.childNodes);
+    let containing: Node = current;
+    while (containing.parentNode && containing.parentNode !== root) containing = containing.parentNode;
+    const documentIndex = documentNodes.indexOf(containing as ChildNode);
+    const documentBlockId = documentIndex >= 0 ? `document-block-${documentIndex}` : undefined;
     const blocks = Array.from(root.querySelectorAll<HTMLElement>(READWEAVE_CONTEXT_BLOCK_SELECTOR));
     const index = blocks.indexOf(block);
     const heading = blocks.slice(0, index + 1).findLast(item => /^H[1-6]$/.test(item.tagName));
     const fragments: ReadWeaveContextFragment[] = [
-        { id: "selected", role: "selected", text: selectedText },
-        { id: "current-block", role: "section", text: readWeaveContextText(current), distance: 0 }
+        { id: "selected", role: "selected", text: selectedText, documentBlockId },
+        { id: "current-block", role: "section", text: readWeaveContextText(current), distance: 0, documentBlockId }
     ];
     // Repeated text at different positions has different surrounding context.
     // Keep all positions; the server may reference exact duplicates losslessly.
@@ -41,11 +46,19 @@ export function collectReadWeaveFragments(root: HTMLElement, block: HTMLElement,
         if (!fragment.text.trim()) return;
         fragments.push(fragment);
     };
-    if (heading) add({ id: "heading", role: "heading", text: readWeaveContextText(heading) });
+    if (heading) {
+        let container: Node = heading;
+        while (container.parentNode && container.parentNode !== root) container = container.parentNode;
+        const position = documentNodes.indexOf(container as ChildNode);
+        add({ id: "heading", role: "heading", text: readWeaveContextText(heading), headingLevel:Number(heading.tagName[1]),
+            documentBlockId: position >= 0 ? `document-block-${position}` : undefined });
+    }
     // Every root child is retained, including bare text and arbitrary containers.
     // Nested lists, tables and long sections stay intact, with no first-N limit.
-    Array.from(root.childNodes).forEach((node, order) => add({
-        id: `document-block-${order}`, role: "document", text: readWeaveContextText(node), distance: 20
-    }));
+    documentNodes.forEach((node, order) => {
+        const headingLevel = node instanceof Element && /^H[1-6]$/u.test(node.tagName) ? Number(node.tagName[1]) : undefined;
+        add({id: `document-block-${order}`, role: headingLevel ? "heading" : "document",
+            text: readWeaveContextText(node), distance: 20, headingLevel});
+    });
     return fragments.filter(fragment => fragment.text.length > 0);
 }

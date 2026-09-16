@@ -74,6 +74,9 @@ export interface ReadWeaveContextFragment {
     role: ReadWeaveContextRole;
     text: string;
     distance?: number;
+    /** Exact containing document block; avoids guessing among repeated text. */
+    documentBlockId?: string;
+    headingLevel?: number;
 }
 
 export interface ReadWeaveContextDecision {

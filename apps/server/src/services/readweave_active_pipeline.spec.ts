@@ -38,6 +38,23 @@ function ports(responses: unknown[], enabled = true) {
 }
 
 describe("active resource addressing", () => {
+    it("uses document position for repeated selections and includes child sections without crossing peer chapters", () => {
+        const r = new ReadWeaveActiveResources([
+            {id:"current-block",role:"section",text:"same",documentBlockId:"document-block-3"},
+            {id:"document-block-0",role:"heading",text:"第一章",headingLevel:2},
+            {id:"document-block-1",role:"document",text:"same"},
+            {id:"document-block-2",role:"heading",text:"第二章",headingLevel:2},
+            {id:"document-block-3",role:"document",text:"same"},
+            {id:"document-block-4",role:"heading",text:"子节",headingLevel:3},
+            {id:"document-block-5",role:"document",text:"必要细节"},
+            {id:"document-block-6",role:"heading",text:"第三章",headingLevel:2}
+        ]);
+        expect(r.read({tool:"section",id:"current-block"}).sourceIds).toEqual([
+            "document-block-2","document-block-3","document-block-4","document-block-5"]);
+        expect(r.read({tool:"neighbors",id:"current-block",radius:1}).sourceIds).toEqual([
+            "document-block-2","document-block-3","document-block-4"]);
+        expect(r.read({tool:"section",id:"document-block-4"}).sourceIds).toEqual(["document-block-4","document-block-5"]);
+    });
     it("never aliases an external source to an article's existing identifier", () => {
         const r = new ReadWeaveActiveResources([{id:"web-1",role:"selected",text:"文章原文"}]);
         const source = {sourceType:"external" as const,provider:"test",title:"外部资料",excerpt:"外部事实",accessedAt:"2026-09-15"};
