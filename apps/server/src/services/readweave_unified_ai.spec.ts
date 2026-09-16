@@ -2426,7 +2426,14 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.usage?.withinBudget).toBe(true);
     });
 
-    it("delivers an explicitly sourced full name with one search and no invented origin requirement", async () => {
+    it.each([
+        { period:"peak", at:"2026-09-15T01:30:00Z", expectedCost:0.01044 },
+        { period:"off-peak", at:"2026-09-15T12:30:00Z", expectedCost:0.00882 }
+    ])("delivers a sourced full name with one search at the exact $period tariff", async ({at,expectedCost}) => {
+        // Keep receipt prices deterministic without faking the network/job timers.
+        vi.useFakeTimers({toFake:["Date"]});
+        vi.setSystemTime(new Date(at));
+        try {
         searchMock.mockImplementation(async options => ({
             ...await defaultSearchImplementation(options),
             sources: [ { provider:"Official documentation", title:"Example Packet Transfer", url:"https://example.org/xpt", snippet:"Example Packet Transfer (XPT) is the formal name used by this specification.", publishedAt:"2025-01-01", score:100 } ],
@@ -2454,10 +2461,15 @@ describe("ReadWeave one-pass workflow", () => {
         expect(result.audit?.questionContract.answerRequirements.join("\n")).not.toContain("必须说明命名来历");
         expect(result.usage).toMatchObject({ modelCalls: 2, targetCny: .05, withinBudget: true });
         expect(result.usage?.budgetCny).toBeLessThanOrEqual(.10);
-        expect(result.usage?.costCny).toBeLessThanOrEqual(.01);
+        // Two receipts of 300 input + 80 output tokens, plus one 0.0072 search.
+        expect(result.usage?.costCny).toBeCloseTo(expectedCost, 6);
+        expect(result.usage?.costCny).toBeLessThanOrEqual(.05);
         expect(searchMock).toHaveBeenCalledTimes(1);
         expect(result.qualityState).toBe("provisional");
         expect(result.audit?.unresolvedIssues?.some(issue=>issue.includes("比较回答"))).toBe(false);
+        } finally {
+            vi.useRealTimers();
+        }
     });
     beforeEach(() => {
         searchMock.mockReset();
