@@ -20,7 +20,7 @@ import {
 } from "./readweave_ai.js";
 import { openReadWeaveJobBudget } from "./readweave_durable_budget.js";
 import { readWeaveGenerationBudgetMode } from "./readweave_budget.js";
-import type { ActiveStoredResult } from "./readweave_active_ai.js";
+import { readWeaveActiveRequestKey, type ActiveSavedState, type ActiveStoredResult } from "./readweave_active_ai.js";
 import { NonRetryableReadWeaveError } from "./readweave_errors.js";
 import { getPublishedReadWeaveHarnessProfile, initializeReadWeaveHarnessTrials } from "./readweave_harness.js";
 import { editReadWeaveLink, saveReadWeaveEntry, validateReadWeaveFollowUp } from "./readweave_repository.js";
@@ -328,7 +328,7 @@ function publicJob(row: JobRow, includeProgress = true): ReadWeaveGenerationJob 
     requireReadableArticle(row.articleId);
     const storedResult = parseJson<ActiveStoredResult>(decodeStoredValue(row.resultJson, row.isProtected));
     const { activeState: _privateState, ...publicResult } = storedResult ?? {};
-    let result = storedResult ? publicResult as ReadWeaveGenerateResponse : undefined;
+    let result = Object.keys(publicResult).length ? publicResult as ReadWeaveGenerateResponse : undefined;
     if (row.kind === "term" && storedResult?.termIdentity) {
         try {
             result = { ...result!, termIdentity: mergeReadWeaveTermIdentity(storedResult.termIdentity, undefined) };
@@ -707,9 +707,24 @@ function runJob(jobId: string) {
         for (let attempt = 1; attempt <= MAX_BACKGROUND_GENERATION_ATTEMPTS; attempt++) {
             try {
                 validateReadWeaveFollowUp(request);
-                const stored = parseJson<ActiveStoredResult>(decodeStoredValue(row.resultJson, row.isProtected));
-                const activeState = stored?.awaitingPlan && request.answerPlan?.reviewStatus === "approved" ? stored.activeState : undefined;
-                const result = await generateReadWeaveAnswer(request, progress => appendProgress(jobId, progress), controller.signal, { budget, activeState });
+                const latest = rowFor(jobId);
+                const stored = parseJson<ActiveStoredResult>(decodeStoredValue(latest.resultJson, latest.isProtected));
+                const activeState = stored?.activeState?.requestKey === readWeaveActiveRequestKey(request)
+                    || stored?.awaitingPlan && request.answerPlan?.reviewStatus === "approved" && !stored.activeState?.requestKey
+                    ? stored.activeState : undefined;
+                const saveActiveState = (state: ActiveSavedState) => {
+                    const current = rowFor(jobId);
+                    if (current.status !== "running" || current.activeAttemptId !== attemptId || controller.signal.aborted)
+                        throw new Error("任务已经改变，不能保存旧请求的阶段状态");
+                    if (current.isProtected && !protectedSession.isProtectedSessionAvailable())
+                        throw new Error("受保护会话已经锁定，不能保存阶段状态");
+                    const previous = parseJson<ActiveStoredResult>(decodeStoredValue(current.resultJson, current.isProtected));
+                    const payload = {...previous,activeState:state};
+                    sql.execute("UPDATE readweave_generation_jobs SET resultJson = ?, updatedAt = ? WHERE jobId = ? AND status = 'running' AND activeAttemptId = ?",
+                        [encodeStoredValue(JSON.stringify(payload), !!current.isProtected),new Date().toISOString(),jobId,attemptId]);
+                };
+                const result = await generateReadWeaveAnswer(request, progress => appendProgress(jobId, progress), controller.signal,
+                    { budget, activeState, saveActiveState });
                 // A non-empty, structurally valid answer with review warnings is
                 // still a deliverable draft.  The unified workflow has already
                 // rejected empty, unparsable, unsafe and invariant-breaking

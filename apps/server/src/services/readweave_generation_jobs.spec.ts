@@ -173,6 +173,26 @@ describe("ReadWeave persisted generation jobs", () => {
         expect(completed.progress.some(p => p.message.includes("同一预算"))).toBe(true);
     });
 
+    it("persists an in-flight stage checkpoint privately and supplies it on retry", async () => {
+        const state: activeAi.ActiveSavedState = {
+            requestKey:"",
+            checkpoint:{phase:"requirements",resources:{},trace:[],queries:[],notes:[]} as unknown as activeAi.ActiveSavedState["checkpoint"],
+            usages:[],searchQueries:[],warnings:[],searchCost:0,pageReads:0
+        };
+        generateMock.mockImplementationOnce(async (activeRequest,_progress,_signal,execution: unifiedAi.ReadWeaveUnifiedExecutionContext) => {
+            state.requestKey = activeAi.readWeaveActiveRequestKey(activeRequest);
+            execution.saveActiveState?.(state);
+            throw new NonRetryableReadWeaveError("阶段之后连接断开");
+        });
+        const started = startReadWeaveGenerationJob(request);
+        const paused = await waitForStatus(started.jobId,"paused");
+        expect(paused.result).toBeUndefined();
+        regenerateReadWeaveGenerationJob(started.jobId,{});
+        await waitForStatus(started.jobId,"ready-for-review");
+        expect(activeAi.readWeaveActiveRequestKey(generateMock.mock.calls[1][0])).toBe(state.requestKey);
+        expect(generateMock.mock.calls[1][3].activeState).toEqual(state);
+    });
+
     it("passes the server budget and detached original request through the real wrapper before normalization", async () => {
         const actual = await vi.importActual<typeof import("./readweave_ai.js")>("./readweave_ai.js");
         const unified = vi.spyOn(activeAi, "generateReadWeaveActiveAnswer").mockResolvedValue(result());

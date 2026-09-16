@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { ReadWeaveGenerateRequest } from "@triliumnext/commons";
 import { ReadWeaveActiveResources } from "./readweave_active_resources.js";
 import { repairReadWeaveExistingAcronyms } from "./readweave_format.js";
-import { applyActiveFormatPatches, runReadWeaveActivePipeline, validateActiveOutline, validateActiveRequirements,
+import { ReadWeaveProtocolError, parseReadWeaveProtocol } from "./readweave_protocol.js";
+import { applyActiveFormatPatchBatch, applyActiveFormatPatches, runReadWeaveActivePipeline, validateActiveOutline, validateActiveRequirements,
     type ActivePipelinePorts, type ActiveStage } from "./readweave_active_pipeline.js";
 
 const request: ReadWeaveGenerateRequest = {
@@ -225,6 +226,93 @@ describe("active generation workflow", () => {
 });
 
 describe("declarative protocol and format-only transactions", () => {
+    it("recovers one complete framed JSON value, but refuses ambiguous or partial outputs", () => {
+        expect(parseReadWeaveProtocol<{result:number}>("```json\n{\"result\":1}\n```" )).toEqual({result:1});
+        expect(parseReadWeaveProtocol<{result:number}>("Here is JSON: {\"result\":1}" )).toEqual({result:1});
+        expect(() => parseReadWeaveProtocol("{\"result\":1} {\"result\":2}")).toThrow(ReadWeaveProtocolError);
+        expect(() => parseReadWeaveProtocol("{\"result\":1")).toThrow(ReadWeaveProtocolError);
+    });
+    it("repairs malformed stage output in that stage without restarting completed research", async () => {
+        const p = ports([read,ready(requirements),search,ready(outline),ready({body:"计算内核"}),format]);
+        const original = p.config.model;
+        let broken = false;
+        p.config.model = vi.fn(async (stage,system,input) => {
+            if (stage === "writing" && !broken) { broken = true; throw new ReadWeaveProtocolError('{"body":"broken"} trailing',"包含多余内容"); }
+            return original(stage,system,input);
+        });
+        const result = await runReadWeaveActivePipeline(request,p.config);
+        expect(result.body).toBe("计算内核");
+        expect(p.retrieve).toHaveBeenCalledTimes(1);
+        expect(p.calls.filter(c => c.stage === "requirements")).toHaveLength(2);
+        expect(p.calls.filter(c => c.stage === "outline")).toHaveLength(2);
+        expect(p.calls.find(c => c.stage === "writing")?.input.malformedStageOutput).toContain("trailing");
+    });
+    it("resumes from a saved draft after interruption without repeating writing", async () => {
+        const first = ports([read,ready(requirements),search,ready(outline),ready({body:"计算内核执行计算"})]);
+        let checkpoint: NonNullable<ActivePipelinePorts["checkpoint"]> | undefined;
+        first.config.saveCheckpoint = value => { checkpoint = structuredClone(value); };
+        await runReadWeaveActivePipeline(request,first.config);
+        expect(checkpoint?.body).toBe("计算内核执行计算");
+        const second = ports([format]);
+        second.config.checkpoint = checkpoint;
+        const result = await runReadWeaveActivePipeline(request,second.config);
+        expect(result.body).toBe("计算内核执行计算");
+        expect(second.calls.map(c => c.stage)).toEqual(["format"]);
+        expect(second.retrieve).not.toHaveBeenCalled();
+    });
+    it("keeps valid independent format edits when another edit is invalid", () => {
+        const original = "**计算过程**\n\n金额为 10";
+        const result = applyActiveFormatPatchBatch(original,[
+            {original:"**计算过程**",replacement:"## 计算过程"},
+            {original:"金额为 10",replacement:"金额为 100"}
+        ],[]);
+        expect(result.body).toBe("## 计算过程\n\n金额为 10");
+        expect(result.accepted).toBe(1);
+        expect(result.rejected).toHaveLength(1);
+    });
+    it("accepts layout edits around an already expanded, confirmed name", () => {
+        const canonical = "CPU 中央处理器（Central Processing Unit）";
+        expect(applyActiveFormatPatches(canonical,[{original:canonical,replacement:`**${canonical}**`}],
+            [{original:"CPU",canonical,sourceIds:[]}])).toBe(`**${canonical}**`);
+    });
+    it("invalidates an interrupted draft when the approved outline has changed", async () => {
+        const first = ports([read,ready(requirements),search,ready(outline),ready({body:"旧草稿"})]);
+        let checkpoint: NonNullable<ActivePipelinePorts["checkpoint"]> | undefined;
+        first.config.saveCheckpoint = value => { checkpoint = structuredClone(value); };
+        const draft = await runReadWeaveActivePipeline(request,first.config);
+        const editedOutline = {...outline,nodes:[{...outline.nodes[0],statement:"先说明计算对象及其作用"}]};
+        const second = ports([ready(editedOutline),ready({body:"重新按审核后的构造流写作"}),format]);
+        second.config.checkpoint = checkpoint;
+        const result = await runReadWeaveActivePipeline({...request,
+            answerPlan:{...draft.plan,reviewStatus:"approved",steps:[editedOutline.nodes[0].statement]}},second.config);
+        expect(result.body).toBe("重新按审核后的构造流写作");
+        expect(second.calls.map(c => c.stage)).toEqual(["outline","writing","format"]);
+    });
+    it("uses a compact local executor task and accepts independent valid edits in one pass", async () => {
+        const draft = "**计算过程**\n\n**结果说明**";
+        const p = ports([read,ready(requirements),ready(outline),ready({body:draft}),
+            ready({patches:[{original:"**计算过程**",replacement:"## 计算过程"}],
+                tasks:[{original:"**结果说明**",instruction:"改为二级标题",sourceIds:[]}],remainingIssues:[]}),
+            ready({patches:[{original:"**结果说明**",replacement:"## 结果说明"}]})],false);
+        const result = await runReadWeaveActivePipeline(request,p.config);
+        expect(result.body).toBe("## 计算过程\n\n## 结果说明");
+        expect(result.trace.findLast(t => t.stage === "format")?.result).toEqual(expect.objectContaining({executorCalls:1,accepted:2}));
+        const task = p.calls.findLast(c => c.stage === "format")?.input;
+        expect(task).not.toHaveProperty("body");
+        expect(task?.original).toBe("**结果说明**");
+    });
+    it("reissues a malformed format envelope once without losing the completed answer", async () => {
+        const p = ports([read,ready(requirements),ready(outline),ready({body:"计算内核执行计算"}),format],false);
+        const original = p.config.model;
+        let broken = false;
+        p.config.model = vi.fn(async (stage,system,input) => {
+            if (stage === "format" && !broken) { broken = true; throw new ReadWeaveProtocolError("{truncated", "结构尚未闭合"); }
+            return original(stage,system,input);
+        });
+        const result = await runReadWeaveActivePipeline(request,p.config);
+        expect(result.body).toBe("计算内核执行计算");
+        expect(result.trace.filter(t => t.stage === "format")).toHaveLength(2);
+    });
     it("reorders supplied abbreviations without requiring a semantic registry or touching formulas", () => {
         const result = repairReadWeaveExistingAcronyms("图形处理器（Graphics Processing Unit，GPU）处理数据\n\n$GPU+x$\n\n`GPU`\n\n未知缩写 ABC");
         expect(result.body).toBe("GPU 图形处理器（Graphics Processing Unit）处理数据\n\n$GPU+x$\n\n`GPU`\n\n未知缩写 ABC");

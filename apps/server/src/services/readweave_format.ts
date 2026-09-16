@@ -569,10 +569,17 @@ export function applyReadWeaveFormatPatches(body: string, patches: ReadWeaveText
         }
         // A format repair may change layout/punctuation, never lexical facts.
         const words = (value: string) => {
-            const lexical = value.replace(/^[ \t]*[-*+]\s+/gmu, "")
+            const lexical = value.replace(/^[ \t]*#{1,6}[ \t]+/gmu, "")
+                .replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/gmu, "")
+                .replace(/(\*\*|__)(?=\S)([^\n]+?\S|\S)\1/gu, "$2")
                 .replace(/[\s，,；;。:：]/gu, "");
             return patch.rule === "FMT-local" ? lexical.toLocaleLowerCase() : lexical;
         };
+        // Whitespace/punctuation normalization must not merge or change numbers.
+        const numbers = (value: string) => value.replace(/^[ \t]*\d+[.)][ \t]+/gmu, "")
+            .match(/[-+]?\d+(?:[.,:]\d+)*/gu) ?? [];
+        if (JSON.stringify(numbers(patch.original)) !== JSON.stringify(numbers(patch.replacement)))
+            throw new Error("格式补丁改变了数字或数值关系，未应用修改");
         const acronym = patch.original.match(/（([A-Za-z][^（）\n]*?)[，,][ \t]*([A-Z][A-Z0-9+/#_-]{1,15})）/u);
         const safeAcronymMove = patch.rule === "FMT-local" && acronym && (() => {
             const [originalPair, englishName, abbreviation] = acronym;

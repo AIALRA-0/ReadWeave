@@ -322,7 +322,7 @@ describe("request-wide prepaid budget", () => {
         expect(budget.remainingCny).toBe(0.001);
     });
     it("reserves the cold-cache input with a safety margin and maximum output", () => {
-        expect(readWeaveModelReservation("规则", "正文", 100)).toBe((260 * 3 + 900) / 1e6);
+        expect(readWeaveModelReservation("规则", "正文", 100)).toBe((260 * 2 + 800) / 1e6);
     });
     it("fits the complete skill prefix under the difficult-question cold-cache ceiling", () => {
         const { prompt } = readWeaveWritingSkill();
@@ -367,9 +367,9 @@ describe("request-wide prepaid budget", () => {
     });
     it("uses the same receipt rates for the ledger and displayed cost", () => {
         expect(readWeaveModelUsageCost({ prompt_tokens:1000,prompt_cache_hit_tokens:500,
-            prompt_cache_miss_tokens:500,completion_tokens:100 })).toBe(.00245);
+            prompt_cache_miss_tokens:500,completion_tokens:100 })).toBe(.00182);
         expect(readWeaveModelUsageCost({ prompt_tokens:1000,completion_tokens:100 }))
-            .toBe(.0039);
+            .toBe(.0028);
         expect(readWeaveModelUsageCost({ prompt_tokens:0,completion_tokens:0 })).toBe(0);
         expect(readWeaveModelUsageCost({ prompt_tokens:1000 })).toBeUndefined();
         expect(readWeaveModelUsageCost({ prompt_tokens:1000,completion_tokens:NaN }))
@@ -394,19 +394,19 @@ describe("request-wide prepaid budget", () => {
         expect(budget.remainingCny).toBe(.047997);
     });
     it.each([
-        [ "2026-09-09T00:59:59Z",4.5 ],[ "2026-09-09T01:00:00Z",9 ],
-        [ "2026-09-09T03:59:59Z",9 ],[ "2026-09-09T04:00:00Z",4.5 ],
-        [ "2026-09-09T06:00:00Z",9 ],[ "2026-09-09T09:59:59Z",9 ],
-        [ "2026-09-09T10:00:00Z",4.5 ],[ "2026-09-12T06:00:00Z",4.5 ]
+        [ "2026-09-16T00:59:59Z",4 ],[ "2026-09-16T01:00:00Z",8 ],
+        [ "2026-09-16T03:59:59Z",8 ],[ "2026-09-16T04:00:00Z",4 ],
+        [ "2026-09-16T06:00:00Z",8 ],[ "2026-09-16T09:59:59Z",8 ],
+        [ "2026-09-16T10:00:00Z",4 ],[ "2026-09-19T06:00:00Z",4 ]
     ])("applies the official weekday tariff at %s", (date,output) => {
         expect(readWeaveModelRates("deepseek-v4-flash",new Date(date)).output).toBe(output);
     });
     it("reserves peak rates and distinguishes Pro from Flash", () => {
-        expect(readWeaveModelRates()).toEqual({ cacheHitInput:.1,cacheMissInput:3,output:9 });
+        expect(readWeaveModelRates()).toEqual({ cacheHitInput:.04,cacheMissInput:2,output:8 });
         expect(readWeaveModelRates("deepseek-v4-pro"))
             .toEqual({ cacheHitInput:.3,cacheMissInput:9,output:27 });
         const rates = readWeaveModelRates("deepseek-v4-flash",new Date("2026-09-12T06:00:00Z"));
         expect(readWeaveModelUsageCost({ prompt_tokens:1000,completion_tokens:100 },rates))
-            .toBe(.00195);
+            .toBe(.0014);
     });
 });

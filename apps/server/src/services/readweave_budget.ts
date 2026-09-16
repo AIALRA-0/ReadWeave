@@ -343,8 +343,8 @@ export function readWeaveModelRates(model = "deepseek-flash", at?: Date): ReadWe
     const peak = hour === undefined || weekday && (hour >= 1 && hour < 4 || hour >= 6 && hour < 10);
     const factor = peak ? 1 : 0.5;
     const pro = model.startsWith("deepseek-v4-pro");
-    return { cacheHitInput:(pro ? 0.3 : 0.1) * factor,
-        cacheMissInput:(pro ? 9 : 3) * factor,output:(pro ? 27 : 9) * factor };
+    return { cacheHitInput:(pro ? 0.3 : 0.04) * factor,
+        cacheMissInput:(pro ? 9 : 2) * factor,output:(pro ? 27 : 8) * factor };
 }
 
 /** The same configured rates settle reservations and produce the user estimate.

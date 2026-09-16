@@ -2427,8 +2427,8 @@ describe("ReadWeave one-pass workflow", () => {
     });
 
     it.each([
-        { period:"peak", at:"2026-09-15T01:30:00Z", expectedCost:0.01044 },
-        { period:"off-peak", at:"2026-09-15T12:30:00Z", expectedCost:0.00882 }
+        { period:"peak", at:"2026-09-15T01:30:00Z", expectedCost:0.00968 },
+        { period:"off-peak", at:"2026-09-15T12:30:00Z", expectedCost:0.00844 }
     ])("delivers a sourced full name with one search at the exact $period tariff", async ({at,expectedCost}) => {
         // Keep receipt prices deterministic without faking the network/job timers.
         vi.useFakeTimers({toFake:["Date"]});

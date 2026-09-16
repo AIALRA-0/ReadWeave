@@ -180,7 +180,7 @@ describe("versioned formatting contract", () => {
         expect(revision).toMatch(/^[a-f0-9]{64}$/u);
         for (const marker of [ "# 顶层格式规则", "# 零基础解释框架", "# 公式解释规则",
             "FMT-001", "FMT-121", "EXPL-001", "EXPL-014", "## 八、交付前复核",
-            "不得包含中文别名、解释、缩写、逗号、分隔符" ])
+            "不得混入中文别名、解释、追加的缩写、逗号、分隔符" ])
             expect(prompt).toContain(marker);
         expect(prompt).toContain("附带公式至少说明整体用途、首次符号、关键组分、结果含义和当前条件");
     });

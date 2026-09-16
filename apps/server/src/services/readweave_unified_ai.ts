@@ -1,3 +1,4 @@
+import { parseReadWeaveProtocol, ReadWeaveProtocolError } from "./readweave_protocol.js";
 import type {
     ReadWeaveAiSettings,
     ReadWeaveAnswerPlan,
@@ -165,6 +166,7 @@ export type ReadWeaveUnifiedQualityChecker = (
 /** Server-only execution state, never deserialized from a client request. */
 export interface ReadWeaveUnifiedExecutionContext {
     activeState?: import("./readweave_active_ai.js").ActiveSavedState;
+    saveActiveState?: (state: import("./readweave_active_ai.js").ActiveSavedState) => void;
     /** Server-only evaluation control, never accepted from a browser request. */
     interpretationMode?: "root-only";
     budget?: ReadWeaveBudget;
@@ -228,8 +230,8 @@ function isStructuredOutputFailure(error: unknown): boolean {
     while (current instanceof Error && !seen.has(current)) {
         seen.add(current);
         if (
-            current instanceof SyntaxError ||
-            /模型没有返回可读取的结构化结果|模型返回了空结果|invalid_structured_output|Unexpected (?:token|end)|\bJSON\b/iu.test(
+            current instanceof SyntaxError || current instanceof ReadWeaveProtocolError ||
+            /模型没有返回可读取的结构化结果|模型返回结构需要修复|ReadWeaveProtocolError|模型返回了空结果|invalid_structured_output|Unexpected (?:token|end)|\bJSON\b/iu.test(
                 `${current.name}\n${current.message}`
             )
         )
@@ -516,18 +518,7 @@ function stringList(value: unknown, _maximum = 12, itemMaximum = 500): string[] 
 }
 
 function parseJson<T>(content: string): T {
-    const normalized = content
-        .trim()
-        .replace(/^```(?:json)?\s*/iu, "")
-        .replace(/\s*```$/u, "");
-    try {
-        return JSON.parse(normalized) as T;
-    } catch {
-        const start = normalized.indexOf("{");
-        const end = normalized.lastIndexOf("}");
-        if (start >= 0 && end > start) return JSON.parse(normalized.slice(start, end + 1)) as T;
-        throw new Error("模型没有返回可读取的结构化结果");
-    }
+    return parseReadWeaveProtocol<T>(content);
 }
 
 /**
@@ -611,9 +602,8 @@ export async function requestJson<T>(
         );
     }
     let lastError: unknown;
-    // One model stage means one provider request. The background job owns the
-    // retry policy for a transient transport failure; this function must not
-    // silently run the same generation stage a second time.
+    // Each provider request needs its own receipt. The writer or active stage
+    // owns protocol repair; transport failures remain single-dispatch here.
     const maximumAttempts = 1;
     for (let attempt = 0; attempt < maximumAttempts; attempt++) {
         let reportedUsage: CompletionUsage | undefined;
@@ -810,7 +800,7 @@ export async function requestJson<T>(
             const officialProRouteFailure =
                 config.providerType === "deepseek-official" &&
                 /^deepseek-v4-pro(?:-|$)/iu.test(config.model) &&
-                /(?:Content Exists Risk|SyntaxError|模型没有返回可读取的结构化结果)/iu.test(detail);
+                /(?:Content Exists Risk|SyntaxError|ReadWeaveProtocolError|模型没有返回可读取的结构化结果)/iu.test(detail);
             if (officialProRouteFailure && !nextAttemptedModels.has("deepseek-flash")) {
                 // This is a route-specific moderation false positive seen on
                 // otherwise ordinary technical definitions. Retry the same

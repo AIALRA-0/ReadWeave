@@ -1,4 +1,5 @@
 import type { ReadWeaveGenerateRequest, ReadWeaveGenerateResponse, ReadWeaveGenerationProgress } from "@triliumnext/commons";
+import { createHash } from "node:crypto";
 import { ReadWeaveBudget, readWeaveGenerationBudgetMode, readWeaveModelRates } from "./readweave_budget.js";
 import { runReadWeaveActivePipeline, type ActiveStage, type ActiveCheckpoint } from "./readweave_active_pipeline.js";
 import { readReadWeavePageWithJina, searchReadWeaveActiveEvidence, withReadWeaveSearchPolicy } from "./readweave_search.js";
@@ -10,6 +11,7 @@ import { requestJson, usageSummary, type CompletionUsage, type ReadWeaveUnifiedE
 const VERSION = "active-research-v1";
 /** Stored only in the protected job payload, not accepted from or returned to the browser. */
 export interface ActiveSavedState {
+    requestKey?: string;
     checkpoint: ActiveCheckpoint;
     usages: CompletionUsage[];
     searchQueries: string[];
@@ -18,6 +20,10 @@ export interface ActiveSavedState {
     pageReads: number;
 }
 export type ActiveStoredResult = ReadWeaveGenerateResponse & { activeState?: ActiveSavedState };
+export function readWeaveActiveRequestKey(request: ReadWeaveGenerateRequest): string {
+    const {answerPlan: _answerPlan, ...stableRequest} = request;
+    return createHash("sha256").update(JSON.stringify(stableRequest)).digest("hex");
+}
 const STAGE_SCHEMA = {
     type:"object", additionalProperties:false, required:["gaps","readyReason","actions","result"],
     properties:{gaps:{type:"array",items:{type:"string"}},readyReason:{type:"string"},
@@ -37,7 +43,9 @@ export async function generateReadWeaveActiveAnswer(
     const rates = config.providerType === "deepseek-official" || new URL(config.baseUrl).hostname === "api.deepseek.com"
         ? readWeaveModelRates(config.model) : config.rates ?? readWeaveModelRates(config.model);
     const searchEnabled = request.activeExternalSearch === true || request.autoExternalSearch !== false;
-    const saved = execution?.activeState;
+    const requestKey = readWeaveActiveRequestKey(original);
+    const saved = execution?.activeState?.requestKey === requestKey || !execution?.activeState?.requestKey
+        ? execution?.activeState : undefined;
     const usages: CompletionUsage[] = [...saved?.usages ?? []], searchQueries: string[] = [...saved?.searchQueries ?? []], warnings: string[] = [...saved?.warnings ?? []];
     let searchCost = saved?.searchCost ?? 0, pageReads = saved?.pageReads ?? 0, round = 0, actualModel = config.model;
     const stages: Record<ActiveStage, ReadWeaveGenerationProgress["stage"]> = {
@@ -47,6 +55,8 @@ export async function generateReadWeaveActiveAnswer(
     return withReadWeaveSearchPolicy({ externalSearch: searchEnabled ? "allowed" : "off", allowedSourceScopes: ["public"], signal }, async () => {
         const result = await runReadWeaveActivePipeline(structuredClone(request), {
             signal, searchEnabled, writingSkill: writingSkill.prompt, progress: report, checkpoint:saved?.checkpoint,
+            saveCheckpoint: checkpoint => execution?.saveActiveState?.({requestKey,checkpoint:structuredClone(checkpoint),
+                usages:structuredClone(usages),searchQueries:[...searchQueries],warnings:[...warnings],searchCost,pageReads}),
             budgetStatus: () => budget.enforced
                 ? {mode:"enforced",remainingCny:budget.remainingCny,ceilingCny:budget.hardLimitCny,
                     guidance:"优先完成当前阶段的必要工作，查证只补实际缺口，已有事实不重复搜索，保留完整写作和格式修复的费用"}
@@ -132,7 +142,7 @@ export async function generateReadWeaveActiveAnswer(
         onProgress?.({ stage: "complete", round: ++round, message: result.checkpoint ? "资料与构造流已准备，请审核后生成答案" : issues.length ? "回答已生成，格式建议保留在详细日志" : "回答已生成，格式检查完成", issues });
         return {
             awaitingPlan: !!result.checkpoint,
-            activeState: result.checkpoint ? {checkpoint:result.checkpoint,usages,searchQueries,warnings,searchCost,pageReads} : undefined,
+            activeState: result.checkpoint ? {requestKey,checkpoint:result.checkpoint,usages,searchQueries,warnings,searchCost,pageReads} : undefined,
             body: result.body, optimizedTitle: request.optimizeQuestion ? result.requirements.normalizedQuestion : undefined,
             contentType: request.contentType, origin: request.origin, questionStack: request.questionStack,
             evidenceSources: sources, claims: result.outline.facts.map((f, i) => ({ claimId: `F${i + 1}`, text: f.statement,
