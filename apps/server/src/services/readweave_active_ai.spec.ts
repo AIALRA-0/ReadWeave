@@ -17,6 +17,7 @@ vi.mock("./readweave_writing_skill.js", () => ({readWeaveWritingSkill:()=>({prom
 
 import { generateReadWeaveActiveAnswer } from "./readweave_active_ai.js";
 import { ReadWeaveBudget } from "./readweave_budget.js";
+import { generateReadWeaveLocalRewrite } from "./readweave_unified_ai.js";
 
 const request:ReadWeaveGenerateRequest={articleId:"a",anchorId:"b",anchorType:"range",kind:"question",title:"内核是什么？",
     fragments:[{id:"selected",role:"selected",text:"内核"},{id:"context",role:"section",text:"执行布局计算的计算内核"}]};
@@ -90,5 +91,19 @@ describe("temporary generation budget suspension",()=>{
         await expect(generateReadWeaveActiveAnswer(request,undefined,undefined,{budget:spentBudget()}))
             .rejects.toThrow("完整输入无法纳入剩余预算");
         expect(fetcher).not.toHaveBeenCalled();
+    });
+    it("also releases the separate selection-rewrite budget without broadening its edit scope",async()=>{
+        vi.stubEnv("READWEAVE_BUDGET_MODE","meter-only");
+        runtime.current={...runtime.current,baseUrl:"https://gateway.example.org/v1",providerType:"deepseek-compatible",
+            rates:{cacheHitInput:1000,cacheMissInput:1000,output:1000}};
+        const fetcher=vi.fn(async()=>new Response(JSON.stringify({
+            choices:[{message:{content:JSON.stringify({original:"计算过程",replacement:"计算步骤",reason:"更明确",preservedFacts:["计算"]})},finish_reason:"stop"}],
+            usage:{prompt_tokens:1000,completion_tokens:100,total_tokens:1100}
+        }),{status:200,headers:{"Content-Type":"application/json"}}));
+        vi.stubGlobal("fetch",fetcher);
+        const result=await generateReadWeaveLocalRewrite({body:"这个计算过程执行任务",selectedText:"计算过程",instruction:"改为计算步骤"});
+        expect(fetcher).toHaveBeenCalledTimes(1);
+        expect(result).toMatchObject({original:"计算过程",replacement:"计算步骤",scope:"selection-only",usage:{budgetEnforced:false,withinBudget:true}});
+        expect(result.usage!.costCny).toBeGreaterThan(.1);
     });
 });

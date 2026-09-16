@@ -26,6 +26,7 @@ import { buildReadWeaveAnswerPlan } from "./readweave_answer_plan.js";
 import {
     READWEAVE_PRICING_VERSION,
     ReadWeaveBudget,
+    readWeaveGenerationBudgetMode,
     type ReadWeaveModelRates,
     type ReadWeavePriceSnapshot,
     readWeaveModelPriceSnapshot,
@@ -4848,7 +4849,7 @@ export async function generateReadWeaveLocalRewrite(request: ReadWeaveLocalRewri
         `contextAfter：${cleanText(request.contextAfter, 1_000)}`,
         `用户修改意见：${instruction}`
     ].join("\n\n");
-    const budget = new ReadWeaveBudget(0.1);
+    const budget = new ReadWeaveBudget(0.1, { mode: readWeaveGenerationBudgetMode() });
     const runtimeResolution = await resolveReadWeaveRuntime(getReadWeaveRuntimeConfig(), signal, budget);
     const usages: CompletionUsage[] = [];
     if (runtimeResolution.probeReceipt !== undefined) {
