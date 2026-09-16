@@ -437,28 +437,47 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
                 formatDiagnostics:pass ? failedPatches : readWeaveFormatIssues(body),
                 terms:outline!.terms,facts:outline!.facts,priorFailures:failedPatches
             }));
-            if (array(modelResult.actions).length) throw new Error("格式阶段不得重新查资料");
             const result = record(modelResult.result), patches = array(result.patches);
+            // Some providers also describe their edits in actions. These are not
+            // retrieval calls and must not invalidate an otherwise valid result.
+            const requestedTools = array(modelResult.actions).filter(a => !!record(a).tool);
             const tasks = result.tasks === undefined ? [] : array(result.tasks);
-            const taskResults = await Promise.all(tasks.map(async (value,index) => {
+            const taskIssues: string[] = [];
+            const localTasks = tasks.flatMap((value,index) => {
                 try {
                     const task = record(value), original = text(task.original), instruction = text(task.instruction);
-                    if (!body.includes(original)) throw new Error("局部原文已经改变");
+                    const start = body.indexOf(original);
+                    if (start < 0 || body.indexOf(original,start + 1) >= 0) throw new Error("局部原文无法唯一定位");
                     const sourceIds = strings(task.sourceIds), facts = outline!.facts.filter(f => f.sourceIds.some(id => sourceIds.includes(id)));
+                    return [{original,instruction,facts,terms:outline!.terms.filter(t => t.sourceIds.some(id => sourceIds.includes(id))),sourceIds}];
+                } catch (error) {
+                    taskIssues.push(`局部任务 ${index + 1}：${error instanceof Error ? error.message : String(error)}`);
+                    return [];
+                }
+            });
+            let executedPatches: unknown[] = [];
+            if (localTasks.length) {
+                try {
+                    // Batch independent local tasks so the complete writing skill is
+                    // sent once, not once per edit. No task or article is truncated.
                     const execution = record(await ports.model("format",`${ports.writingSkill}\n你只执行指定的局部格式或解释补写任务，不重新搜索、分类、审查整篇正文，原文数字、公式、代码、条件与否定必须保留
+                        所有 tasks 都要处理，每个补丁只能针对对应 original 内的原文，不得编辑其他位置；actions 固定为空数组
                         返回 {gaps:[],actions:[],readyReason:"局部执行完成",result:{patches:[{original:"输入原文",replacement:"局部完整替换"}]}}`,
-                    {original,instruction,facts,terms:outline!.terms.filter(t => t.sourceIds.some(id => sourceIds.includes(id))),sourceIds,
-                        contentType:request.contentType,budget:ports.budgetStatus?.()}));
-                    if (array(execution.actions).length) throw new Error("局部执行器不得调用资料工具");
-                    return {patches:array(record(execution.result).patches),issues:[] as string[]};
-                } catch (error) { return {patches:[],issues:[`局部任务 ${index + 1}：${error instanceof Error ? error.message : String(error)}`]}; }
-            }));
-            const submitted = [...patches,...taskResults.flatMap(t => t.patches)];
+                    {tasks:localTasks,contentType:request.contentType,budget:ports.budgetStatus?.()}));
+                    for (const patch of array(record(execution.result).patches)) {
+                        const original = text(record(patch).original);
+                        if (localTasks.some(task => task.original.includes(original))) executedPatches.push(patch);
+                        else taskIssues.push("局部执行器提交了任务范围以外的原文，未应用该项");
+                    }
+                } catch (error) { taskIssues.push(`局部执行：${error instanceof Error ? error.message : String(error)}`); }
+            }
+            const submitted = [...patches,...executedPatches];
             const applied = applyActiveFormatPatchBatch(body,submitted,outline!.terms);
             body = applied.body;
-            failedPatches = [...applied.rejected,...taskResults.flatMap(t => t.issues)];
+            failedPatches = [...applied.rejected,...taskIssues,
+                ...(requestedTools.length ? ["格式阶段没有执行额外资料工具，已保留并处理可应用的局部补丁"] : [])];
             formatIssues = [...new Set([...strings(result.remainingIssues),...failedPatches,...readWeaveFormatIssues(body)])];
-            trace.push({stage:"format",gaps:[],actions:[],readyReason:"已按完整技能提出局部修改",result:{submitted:submitted.length,accepted:applied.accepted,rejected:failedPatches.length,executorCalls:tasks.length}});
+            trace.push({stage:"format",gaps:[],actions:[],readyReason:"已按完整技能提出局部修改",result:{submitted:submitted.length,accepted:applied.accepted,rejected:failedPatches.length,executorCalls:localTasks.length ? 1 : 0}});
             if (applied.accepted) repairRounds++;
             if (!failedPatches.length && (!applied.accepted || !readWeaveFormatIssues(body).length)) break;
         } catch (error) {

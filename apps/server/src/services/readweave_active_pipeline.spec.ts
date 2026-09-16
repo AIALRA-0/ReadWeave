@@ -299,7 +299,27 @@ describe("declarative protocol and format-only transactions", () => {
         expect(result.trace.findLast(t => t.stage === "format")?.result).toEqual(expect.objectContaining({executorCalls:1,accepted:2}));
         const task = p.calls.findLast(c => c.stage === "format")?.input;
         expect(task).not.toHaveProperty("body");
-        expect(task?.original).toBe("**结果说明**");
+        expect(task?.tasks).toEqual([expect.objectContaining({original:"**结果说明**"})]);
+    });
+    it("batches all local edits and does not mistake patch descriptions for retrieval calls", async () => {
+        const p = ports([read,ready(requirements),ready(outline),ready({body:"**甲**\n\n**乙**"}),
+            {...ready({patches:[],tasks:[
+                {original:"**甲**",instruction:"改为标题",sourceIds:[]},
+                {original:"**乙**",instruction:"改为标题",sourceIds:[]}
+            ],remainingIssues:[]}),actions:[{type:"task",target:"标题"}]},
+            {...ready({patches:[{original:"**甲**",replacement:"## 甲"},{original:"**乙**",replacement:"## 乙"}]}),
+                actions:[{type:"patch",target:"标题"}]}],false);
+        const result = await runReadWeaveActivePipeline(request,p.config);
+        expect(result.body).toBe("## 甲\n\n## 乙");
+        expect(result.formatIssues).toEqual([]);
+        expect(p.calls.filter(c => c.stage === "format")).toHaveLength(2);
+        expect(p.calls.at(-1)?.input.tasks).toHaveLength(2);
+    });
+    it("does not move abbreviations across project names or numeric quantities", () => {
+        expect(repairReadWeaveExistingAcronyms("DREAMPlace 采用加权平均（Weighted Average，WA）线长模型").body)
+            .toBe("DREAMPlace 采用 WA 加权平均（Weighted Average）线长模型");
+        expect(repairReadWeaveExistingAcronyms("2N 点快速傅里叶变换（Fast Fourier Transform，FFT）").body)
+            .toBe("2N 点快速傅里叶变换（Fast Fourier Transform，FFT）");
     });
     it("reissues a malformed format envelope once without losing the completed answer", async () => {
         const p = ports([read,ready(requirements),ready(outline),ready({body:"计算内核执行计算"}),format],false);

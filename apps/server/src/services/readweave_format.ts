@@ -233,8 +233,10 @@ export function repairReadWeaveExistingAcronyms(body: string) {
     let count = 0;
     const repaired = mapReadWeaveProse(body, prose => prose.replace(TRAILING_ACRONYM_NAME,
         (original, rawLabel: string, englishName: string, abbreviation: string) => {
-            const sentence = /^[A-Z]/u.test(rawLabel) ? undefined
-                : rawLabel.match(/^(.*?(?:属于|涉及|采用|使用|通过|基于|面向|以及|和|与|是|为))([\p{Script=Han}]{2,30})$/u);
+            const sentence = rawLabel.match(/^(.*(?:属于|涉及|采用|使用|通过|基于|面向|以及|和|与|是|为|由))([\p{Script=Han}]{2,30})$/u);
+            // A Latin prefix can be a project name or a quantity, not part of
+            // the adjacent Chinese term. Leave ambiguous boundaries unchanged.
+            if (/^[A-Z]/u.test(rawLabel) && !sentence) return original;
             const connector = sentence?.[1] ?? "", label = sentence?.[2] ?? rawLabel;
             const replacement = `${connector}${connector ? " " : ""}${abbreviation} ${label}（${englishName}）`;
             // The transaction proves all lexical fields are preserved. It may
@@ -620,7 +622,12 @@ export function readWeaveFormatIssues(body: string): string[] {
             /^[a-z]{4,}$/u.test(word)
             && (index === 0 || !/^(?:of|the|and|for|in|on|to|with|from)$/u.test(word)))))
         issues.add("FMT-062：普通双语术语标签的英文名称需要核对标题式大小写与官方拼写");
-    if (repairReadWeaveExistingAcronyms(body).count > 0)
+    let trailingAcronym = false;
+    mapReadWeaveProse(body, value => {
+        trailingAcronym ||= new RegExp(TRAILING_ACRONYM_NAME.source,"u").test(value);
+        return value;
+    });
+    if (trailingAcronym)
         issues.add("FMT-052：缩写必须置于中文全称和英文全称之前");
     const headings = Lexer.lex(body).filter((token): token is Tokens.Heading => token.type === "heading");
     if (headings.some((heading, index) => index > 0 && heading.depth > headings[index - 1].depth + 1))
