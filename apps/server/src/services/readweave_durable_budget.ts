@@ -13,6 +13,7 @@ export interface ReadWeaveBudgetAuthorization {
     difficultWorkAuthorized?: boolean;
     /** Stable across transport retries/restarts; changes on explicit regeneration only. */
     generationKey?: string;
+    mode?: "enforced" | "meter-only";
 }
 
 export function readWeaveAuthorizedBudgetCny(authorization: ReadWeaveBudgetAuthorization): number {
@@ -85,5 +86,7 @@ export function openReadWeaveJobBudget(
             WHERE jobId = ? AND snapshotJson = ?
         `, [JSON.stringify(next), ledgerKey, JSON.stringify(previous)]).changes === 1
     };
-    return new ReadWeaveBudget(existing.limitMicros / 1e6, { hardLimitCny: existing.hardLimitMicros / 1e6, storage });
+    const budget = new ReadWeaveBudget(existing.limitMicros / 1e6, { hardLimitCny: existing.hardLimitMicros / 1e6, storage });
+    if (authorization.mode === "meter-only") budget.suspendEnforcement();
+    return budget;
 }

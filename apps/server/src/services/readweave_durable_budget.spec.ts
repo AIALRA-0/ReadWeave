@@ -178,6 +178,28 @@ describe("durable per-job budget", () => {
         expect(openReadWeaveJobBudget("job", undefined, database).modelRequests).toBe(0);
     });
 
+    it("releases an existing job cap without resetting charges and preserves meter-only mode on disk", () => {
+        const auth = { requiredUpperBoundCny:.10, difficultWorkAuthorized:true, generationKey:"existing" };
+        const first = openReadWeaveJobBudget("job", auth, database);
+        first.raiseLimit(.10);
+        const spent = first.reserveModelRequest(.07)!;
+        first.reportModelUsage(spent, .064021);
+        const pending = first.reserveModelRequest(.01)!;
+        const open = openReadWeaveJobBudget("job", {...auth,mode:"meter-only"}, database);
+        expect(open.enforced).toBe(false);
+        expect(open.meteredEstimateCny).toBe(.064021);
+        expect(open.unreportedModelCostCny).toBe(.01);
+        expect(open.reserveModelRequest(.054234)).toBe(3);
+        connections[0].close();
+        database = connect();
+        const restored = openReadWeaveJobBudget("job", auth, database);
+        expect(restored.enforced).toBe(false);
+        expect(restored.modelRequests).toBe(3);
+        expect(restored.reportModelUsage(pending, .002)).toBe(true);
+        expect(restored.reserveResourceRequest(.0504)).toBe(4);
+        expect(openReadWeaveJobBudget("job", {...auth,generationKey:"new-bounded"}, database).enforced).toBe(true);
+    });
+
     it("rejects missing jobs and corrupt persisted amounts instead of resetting the budget", () => {
         expect(() => openReadWeaveJobBudget("missing", undefined, database)).toThrow(/unavailable/);
         const budget = openReadWeaveJobBudget("job", undefined, database);

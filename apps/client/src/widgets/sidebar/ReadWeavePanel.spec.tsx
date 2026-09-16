@@ -220,6 +220,23 @@ describe("ReadWeave panel generation actions", () => {
         await vi.waitFor(() => expect(Array.from({ length: sessionStorage.length }, (_, i) => sessionStorage.getItem(sessionStorage.key(i)!)).some(value => value?.includes('"generationJobId":"accepted-job"'))).toBe(true));
         expect(button().disabled).toBe(true);
     });
+    it("shows recorded spending without a misleading ceiling when enforcement is suspended", async () => {
+        state.post.mockImplementation(async (_url: string, body: Record<string, unknown>) => ({ job: state.job = {
+            ...body, jobId: "meter-only-job", draftId: "meter-only-draft", status: "ready-for-review", progress: [],
+            stateVersion: 1, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+            sourceExcerpt: body.rootSourceExcerpt,
+            result: { body: "A complete answer", usage: { costCny: 0.173421, budgetCny: 0.1,
+                budgetEnforced: false, modelCalls: 7, totalTokens: 24000 } }
+        } }));
+        await select("First selection");
+        await act(() => button().click());
+        await vi.waitFor(() => expect(host.querySelector('[data-testid="readweave-usage-cost"]')?.textContent).toContain("费用限制已暂停"));
+        const usage = host.querySelector('[data-testid="readweave-usage-cost"]')!.textContent!;
+        expect(usage).toContain("¥0.1734");
+        expect(usage).toContain("7 次模型调用");
+        expect(usage).not.toContain("0.10");
+        expect(state.post).toHaveBeenCalledTimes(1);
+    });
     function acceptGenerationJobs() {
         state.post.mockImplementation(async (_url: string, body: Record<string, unknown>) => ({ job: state.job = {
             ...body, jobId: `accepted-${state.post.mock.calls.length}`, draftId: `draft-${state.post.mock.calls.length}`,

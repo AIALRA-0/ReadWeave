@@ -113,6 +113,8 @@ export interface ReadWeaveUsageSummary {
     costCny: number;
     targetCny: number;
     budgetCny: number;
+    /** False means the numeric budget is a historical target, not a spending limit. */
+    budgetEnforced?: boolean;
     withinTarget: boolean;
     withinBudget: boolean;
 }
@@ -296,6 +298,7 @@ export interface ReadWeaveGenerationAudit {
 
 export interface ReadWeaveResearchAudit {
     budgetCny: number;
+    budgetEnforced?: boolean;
     searchCostCny: number;
     queryCount: number;
     pageReadCount: number;

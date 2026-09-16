@@ -574,7 +574,7 @@ export async function requestJson<T>(
     onUsage?: (usage?: CompletionUsage) => void,
     attemptedModels: ReadonlySet<string> = new Set(),
     strictRoute = false,
-    protocol?: { inputTokens: number; schema?: Record<string, unknown> }
+    protocol?: { inputTokens: number; schema?: Record<string, unknown>; omitOutputLimit?: boolean }
 ): Promise<ModelCallResult<T>> {
     const requestedConfig = runtimeConfig ?? getReadWeaveRuntimeConfig();
     const config = requestedConfig;
@@ -584,6 +584,7 @@ export async function requestJson<T>(
     const isDeepSeek = providerType === "deepseek-official" || (providerType === "deepseek-compatible" && /(?:^|\/)deepseek(?:-|$)/iu.test(config.model));
     const isKimiCode = providerHost === "api.kimi.com";
     const effectiveMaxTokens = isKimiCode ? Math.max(maxTokens, 4_096) : maxTokens;
+    const omitOutputLimit = protocol?.omitOutputLimit === true && budget?.enforced === false;
     // DeepSeek's Responses API can legitimately spend more than 30 seconds on
     // a grounded JSON answer. Cutting the connection at that point discards a
     // valid in-flight result and turns normal provider latency into a failure.
@@ -638,7 +639,7 @@ export async function requestJson<T>(
                             // deterministic decoding just like the compatible
                             // Chat Completions route below.
                             temperature: 0,
-                            max_output_tokens: effectiveMaxTokens,
+                            ...(omitOutputLimit ? {} : { max_output_tokens: effectiveMaxTokens }),
                             text: { format: protocol?.schema
                                 ? { type:"json_schema", name:"readweave_stage", schema:protocol.schema }
                                 : { type: "json_object" } }
@@ -647,7 +648,7 @@ export async function requestJson<T>(
                             model: config.model,
                             stream: false,
                             temperature: isKimiCode ? 1 : 0,
-                            max_tokens: effectiveMaxTokens,
+                            ...(omitOutputLimit ? {} : { max_tokens: effectiveMaxTokens }),
                             ...(isDeepSeek || isKimiCode
                                 ? {
                                     response_format: {
@@ -4168,8 +4169,9 @@ export function usageSummary(usages: CompletionUsage[], searchCostCny: number, b
         costCny,
         targetCny,
         budgetCny,
+        ...(ledger?.enforced === false ? { budgetEnforced: false } : {}),
         withinTarget: costCny <= targetCny,
-        withinBudget: costCny <= budgetCny
+        withinBudget: ledger?.enforced === false || costCny <= budgetCny
     };
 }
 

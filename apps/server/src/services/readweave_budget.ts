@@ -77,6 +77,8 @@ export interface ReadWeaveBudgetReceipt {
 /** JSON-safe server state. All money is a nonnegative safe integer in micro-CNY. */
 export interface ReadWeaveBudgetSnapshot {
     version: 1;
+    /** Missing on older ledgers: their original limits remain enforced. */
+    mode?: "enforced" | "meter-only";
     limitMicros: number;
     hardLimitMicros: number;
     unassignedMicros: number;
@@ -93,6 +95,12 @@ export interface ReadWeaveBudgetOptions {
     /** Server-authorized immutable ceiling. Defaults to the initial target. */
     hardLimitCny?: number;
     storage?: ReadWeaveBudgetStorage;
+    mode?: "enforced" | "meter-only";
+}
+
+/** Temporary owner-authorized evaluation policy, server-owned and never request supplied. */
+export function readWeaveGenerationBudgetMode(): "enforced" | "meter-only" {
+    return process.env.READWEAVE_BUDGET_MODE === "enforced" ? "enforced" : "meter-only";
 }
 
 export function readWeaveCnyToMicros(costCny: number): number | undefined {
@@ -115,6 +123,7 @@ function accountedMicros(state: ReadWeaveBudgetSnapshot): number {
 
 function validateSnapshot(state: ReadWeaveBudgetSnapshot): void {
     if (!state || state.version !== 1 || !Array.isArray(state.receipts)) throw new Error("Invalid budget snapshot.");
+    if (state.mode !== undefined && state.mode !== "enforced" && state.mode !== "meter-only") throw new Error("Invalid budget mode.");
     requireMicros(state.limitMicros);
     requireMicros(state.hardLimitMicros);
     requireMicros(state.unassignedMicros);
@@ -124,7 +133,7 @@ function validateSnapshot(state: ReadWeaveBudgetSnapshot): void {
         if (!receipt || receipt.id !== index + 1 || !["model", "resource"].includes(receipt.kind))
             throw new Error("Invalid budget receipt.");
         requireMicros(receipt.reservedMicros);
-        if (receipt.reservedMicros > state.limitMicros) throw new Error("Invalid budget reservation.");
+        if (state.mode !== "meter-only" && receipt.reservedMicros > state.limitMicros) throw new Error("Invalid budget reservation.");
         if (receipt.priceSnapshot !== undefined) copyPriceSnapshot(receipt.priceSnapshot);
         if (receipt.settlementPriceSnapshot !== undefined) {
             copyPriceSnapshot(receipt.settlementPriceSnapshot);
@@ -138,12 +147,12 @@ function validateSnapshot(state: ReadWeaveBudgetSnapshot): void {
                 throw new Error("Invalid budget cost basis.");
         } else if (receipt.costBasis !== undefined) throw new Error("Unsettled receipt has a cost basis.");
     }
-    if (state.unassignedMicros > state.limitMicros) throw new Error("Invalid unassigned reservation.");
+    if (state.mode !== "meter-only" && state.unassignedMicros > state.limitMicros) throw new Error("Invalid unassigned reservation.");
     requireMicros(accountedMicros(state));
     // Settled provider costs may reveal an overrun; unknown reservations cannot cause one.
     const pending = state.receipts.filter(r => r.settledMicros === undefined)
         .reduce((sum, r) => sum + r.reservedMicros, state.unassignedMicros);
-    if (pending > state.limitMicros) throw new Error("Pending reservations exceed budget ceiling.");
+    if (state.mode !== "meter-only" && pending > state.limitMicros) throw new Error("Pending reservations exceed budget ceiling.");
 }
 
 /** One immutable server ceiling per job. Persist before starting billable work.
@@ -161,7 +170,8 @@ export class ReadWeaveBudget {
             || hardLimitMicros > 100_000 || limitMicros > hardLimitMicros) throw new Error("Invalid budget ceiling.");
         this.ceilingMicros = hardLimitMicros;
         this.storage = config.storage;
-        this.state = { version: 1, limitMicros, hardLimitMicros, unassignedMicros: 0, receipts: [] };
+        this.state = { version: 1, limitMicros, hardLimitMicros, unassignedMicros: 0, receipts: [],
+            ...(config.mode === "meter-only" ? { mode: "meter-only" as const } : {}) };
         if (this.storage) this.snapshot();
     }
 
@@ -196,6 +206,12 @@ export class ReadWeaveBudget {
     get limitCny(): number { return this.snapshot().limitMicros / 1e6; }
     get hardLimitCny(): number { return this.ceilingMicros / 1e6; }
     get modelRequests(): number { return this.snapshot().receipts.filter(r => r.kind === "model").length; }
+    get enforced(): boolean { return this.snapshot().mode !== "meter-only"; }
+
+    /** Keep all settled and unresolved charges when the owner releases an existing task's cap. */
+    suspendEnforcement(): void {
+        if (this.enforced) this.update(state => { state.mode = "meter-only"; });
+    }
 
     /** Raises the working target within the already-authorized immutable ceiling.
      * Example: new ReadWeaveBudget(.05, { hardLimitCny: .10 }) for authorized work. */
@@ -232,7 +248,7 @@ export class ReadWeaveBudget {
         const micros = readWeaveCnyToMicros(costCny);
         if (micros === undefined) return false;
         return this.update(state => {
-            if (micros > state.limitMicros - accountedMicros(state)) return false;
+            if (state.mode !== "meter-only" && micros > state.limitMicros - accountedMicros(state)) return false;
             state.unassignedMicros += micros;
             return true;
         });
@@ -252,7 +268,7 @@ export class ReadWeaveBudget {
         if (micros === undefined) return undefined;
         const prices = priceSnapshot === undefined ? undefined : copyPriceSnapshot(priceSnapshot);
         return this.update(state => {
-            if (micros > state.limitMicros - accountedMicros(state)) return undefined;
+            if (state.mode !== "meter-only" && micros > state.limitMicros - accountedMicros(state)) return undefined;
             const id = state.receipts.length + 1;
             state.receipts.push({ id, kind, reservedMicros: micros, ...(prices ? { priceSnapshot: prices } : {}) });
             return id;
@@ -265,7 +281,7 @@ export class ReadWeaveBudget {
         if (micros === undefined) throw new Error("Invalid model reservation.");
         return this.update(state => {
             const prepaid = Math.min(state.unassignedMicros, micros);
-            if (micros - prepaid > state.limitMicros - accountedMicros(state)) throw new Error("Budget ceiling reached.");
+            if (state.mode !== "meter-only" && micros - prepaid > state.limitMicros - accountedMicros(state)) throw new Error("Budget ceiling reached.");
             state.unassignedMicros -= prepaid;
             const id = state.receipts.length + 1;
             state.receipts.push({ id, kind: "model", reservedMicros: micros });

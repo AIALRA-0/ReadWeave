@@ -2477,7 +2477,9 @@ export default function ReadWeavePanel() {
                             )}
                             {displayedJob?.result?.usage && (
                                 <p class="readweave-status" data-testid="readweave-usage-cost">
-                                    {t("readweave.usage_cost", {
+                                    {displayedJob.result.usage.budgetEnforced === false
+                                        ? `本次费用约 ¥${displayedJob.result.usage.costCny.toFixed(4)} · 费用限制已暂停 · ${displayedJob.result.usage.modelCalls} 次模型调用 · ${displayedJob.result.usage.totalTokens.toLocaleString()} 个词元`
+                                        : t("readweave.usage_cost", {
                                         cost: displayedJob.result.usage.costCny.toFixed(4),
                                         budget: displayedJob.result.usage.budgetCny.toFixed(2),
                                         calls: displayedJob.result.usage.modelCalls,

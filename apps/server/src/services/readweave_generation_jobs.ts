@@ -19,6 +19,7 @@ import {
     mergeReadWeaveTermIdentity
 } from "./readweave_ai.js";
 import { openReadWeaveJobBudget } from "./readweave_durable_budget.js";
+import { readWeaveGenerationBudgetMode } from "./readweave_budget.js";
 import type { ActiveStoredResult } from "./readweave_active_ai.js";
 import { NonRetryableReadWeaveError } from "./readweave_errors.js";
 import { getPublishedReadWeaveHarnessProfile, initializeReadWeaveHarnessTrials } from "./readweave_harness.js";
@@ -699,7 +700,8 @@ function runJob(jobId: string) {
         const budget = openReadWeaveJobBudget(jobId, {
             requiredUpperBoundCny: 0.10,
             difficultWorkAuthorized: true,
-            generationKey: row.createdAt
+            generationKey: row.createdAt,
+            mode: readWeaveGenerationBudgetMode()
         });
         let latestError: unknown;
         for (let attempt = 1; attempt <= MAX_BACKGROUND_GENERATION_ATTEMPTS; attempt++) {

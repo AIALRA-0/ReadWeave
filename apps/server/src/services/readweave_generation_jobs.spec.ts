@@ -1,6 +1,6 @@
 import type { ReadWeaveGenerateRequest, ReadWeaveGenerateResponse, ReadWeaveSourceLocator } from "@triliumnext/commons";
 import { cls, hidden_subtree as hiddenSubtreeService, note_service as noteService, protected_session as protectedSessionModule } from "@triliumnext/core";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ReadWeaveBudget } from "./readweave_budget.js";
 import { openReadWeaveJobBudget } from "./readweave_durable_budget.js";
@@ -119,6 +119,8 @@ describe("ReadWeave persisted generation jobs", () => {
     });
 
     beforeEach(() => {
+        // These cases exercise the optional enforced policy, not the temporary production default.
+        vi.stubEnv("READWEAVE_BUDGET_MODE", "enforced");
         sql.execute("DELETE FROM readweave_generation_events");
         sql.execute("DELETE FROM readweave_generation_changes");
         sql.execute("DELETE FROM readweave_generation_jobs");
@@ -134,6 +136,23 @@ describe("ReadWeave persisted generation jobs", () => {
             onProgress?.({ stage: "checking", round: 2, message: "测试检查发现分组问题", issues: [ "作者姓名不应作为术语" ] });
             return result();
         });
+    });
+
+    afterEach(() => { vi.unstubAllEnvs(); });
+
+    it("uses the owner's meter-only policy for real background jobs without losing cost accounting", async () => {
+        vi.stubEnv("READWEAVE_BUDGET_MODE", "meter-only");
+        generateMock.mockImplementationOnce(async (_request, _progress, _signal, execution: unifiedAi.ReadWeaveUnifiedExecutionContext) => {
+            const budget = execution.budget!;
+            expect(budget.enforced).toBe(false);
+            const receipt = budget.reserveModelRequest(.25)!;
+            expect(receipt).toBe(1);
+            expect(budget.reportModelUsage(receipt, .12)).toBe(true);
+            return { ...result(), usage: unifiedAi.usageSummary([], 0, budget.limitCny, budget) };
+        });
+        const started = startReadWeaveGenerationJob(request);
+        const finished = await waitForStatus(started.jobId, "ready-for-review");
+        expect(finished.result?.usage).toMatchObject({costCny:.12,budgetEnforced:false,modelCalls:1,withinBudget:true});
     });
 
     it("persists research, awaits plan approval, and resumes within the same budget epoch", async () => {

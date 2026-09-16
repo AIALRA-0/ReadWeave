@@ -7,6 +7,30 @@ import {
 import { readWeaveWritingSkill } from "./readweave_writing_skill.js";
 
 describe("maximum permitted input-rate reservation", () => {
+    it("meters model and search charges beyond the former cap without dropping unsettled requests", () => {
+        const budget = new ReadWeaveBudget(.05, { hardLimitCny: .10 });
+        budget.raiseLimit(.10);
+        const prior = budget.reserveModelRequest(.07)!;
+        budget.reportModelUsage(prior, .064021);
+        expect(budget.reserveModelRequest(.054234)).toBeUndefined();
+        budget.suspendEnforcement();
+        const writer = budget.reserveModelRequest(.054234)!;
+        const search = budget.reserveResourceRequest(.0504)!;
+        expect(writer).toBe(2);
+        expect(search).toBe(3);
+        expect(budget.reportModelUsage(writer, .059)).toBe(true);
+        expect(budget.reportUsage(search, .0504, "configured-rate-estimate")).toBe(true);
+        expect(budget.meteredEstimateCny).toBe(.173421);
+        const pending = budget.reserveModelRequest(3.5)!;
+        const restored = ReadWeaveBudget.restore(JSON.parse(JSON.stringify(budget.snapshot())));
+        expect(restored.enforced).toBe(false);
+        expect(restored.unreportedModelCostCny).toBe(3.5);
+        expect(restored.reserveResourceRequest(.0504)).toBe(5);
+        expect(restored.reportModelUsage(pending, .01)).toBe(true);
+        expect(restored.reportModelUsage(pending, .02)).toBe(false);
+        expect(restored.reserveModelRequest(NaN)).toBeUndefined();
+        expect(restored.reserveModelRequest(Infinity)).toBeUndefined();
+    });
     it("blocks the formerly under-reserved high-cache-hit compatible request before dispatch", () => {
         const rates = { cacheHitInput: 1000, cacheMissInput: 1, output: 1 };
         const reservation = readWeaveModelReservation("JSON", "review", 16, rates);

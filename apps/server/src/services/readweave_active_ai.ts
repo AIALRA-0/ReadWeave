@@ -1,5 +1,5 @@
 import type { ReadWeaveGenerateRequest, ReadWeaveGenerateResponse, ReadWeaveGenerationProgress } from "@triliumnext/commons";
-import { ReadWeaveBudget, readWeaveModelRates } from "./readweave_budget.js";
+import { ReadWeaveBudget, readWeaveGenerationBudgetMode, readWeaveModelRates } from "./readweave_budget.js";
 import { runReadWeaveActivePipeline, type ActiveStage, type ActiveCheckpoint } from "./readweave_active_pipeline.js";
 import { readReadWeavePageWithJina, searchReadWeaveActiveEvidence, withReadWeaveSearchPolicy } from "./readweave_search.js";
 import { getReadWeaveRuntimeConfig } from "./readweave_settings.js";
@@ -33,6 +33,7 @@ export async function generateReadWeaveActiveAnswer(
     const original = structuredClone(execution?.originalRequest ?? request);
     const config = getReadWeaveRuntimeConfig(), writingSkill = readWeaveWritingSkill(true);
     const budget = execution?.budget ?? new ReadWeaveBudget(0.05, { hardLimitCny: 0.1 });
+    if (readWeaveGenerationBudgetMode() === "meter-only") budget.suspendEnforcement();
     const rates = config.providerType === "deepseek-official" || new URL(config.baseUrl).hostname === "api.deepseek.com"
         ? readWeaveModelRates(config.model) : config.rates ?? readWeaveModelRates(config.model);
     const searchEnabled = request.activeExternalSearch === true || request.autoExternalSearch !== false;
@@ -46,15 +47,18 @@ export async function generateReadWeaveActiveAnswer(
     return withReadWeaveSearchPolicy({ externalSearch: searchEnabled ? "allowed" : "off", allowedSourceScopes: ["public"], signal }, async () => {
         const result = await runReadWeaveActivePipeline(structuredClone(request), {
             signal, searchEnabled, writingSkill: writingSkill.prompt, progress: report, checkpoint:saved?.checkpoint,
-            budgetStatus: () => ({remainingCny:budget.remainingCny,ceilingCny:budget.hardLimitCny,
-                guidance:"优先完成当前阶段的必要工作，查证只补实际缺口，已有事实不重复搜索，保留完整写作和格式修复的费用"}),
+            budgetStatus: () => budget.enforced
+                ? {mode:"enforced",remainingCny:budget.remainingCny,ceilingCny:budget.hardLimitCny,
+                    guidance:"优先完成当前阶段的必要工作，查证只补实际缺口，已有事实不重复搜索，保留完整写作和格式修复的费用"}
+                : {mode:"meter-only",remainingCny:null,ceilingCny:null,
+                    guidance:"用户已暂时解除费用上限，完成必要研究、完整回答与格式修复，不因费用不足拒答或省略；已有资料复用，不重复检索"},
             async model(stage, system, input) {
                 signal?.throwIfAborted();
                 const user = JSON.stringify(input);
                 const inputTokens = readWeavePromptInputTokens(system,user,config.model);
                 const inputCost = inputTokens * Math.max(rates.cacheHitInput,rates.cacheMissInput) / 1e6;
                 const minimumReservation = inputCost + 512 * rates.output / 1e6;
-                if (minimumReservation > budget.remainingCny && budget.limitCny < budget.hardLimitCny) {
+                if (budget.enforced && minimumReservation > budget.remainingCny && budget.limitCny < budget.hardLimitCny) {
                     budget.raiseLimit(budget.hardLimitCny);
                     report(stage, "完整生成所需费用超过普通目标，使用已授权的困难预算，仍逐次预留并记账");
                 }
@@ -64,12 +68,18 @@ export async function generateReadWeaveActiveAnswer(
                 // Official V4 advertises 384K output; do not impose our former
                 // 32K workflow cap. Unknown compatible services enforce their own
                 // documented limit instead of receiving an invented application cap.
-                const providerCeiling = config.providerType === "deepseek-official" ? 384_000 : Number.MAX_SAFE_INTEGER;
-                const maxTokens = Math.min(providerCeiling, Math.floor(allowance * 1e6 / Math.max(rates.output, 0.001)));
-                if (maxTokens < 128 || inputCost + maxTokens * rates.output / 1e6 > budget.remainingCny)
+                const official = config.providerType === "deepseek-official" || new URL(config.baseUrl).hostname === "api.deepseek.com";
+                const providerCeiling = official ? 384_000 : Number.MAX_SAFE_INTEGER;
+                // In meter-only mode, no output limit is derived from money. For unknown
+                // gateways omit the request limit; 384K is only a pending accounting estimate.
+                const maxTokens = budget.enforced
+                    ? Math.min(providerCeiling, Math.floor(allowance * 1e6 / Math.max(rates.output, 0.001)))
+                    : 384_000;
+                if (budget.enforced && (maxTokens < 128 || inputCost + maxTokens * rates.output / 1e6 > budget.remainingCny))
                     throw new Error(`当前模型费率下本阶段完整输入无法纳入剩余预算：${stage}；输入预估 ¥${inputCost.toFixed(6)}，剩余 ¥${budget.remainingCny.toFixed(6)}；未发起付费调用，未替换问题或答案`);
                 const response = await requestJson<unknown>(system, user, maxTokens, 120_000, config, signal,
-                    `主动流程 ${stage}`, budget, usage => { if (usage) usages.push(usage); }, new Set(), true, {inputTokens,schema:STAGE_SCHEMA});
+                    `主动流程 ${stage}`, budget, usage => { if (usage) usages.push(usage); }, new Set(), true,
+                    {inputTokens,schema:STAGE_SCHEMA,omitOutputLimit:!budget.enforced && !official});
                 if (response.outputLimitReached || response.outputEnvelopeIncomplete) throw new Error("模型未交付完整阶段结果，已保留费用记录，未使用截断结果或替代答案");
                 actualModel = response.model;
                 return response.value;
@@ -94,8 +104,8 @@ export async function generateReadWeaveActiveAnswer(
                 }
                 // Reserve before dispatch. The allowance covers every adapter selected by this call.
                 const tariff = action.provider === "people" ? 0.0504 : 0.0072;
-                if (tariff > budget.remainingCny && budget.limitCny < budget.hardLimitCny) budget.raiseLimit(budget.hardLimitCny);
-                const allowance = Math.min(budget.remainingCny, tariff);
+                if (budget.enforced && tariff > budget.remainingCny && budget.limitCny < budget.hardLimitCny) budget.raiseLimit(budget.hardLimitCny);
+                const allowance = budget.enforced ? Math.min(budget.remainingCny, tariff) : tariff;
                 const receipt = budget.reserveResourceRequest(allowance);
                 if (receipt === undefined) throw new Error("检索费用预留失败，未发起外部调用");
                 const evidence = await searchReadWeaveActiveEvidence({ query: action.query, provider: action.provider, budgetCny: allowance }, { signal });
@@ -137,7 +147,7 @@ export async function generateReadWeaveActiveAnswer(
                 answerPlan: result.plan, externalSearchDecision: decision, searchQueries, unresolvedClaims: result.outline.facts.filter(f => f.basis === "unresolved").map(f => f.statement),
                 validationIssues: issues, citationsVerified: false, generatedAt: new Date().toISOString(), independentVerification: "not-run",
                 activeExecution: { requirements: result.requirements, outline: result.outline, stages: result.trace, reads: result.resources.trace, warnings },
-                research: { budgetCny: budget.limitCny, searchCostCny: searchCost, queryCount: searchQueries.length, pageReadCount: pageReads,
+                research: { budgetCny: budget.limitCny, budgetEnforced:budget.enforced, searchCostCny: searchCost, queryCount: searchQueries.length, pageReadCount: pageReads,
                     cacheHits: 0, stopReason: !searchEnabled ? "disabled" : result.outline.facts.some(f => f.basis === "unresolved") ? "exhausted" : "sufficient", queries: searchQueries,
                     missingFacts: result.outline.facts.filter(f => f.basis === "unresolved").map(f => f.statement) }
             },
