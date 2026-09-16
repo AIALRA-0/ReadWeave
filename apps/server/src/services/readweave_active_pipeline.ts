@@ -12,7 +12,7 @@ export const ACTIVE_CONTEXT_RULES = `用户问题是唯一任务来源，选区�
 
 const RESEARCH_RULES = `你是 ReadWeave 的资料获取与写作执行者，只返回 JSON，不返回思维链
 每次生成之前先判断本阶段尚缺哪些资料方向，输出简短 gaps 和必要工具 actions，取得资料后才能生成 result
-没有缺口时说明 readyReason 并直接生成，不为凑流程重复搜索；“已经搜过”不代表所有需求都有证据
+默认搜索开启时，构造流之前由流程按事实需求执行一次搜索；这一步已有结果时不要重复搜索；其余阶段没有缺口时说明 readyReason 并直接生成
 需求用陈述句表达一个原子事实，禁止把多个问题塞进一个需求；不预设固定领域分类
 needs.statement 描述用户需要了解的事实，例如“用户需要了解本语境中内核所指的计算对象”，不要在辨识阶段抢先把未经查证的答案写成需求
 严格区分“辨识问题”和“解决问题”：requirements 阶段只需确认用户指代与问题范围，不要先查完实现细节、历史与出处才肯列出需求
@@ -88,6 +88,9 @@ export interface ActiveCheckpoint {
     queries: Array<[string, unknown]>;
     notes: Array<[string, string[]]>;
     failedRetrievals?: Array<[string, unknown]>;
+    formatPass?: number;
+    formatIssues?: string[];
+    failedPatches?: string[];
 }
 export interface ActiveStageTrace {
     stage: ActiveStage;
@@ -201,25 +204,65 @@ export function applyActiveFormatPatches(body: string, patches: unknown[], terms
 }
 
 /** Accept independent safe edits even when one proposal is stale or invalid. */
-export function applyActiveFormatPatchBatch(body: string, patches: unknown[], terms: ActiveOutline["terms"]) {
-    const accepted: Array<{start:number; end:number; replacement:string}> = [];
+export function applyActiveFormatPatchBatch(body: string, patches: unknown[], terms: ActiveOutline["terms"],
+    tasks: Array<{original:string; facts:ActiveFact[]}> = []) {
+    let next = body;
+    let accepted = 0;
     const rejected: string[] = [];
     for (let index = 0; index < patches.length; index++) {
         try {
             const proposal = record(patches[index]);
             const original = text(proposal.original), replacement = text(proposal.replacement);
-            const start = body.indexOf(original), end = start + original.length;
-            if (start < 0 || body.indexOf(original, start + 1) >= 0) throw new Error("原文无法唯一定位");
-            if (accepted.some(a => start < a.end && end > a.start)) throw new Error("补丁与已接受修改重叠");
-            applyActiveFormatPatches(body, [proposal], terms);
-            accepted.push({start,end,replacement});
+            if (original === replacement || !next.includes(original) && body.includes(original) && next.includes(replacement)) continue;
+            // Validate each edit against the current text. A later edit may safely
+            // change a word inside a paragraph already edited by an earlier patch.
+            if (proposal.operation === "supplement") {
+                const task = tasks.find(item => item.original === original && item.facts.length > 0);
+                if (!task || !replacement.includes(original) || replacement.indexOf(original) !== replacement.lastIndexOf(original))
+                    throw new Error("解释补写缺少唯一原文或已核实事实");
+                if (mapReadWeaveProse(original, () => "") !== mapReadWeaveProse(replacement, () => ""))
+                    throw new Error("解释补写修改了公式、代码或受保护内容");
+                const numbers = (value:string) => value.match(/\d+(?:[.,]\d+)*/gu) ?? [];
+                const allowedNumbers = new Set(numbers(original + task.facts.map(f => f.statement).join(" ")));
+                if (numbers(replacement).some(number => !allowedNumbers.has(number)))
+                    throw new Error("解释补写引入了未核实数值");
+                const knownNames = [original, ...task.facts.map(f => f.statement), ...terms.map(t => t.canonical)].join(" ");
+                if (Array.from(replacement.matchAll(/（([A-Za-z][^（）]*?)）/gu), match => match[1])
+                    .some(name => !knownNames.includes(name)))
+                    throw new Error("解释补写引入了未核实英文名称");
+                const at = next.indexOf(original);
+                if (at < 0 || next.indexOf(original,at + 1) >= 0) throw new Error("解释补写原文无法唯一定位");
+                next = next.slice(0,at) + replacement + next.slice(at + original.length);
+            } else next = applyActiveFormatPatches(next, [proposal], terms);
+            accepted++;
         } catch (error) {
             rejected.push(`补丁 ${index + 1}：${error instanceof Error ? error.message : String(error)}`);
         }
     }
-    const next = [...accepted].sort((a,b) => b.start - a.start)
-        .reduce((value,p) => value.slice(0,p.start) + p.replacement + value.slice(p.end),body);
-    return {body:next,accepted:accepted.length,rejected};
+    return {body:next,accepted,rejected};
+}
+
+/** Protect literal data while fixing punctuation whose replacement is unambiguous. */
+export function repairReadWeaveSafePunctuation(body: string): string {
+    return mapReadWeaveProse(body, prose => prose
+        .replace(/。(?=[^\r\n])/gu,"\n")
+        .replace(/[。；](?=\r?\n|$)/gu,""));
+}
+
+function anchoredFormatIssues(value: unknown, body: string): string[] {
+    if (!Array.isArray(value)) return [];
+    return value.flatMap(item => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+        const finding = item as Record<string, unknown>;
+        const original = typeof finding.original === "string" ? finding.original.trim() : "";
+        const code = typeof finding.code === "string" ? finding.code.trim() : "";
+        const reason = typeof finding.reason === "string" ? finding.reason.trim() : "";
+        if (!original || !body.includes(original) || !/^(?:FMT|EXPL)-\d{3}$/u.test(code) || !reason) return [];
+        if (new Set(["FMT-009","FMT-018","FMT-047","FMT-062","FMT-121"]).has(code)
+            && !readWeaveFormatIssues(original).some(issue => issue.startsWith(code))) return [];
+        if (/逗号|英文括号内混入分隔符/u.test(reason) && !/[，,]/u.test(original)) return [];
+        return [`${code}：${reason}（原文：${original}）`];
+    });
 }
 
 export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateRequest, ports: ActivePipelinePorts) {
@@ -229,6 +272,7 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
     const failedRetrievals = new Map<string, unknown>();
     let requirements: ActiveRequirements | undefined, outline: ActiveOutline | undefined;
     let body = "", repairRounds = 0;
+    let formatPass = 0, formatIssues: string[] = [], failedPatches: string[] = [];
     let lastToolResults: unknown[] = [];
     if (ports.checkpoint) {
         resources.restore(ports.checkpoint.resources);
@@ -236,6 +280,9 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
         if (ports.checkpoint.outline && requirements)
             outline = validateActiveOutline(ports.checkpoint.outline, requirements.needs, resources);
         body = ports.checkpoint.body ?? "";
+        formatPass = ports.checkpoint.formatPass ?? 0;
+        formatIssues = [...ports.checkpoint.formatIssues ?? []];
+        failedPatches = [...ports.checkpoint.failedPatches ?? []];
         trace.push(...structuredClone(ports.checkpoint.trace));
         for (const [key, value] of ports.checkpoint.queries) queries.set(key, value);
         for (const [key, value] of ports.checkpoint.notes) notes.set(key, value);
@@ -249,13 +296,17 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
             requirements = undefined;
             outline = undefined;
             body = "";
+            formatPass = 0;
+            formatIssues = [];
+            failedPatches = [];
         }
     }
     const saveCheckpoint = (phase: ActiveStage) => {
         if (!ports.saveCheckpoint) return;
         try {
             ports.saveCheckpoint({phase,requirements,outline,body,resources:resources.snapshot(),trace,
-                queries:[...queries],notes:[...notes],failedRetrievals:[...failedRetrievals]});
+            queries:[...queries],notes:[...notes],failedRetrievals:[...failedRetrievals],
+            formatPass,formatIssues,failedPatches});
         } catch (error) {
             throw new ActiveCheckpointFailure(error instanceof Error ? error.message : String(error));
         }
@@ -358,6 +409,7 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
                         outline = await stage("outline", OUTLINE_SCHEMA, v => validateActiveOutline(v, requirements!.needs, resources));
                     }
                     correction = undefined;
+                    invalidAttempts = 0;
                     continue;
                 }
                 // The model, not a string-count gate, decides which gaps are material now.
@@ -366,8 +418,30 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
                 if (name === "requirements" && request.fragments.some(f => f.role !== "selected" && f.role !== "heading")
                     && !request.fragments.some(f => f.role !== "selected" && f.role !== "heading" && resources.opened.has(f.id)))
                     throw new Error("先主动读取至少一处选区之外的语境，再形成事实需求");
-                if (name === "outline" && ports.searchEnabled && ![...queries.keys()].some(key => key.startsWith('["search"')))
-                    throw new Error("默认搜索已开启，构造流定稿前必须按当前事实需求检索，文章链接不算外部检索");
+                if (name === "outline" && requirements && ports.searchEnabled
+                    && ![...queries.keys(), ...failedRetrievals.keys()].some(key => key.startsWith('["search"'))) {
+                    // The model supplied its completed fact needs. Execute the
+                    // enabled search exactly once, then let it see the evidence
+                    // before approving a final outline.
+                    const query = [requirements.normalizedQuestion, requirements.scope,
+                        ...requirements.needs.map(need => need.statement)].join(" ");
+                    const action = {tool:"search",query,direction:requirements.needs.map(need => need.statement).join("；"),
+                        provider:"general"} as const;
+                    const key = JSON.stringify(["search",query.trim().toLocaleLowerCase().replace(/\s+/gu," "),"general"]);
+                    let retrieved: unknown;
+                    try { retrieved = await ports.retrieve(action, resources); }
+                    catch (error) { throw new ActiveRetrievalFailure(error instanceof Error ? error.message : String(error)); }
+                    if (retrieved && typeof retrieved === "object" && "status" in retrieved
+                        && ["failed","unavailable"].includes(String(retrieved.status))) failedRetrievals.set(key,retrieved);
+                    else queries.set(key,retrieved);
+                    lastToolResults = [{key,result:retrieved}];
+                    entry.actions = [action];
+                    entry.readyReason = "已按事实需求执行默认搜索，返回证据后重新核定构造流";
+                    saveCheckpoint(name);
+                    correction = undefined;
+                    invalidAttempts = 0;
+                    continue;
+                }
                 const result = validate(response.result);
                 entry.result = result;
                 if (name === "requirements") requirements = result as ActiveRequirements;
@@ -386,6 +460,7 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
                 }
                 correction = error instanceof Error ? error.message : String(error);
                 entry.error = correction;
+                saveCheckpoint(name);
                 if (++invalidAttempts > 2) throw new Error(`主动执行协议修复未完成：${correction}`);
                 ports.progress(name, `正在定点修复执行协议：${correction}`);
             }
@@ -399,6 +474,9 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
         && JSON.stringify(request.answerPlan.steps) !== JSON.stringify(outline.nodes.map(n => n.statement))) {
         outline = undefined;
         body = "";
+        formatPass = 0;
+        formatIssues = [];
+        failedPatches = [];
     }
     if (!outline)
         outline = await stage("outline", OUTLINE_SCHEMA, v => validateActiveOutline(v, requirements!.needs, resources));
@@ -419,22 +497,21 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
 先按技能组织好段落、术语和公式解释再写，保持事实限定，不把 unresolved 扩大成整题不能回答
 最终只给用户要的答案，不把内部计划、审核及工具日志塞入正文`, v => text(record(v).body));
     const exactFormat = repairReadWeaveExistingAcronyms(body);
-    body = exactFormat.body;
+    body = repairReadWeaveSafePunctuation(exactFormat.body);
     if (exactFormat.count) trace.push({stage:"format",gaps:[],actions:[],readyReason:"确定性局部排版，不增加名称或事实",result:{acronymMoves:exactFormat.count}});
-    let formatIssues: string[] = [];
-    let failedPatches: string[] = [];
-    for (let pass = 0; pass < 2; pass++) {
+    for (let pass = formatPass; pass < 2; pass++) {
         try {
             ports.progress("format", pass ? "只复核并修复上一轮尚未解决的局部格式问题" : "按完整写作技能复核整份回答格式");
             const system = `${ports.writingSkill}\n你是 ReadWeave 格式复核角色，只按完整技能检查格式与表达，不判定内容真伪，不重新搜索或重写全文
-            返回 {gaps:[],actions:[],readyReason:"格式复核完成",result:{patches:[{original:"唯一原文",replacement:"准确的局部替换"}],tasks:[{original:"需要补写的最小原文片段",instruction:"明确补写要求",sourceIds:[]}],remainingIssues:[]}}
+            返回 {gaps:[],actions:[],readyReason:"格式复核完成",result:{patches:[{original:"唯一原文",replacement:"准确的局部替换"}],tasks:[{original:"需要补写的最小原文片段",instruction:"明确补写要求",sourceIds:[]}],remainingIssues:[{code:"FMT-009",original:"当前正文中准确存在的原文",reason:"实际违规原因"}]}}
             先直接提出能准确写出的局部补丁；只有真正需要另一个执行模型补写时才提交 tasks
             tasks 必须列明完整动作及依据，不能让执行器重新分析整篇文章
+            每项剩余问题必须引用修复后仍实际存在的原文和准确规则；不能把猜测、候选名称或未执行的建议报作错误；有问题不能提交空 patches、空 tasks 后声称修复完成
             公式、代码、网址、数值、否定和限定条件保持原样；名称只能使用已确认形式
             第一轮检查全文，第二轮只针对未解决项；最多两轮，不得把内部建议列为错误`;
             const modelResult = record(await ports.model("format",system,{
                 body,originalQuestion:request.title,contentType:request.contentType,budget:ports.budgetStatus?.(),
-                formatDiagnostics:pass ? failedPatches : readWeaveFormatIssues(body),
+                formatDiagnostics:[...readWeaveFormatIssues(body),...(pass ? failedPatches : [])],
                 terms:outline!.terms,facts:outline!.facts,priorFailures:failedPatches
             }));
             const result = record(modelResult.result), patches = array(result.patches);
@@ -443,12 +520,17 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
             const requestedTools = array(modelResult.actions).filter(a => !!record(a).tool);
             const tasks = result.tasks === undefined ? [] : array(result.tasks);
             const taskIssues: string[] = [];
+            const rawRemainingIssues = result.remainingIssues === undefined ? [] : array(result.remainingIssues);
+            if (rawRemainingIssues.some(issue => !issue || typeof issue !== "object" || Array.isArray(issue)
+                || typeof (issue as Record<string, unknown>).original !== "string"))
+                taskIssues.push("剩余问题缺少准确原文定位；下轮请逐项提供规则、原文和原因");
             const localTasks = tasks.flatMap((value,index) => {
                 try {
                     const task = record(value), original = text(task.original), instruction = text(task.instruction);
                     const start = body.indexOf(original);
                     if (start < 0 || body.indexOf(original,start + 1) >= 0) throw new Error("局部原文无法唯一定位");
-                    const sourceIds = strings(task.sourceIds), facts = outline!.facts.filter(f => f.sourceIds.some(id => sourceIds.includes(id)));
+                    const sourceIds = strings(task.sourceIds), facts = outline!.facts.filter(f => f.sourceIds.some(id => sourceIds.includes(id))
+                        || !sourceIds.length && f.basis === "established-knowledge");
                     return [{original,instruction,facts,terms:outline!.terms.filter(t => t.sourceIds.some(id => sourceIds.includes(id))),sourceIds}];
                 } catch (error) {
                     taskIssues.push(`局部任务 ${index + 1}：${error instanceof Error ? error.message : String(error)}`);
@@ -466,20 +548,25 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
                     {tasks:localTasks,contentType:request.contentType,budget:ports.budgetStatus?.()}));
                     for (const patch of array(record(execution.result).patches)) {
                         const original = text(record(patch).original);
-                        if (localTasks.some(task => task.original.includes(original))) executedPatches.push(patch);
+                        const task = localTasks.find(task => task.original === original);
+                        if (task) executedPatches.push({ ...record(patch),
+                            operation:task.facts.length && text(task.instruction).includes("补写") ? "supplement" : "format" });
                         else taskIssues.push("局部执行器提交了任务范围以外的原文，未应用该项");
                     }
                 } catch (error) { taskIssues.push(`局部执行：${error instanceof Error ? error.message : String(error)}`); }
             }
             const submitted = [...patches,...executedPatches];
-            const applied = applyActiveFormatPatchBatch(body,submitted,outline!.terms);
-            body = applied.body;
+            const applied = applyActiveFormatPatchBatch(body,submitted,outline!.terms,localTasks);
+            body = repairReadWeaveSafePunctuation(applied.body);
             failedPatches = [...applied.rejected,...taskIssues,
                 ...(requestedTools.length ? ["格式阶段没有执行额外资料工具，已保留并处理可应用的局部补丁"] : [])];
-            formatIssues = [...new Set([...strings(result.remainingIssues),...failedPatches,...readWeaveFormatIssues(body)])];
+            const verifiedIssues = anchoredFormatIssues(rawRemainingIssues,body);
+            formatIssues = [...new Set([...verifiedIssues,...readWeaveFormatIssues(body)])];
             trace.push({stage:"format",gaps:[],actions:[],readyReason:"已按完整技能提出局部修改",result:{submitted:submitted.length,accepted:applied.accepted,rejected:failedPatches.length,executorCalls:localTasks.length ? 1 : 0}});
             if (applied.accepted) repairRounds++;
-            if (!failedPatches.length && (!applied.accepted || !readWeaveFormatIssues(body).length)) break;
+            formatPass = pass + 1;
+            saveCheckpoint("format");
+            if (!failedPatches.length && !formatIssues.length) break;
         } catch (error) {
             ports.signal?.throwIfAborted();
             // A failed format transaction cannot erase the already generated answer.
@@ -490,11 +577,15 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
             ports.progress("format", issue);
             if (error instanceof ReadWeaveProtocolError && pass === 0) {
                 failedPatches = [error.message];
+                formatPass = pass + 1;
+                saveCheckpoint("format");
                 continue;
             }
             break;
         }
     }
+    if (failedPatches.length)
+        formatIssues.push(`FMT-runtime：${failedPatches.length} 项局部修改未应用，相关格式问题仍需复核`);
     const plan = makePlan();
     return { body, requirements, outline, plan, resources, trace, formatIssues, repairRounds };
 }

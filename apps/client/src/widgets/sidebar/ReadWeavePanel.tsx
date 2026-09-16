@@ -2354,6 +2354,8 @@ export default function ReadWeavePanel() {
                                             >
                                                 <span class={`readweave-generation-state ${generationJobStateClass(job)}`} />
                                                 <ReadWeaveQuestionText text={job.title} />
+                                                {job.result?.audit?.workflowVersion && job.result.audit.workflowVersion !== "active-research-v1"
+                                                    && <small class="readweave-legacy-job-label">旧版回答 · {new Date(job.createdAt).toLocaleDateString()}</small>}
                                             </button>
                                         ))}
                                     </div>
@@ -2461,6 +2463,8 @@ export default function ReadWeavePanel() {
                             <EvidenceSources sources={displayedJob?.result?.evidenceSources} claims={displayedJob?.result?.claims} />
                             {reuseObjectId && <p class="readweave-status">{t("readweave.reusing_object")}</p>}
                             {contextDecision && <p class="readweave-status">{readWeaveCompactStatusText(t("readweave.context_used", { count: contextDecision.characterCount, budget: contextDecision.characterBudget, expansions: contextDecision.expansionLevel }))}</p>}
+                            {currentJob?.result?.audit?.workflowVersion && currentJob.result.audit.workflowVersion !== "active-research-v1"
+                                && <p class="readweave-status">此回答由旧版流程在 {new Date(currentJob.createdAt).toLocaleString()} 生成，重新提问会创建新任务</p>}
                             {workflow && <p class="readweave-status">{readWeaveCompactStatusText(t("readweave.workflow_used", { generations: workflow.generationAttempts, checks: workflow.validationPasses }))}</p>}
                             {displayedJob?.result?.answerPlan && <p class="readweave-status" data-testid="readweave-answer-plan">结构：{displayedJob.result.answerPlan.summary} · {displayedJob.result.answerPlan.autoApplied ? "已采用" : "未自动采用"}</p>}
                             {displayedJob?.result?.externalSearchDecision && (
@@ -2592,6 +2596,11 @@ export default function ReadWeavePanel() {
 
 function GenerationMonitor({ job, pinned, onTogglePinned }: { job: ReadWeaveGenerationJob; pinned: boolean; onTogglePinned: () => void }) {
     const displayedProgress = readWeaveGenerationProgressForDisplay(job, t("readweave.generate_failed"));
+    const lastIssueEvent = new Map<string, number>();
+    displayedProgress.forEach((progress, index) => {
+        for (const issue of progress.issueGroups?.map(item => item.message) ?? progress.issues)
+            lastIssueEvent.set(issue, index);
+    });
     const latest = displayedProgress.at(-1);
     const state = generationJobStateClass(job);
     const elapsed = latest?.elapsedMs ?? Math.max(0, Date.now() - Date.parse(job.createdAt));
@@ -2614,11 +2623,12 @@ function GenerationMonitor({ job, pinned, onTogglePinned }: { job: ReadWeaveGene
             </button>
             <div class="readweave-generation-detail">
                 <ol class="readweave-generation-log" aria-label={t("readweave.generation_progress")}>
-                    {displayedProgress.map(progress => {
+                    {displayedProgress.map((progress, progressIndex) => {
                         const groupedIssues = new Map<string, string[]>();
-                        const issues = progress.issueGroups?.length
+                        const issues = (progress.issueGroups?.length
                             ? progress.issueGroups.map(issue => ({ category: issue.category, message: issue.message }))
-                            : progress.issues.map(message => ({ category: "other", message }));
+                            : progress.issues.map(message => ({ category: "other", message })))
+                            .filter(issue => lastIssueEvent.get(issue.message) === progressIndex);
                         for (const issue of issues) {
                             groupedIssues.set(issue.category, Array.from(new Set([ ...(groupedIssues.get(issue.category) ?? []), issue.message ])));
                         }
@@ -2630,10 +2640,13 @@ function GenerationMonitor({ job, pinned, onTogglePinned }: { job: ReadWeaveGene
                                 <div class="readweave-generation-event">
                                     <span>{readWeaveCompactStatusText(progress.message)}</span>
                                     {Array.from(groupedIssues).map(([ category, eventIssues ]) => (
-                                        <section class="readweave-issue-group" key={category} tabindex={0}>
-                                            <strong><span>{categoryLabels[category] ?? categoryLabels.other}</span><small>{eventIssues.length}</small></strong>
+                                        <details class="readweave-issue-group" key={category}>
+                                            <summary>
+                                                <strong><span>{categoryLabels[category] ?? categoryLabels.other}</span><small>{eventIssues.length}</small></strong>
+                                                <span class="readweave-issue-preview">{readWeaveCompactStatusText(eventIssues[0])}</span>
+                                            </summary>
                                             <ul>{eventIssues.map(issue => <li key={issue}>{readWeaveCompactStatusText(issue)}</li>)}</ul>
-                                        </section>
+                                        </details>
                                     ))}
                                     {showJobError && (
                                         <section class="readweave-monitor-error" role="alert" tabindex={0}>

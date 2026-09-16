@@ -7,6 +7,29 @@ import { READWEAVE_SELECTION_ACTIONS } from "./readweave_selection_actions.js";
 
 const markdown = new Marked({ breaks: true, gfm: true });
 
+function renderAnswerMarkdown(body: string): string {
+    const protectedRanges = Array.from(body.matchAll(/(?:^|\n)[ \t]*(?:```|~~~)[^\n]*\n[\s\S]*?\n[ \t]*(?:```|~~~)[ \t]*(?=\n|$)|(`+)[^`\n]*?\1/gu),
+        match => ({ start:match.index, end:match.index + match[0].length }));
+    const formulas: Array<{slot:string; source:string}> = [];
+    let prefix = "RWFORMULASLOT";
+    while (body.includes(prefix)) prefix += "X";
+    const protectedBody = body.replace(/\$\$[\s\S]*?\$\$|\$(?!\$)[^$\n]+?\$/gu, (source, offset:number) => {
+        if (protectedRanges.some(range => offset < range.end && offset + source.length > range.start)) return source;
+        const slot = `${prefix}${formulas.length}END`;
+        formulas.push({slot,source});
+        return slot;
+    });
+    let html = markdown.parse(protectedBody) as string;
+    for (const {slot,source} of formulas) {
+        const escaped = source.replace(/&/gu,"&amp;").replace(/</gu,"&lt;").replace(/>/gu,"&gt;");
+        html = html.replace(slot, `<span class="readweave-math-source${source.startsWith("$$") ? " readweave-math-display" : ""}">${escaped}</span>`);
+    }
+    return DOMPurify.sanitize(html, {
+        FORBID_TAGS: ["script", "style", "iframe", "object", "form", "input", "button"],
+        FORBID_ATTR: ["style"],
+    });
+}
+
 interface ReadWeaveRenderedUnit {
     node: Node;
     start: number;
@@ -171,14 +194,7 @@ export function ReadWeaveAnswer({
     const [markerRects, setMarkerRects] = useState<ReadWeaveMarkerRect[]>([]);
     const [mathRevision, setMathRevision] = useState(0);
     const markerKey = JSON.stringify(markers);
-    const html = useMemo(
-        () =>
-            DOMPurify.sanitize(markdown.parse(body) as string, {
-                FORBID_TAGS: ["script", "style", "iframe", "object", "form", "input", "button"],
-                FORBID_ATTR: ["style"],
-            }),
-        [body],
-    );
+    const html = useMemo(() => renderAnswerMarkdown(body), [body]);
     useEffect(() => setSelected(undefined), [body, revision]);
     useLayoutEffect(() => {
         if (!selected || !toolbar.current || !selectionRect.current) return;
@@ -199,17 +215,21 @@ export function ReadWeaveAnswer({
         }
         if (!body.includes("$")) return;
         let cancelled = false;
-        void import("../../services/math.js").then(({ renderMathInElement }) => {
+        void import("../../services/math.js").then(({ default: katex }) => {
             if (!cancelled && container.isConnected) {
-                renderMathInElement(container, {
-                    trust: false,
-                    throwOnError: false,
-                    macros: { ...KATEX_MACROS },
-                    delimiters: [
-                        { left: "$$", right: "$$", display: true },
-                        { left: "$", right: "$", display: false },
-                    ],
-                });
+                for (const span of container.querySelectorAll<HTMLElement>(".readweave-math-source")) {
+                    const source = span.textContent ?? "";
+                    const displayMode = span.classList.contains("readweave-math-display");
+                    const formula = source.slice(displayMode ? 2 : 1, displayMode ? -2 : -1).trim();
+                    try {
+                        katex.render(formula, span, {trust:false,throwOnError:true,displayMode,
+                            macros:{...KATEX_MACROS}});
+                    } catch (error) {
+                        span.classList.add("readweave-math-invalid");
+                        span.title = `公式无法渲染：${error instanceof Error ? error.message : String(error)}`;
+                        span.setAttribute("role","status");
+                    }
+                }
                 setMathRevision(current => current + 1);
             }
         });

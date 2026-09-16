@@ -24,6 +24,18 @@ describe("selectable Markdown answers", () => {
         expect(host.querySelector("code")?.textContent).toBe("a: 1");
         expect(host.querySelector("a")?.getAttribute("href")).toBe("https://example.org");
     });
+    it("renders a multiline display formula without exposing Markdown delimiters", async () => {
+        await act(() => render(<ReadWeaveAnswer body={"三者满足\n\n$$\nu_i = \\frac{w_i}{p_i}\n$$\n\n结果"} />, host));
+        await vi.waitFor(() => expect(host.querySelector(".readweave-readable-body .katex-display")).toBeTruthy());
+        expect(host.querySelector(".readweave-readable-body")?.textContent).not.toContain("$$");
+        expect(host.querySelector(".readweave-math-invalid")).toBeNull();
+    });
+    it("keeps an invalid formula readable with a specific error instead of red KaTeX output", async () => {
+        await act(() => render(<ReadWeaveAnswer body={"$$\\unknowncommand{x}$$"} />, host));
+        await vi.waitFor(() => expect(host.querySelector(".readweave-math-invalid")).toBeTruthy());
+        expect(host.querySelector(".katex-error")).toBeNull();
+        expect(host.querySelector(".readweave-math-invalid")?.getAttribute("title")).toContain("公式无法渲染");
+    });
     it("removes script and event handlers", async () => {
         await act(() =>
             render(

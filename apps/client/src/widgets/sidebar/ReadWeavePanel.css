@@ -1288,10 +1288,29 @@
     background: color-mix(in srgb, var(--accented-background-color) 78%, transparent);
 }
 
-.readweave-anchor-job-list button > span:last-child {
+.readweave-anchor-job-list button > span:nth-child(2) {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.readweave-legacy-job-label {
+    grid-column: 2;
+    color: var(--muted-text-color);
+    font-size: 0.68rem;
+}
+
+.readweave-math-invalid {
+    padding: 0.15em 0.35em;
+    border: 1px solid var(--main-border-color);
+    border-radius: 4px;
+    color: var(--main-text-color);
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+.readweave-math-invalid.readweave-math-display {
+    display: block;
 }
 
 .readweave-generation-detail {
@@ -1361,6 +1380,16 @@
     gap: 8px;
 }
 
+.readweave-issue-group summary {
+    cursor: pointer;
+}
+
+.readweave-issue-preview {
+    display: block;
+    margin-top: 3px;
+    overflow-wrap: anywhere;
+}
+
 .readweave-issue-group strong small {
     color: var(--muted-text-color);
     font-size: 0.68rem;
@@ -1368,21 +1397,10 @@
 }
 
 .readweave-issue-group ul {
-    max-height: 0;
-    margin: 0;
-    padding-inline-start: 1.1rem;
-    overflow: hidden;
-    opacity: 0;
-    transform: translateY(-2px);
-    transition: max-height 220ms ease, margin-top 160ms ease, opacity 160ms ease, transform 160ms ease;
-}
-
-.readweave-issue-group:hover ul,
-.readweave-issue-group:focus ul {
     max-height: 720px;
-    margin-top: 4px;
-    opacity: 1;
-    transform: translateY(0);
+    margin: 4px 0 0;
+    padding-inline-start: 1.1rem;
+    overflow: auto;
 }
 
 .readweave-monitor-error {

@@ -1302,7 +1302,7 @@ function commitPendingAutoSave(jobId: string): void {
             issue.startsWith("复合名称疑似被错误展开："))) {
             throw new ValidationError("题目对象或复合名称需要人工确认");
         }
-        commitReadWeaveGenerationJob(jobId, { expectedStateVersion: row.stateVersion });
+        commitReadWeaveGenerationJob(jobId, { expectedStateVersion: row.stateVersion }, "auto");
         reportedAutoSaveFailures.delete(jobId);
     } catch (error) {
         if (reportedAutoSaveFailures.has(jobId)) return;
@@ -1327,7 +1327,8 @@ function sweepPendingAutoSaves(): void {
     }
 }
 
-export function commitReadWeaveGenerationJob(jobId: string, inputValue: unknown): ReadWeaveGenerationJob {
+export function commitReadWeaveGenerationJob(jobId: string, inputValue: unknown,
+    saveOrigin: "auto" | "manual" = "manual"): ReadWeaveGenerationJob {
     const input = inputValue && typeof inputValue === "object" && !Array.isArray(inputValue)
         ? inputValue as CommitGenerationJobInput
         : {};
@@ -1405,7 +1406,8 @@ export function commitReadWeaveGenerationJob(jobId: string, inputValue: unknown)
             jobId
         ]);
         recordJobChange(jobId);
-        appendProgress(jobId, { stage: "complete", round: 0, message: "审核结果已写入正式笔记", issues: [] });
+        appendProgress(jobId, { stage: "complete", round: 0,
+            message: saveOrigin === "auto" ? "已自动保存生成内容，尚未经过人工审核" : "用户已审核并保存正式笔记", issues: [] });
         return getReadWeaveGenerationJob(jobId);
     }));
 }

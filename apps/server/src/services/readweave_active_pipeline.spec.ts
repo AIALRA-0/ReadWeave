@@ -3,7 +3,7 @@ import type { ReadWeaveGenerateRequest } from "@triliumnext/commons";
 import { ReadWeaveActiveResources } from "./readweave_active_resources.js";
 import { repairReadWeaveExistingAcronyms } from "./readweave_format.js";
 import { ReadWeaveProtocolError, parseReadWeaveProtocol } from "./readweave_protocol.js";
-import { applyActiveFormatPatchBatch, applyActiveFormatPatches, runReadWeaveActivePipeline, validateActiveOutline, validateActiveRequirements,
+import { applyActiveFormatPatchBatch, applyActiveFormatPatches, repairReadWeaveSafePunctuation, runReadWeaveActivePipeline, validateActiveOutline, validateActiveRequirements,
     type ActivePipelinePorts, type ActiveStage } from "./readweave_active_pipeline.js";
 
 const request: ReadWeaveGenerateRequest = {
@@ -180,10 +180,11 @@ describe("active generation workflow", () => {
         expect(result.trace[0].error).toContain("先主动读取");
     });
     it("does not treat URLs in article data as completed searches", async () => {
-        const p = ports([read, ready(requirements), ready(outline), search, ready(outline), ready({body:"计算内核"}), format]);
+        const p = ports([read, ready(requirements), ready(outline), ready(outline), ready({body:"计算内核"}), format]);
         const result = await runReadWeaveActivePipeline(request, p.config);
-        expect(result.trace.some(t => t.error?.includes("文章链接不算"))).toBe(true);
+        expect(result.trace.some(t => t.actions.some(action => (action as {tool?:string}).tool === "search"))).toBe(true);
         expect(p.retrieve).toHaveBeenCalledTimes(1);
+        expect(p.calls.filter(call => call.stage === "outline")).toHaveLength(2);
     });
     it("does not turn provider errors into a different answer, route or schema retry", async () => {
         const p = ports([]);
@@ -260,6 +261,19 @@ describe("declarative protocol and format-only transactions", () => {
         expect(second.calls.map(c => c.stage)).toEqual(["format"]);
         expect(second.retrieve).not.toHaveBeenCalled();
     });
+    it("resumes at the unfinished format pass without repeating a completed paid pass", async () => {
+        const first = ports([read,ready(requirements),ready(outline),ready({body:"甲"}),
+            ready({patches:[],tasks:[],remainingIssues:[{code:"FMT-044",original:"甲",reason:"待复核的格式项"}]})],false);
+        let checkpoint: NonNullable<ActivePipelinePorts["checkpoint"]> | undefined;
+        first.config.saveCheckpoint = value => { checkpoint = structuredClone(value); };
+        await runReadWeaveActivePipeline(request,first.config);
+        expect(checkpoint?.formatPass).toBe(1);
+        const second = ports([format],false);
+        second.config.checkpoint = checkpoint;
+        const result = await runReadWeaveActivePipeline(request,second.config);
+        expect(second.calls.map(call => call.stage)).toEqual(["format"]);
+        expect(result.formatIssues).toEqual([]);
+    });
     it("keeps valid independent format edits when another edit is invalid", () => {
         const original = "**计算过程**\n\n金额为 10";
         const result = applyActiveFormatPatchBatch(original,[
@@ -269,6 +283,37 @@ describe("declarative protocol and format-only transactions", () => {
         expect(result.body).toBe("## 计算过程\n\n金额为 10");
         expect(result.accepted).toBe(1);
         expect(result.rejected).toHaveLength(1);
+    });
+    it("applies compatible edits inside an already edited paragraph without calling them overlap", () => {
+        const body = "异构布局（heterogeneous placement）有意义。";
+        const result = applyActiveFormatPatchBatch(body,[
+            {original:"异构布局（heterogeneous placement）有意义",replacement:"异构布局（Heterogeneous Placement）有意义"},
+            {original:"有意义。",replacement:"有意义"}
+        ],[]);
+        expect(result.body).toBe("异构布局（Heterogeneous Placement）有意义");
+        expect(result.accepted).toBe(2);
+        expect(result.rejected).toEqual([]);
+    });
+    it("keeps formulas and literal code while removing ordinary Chinese sentence stops", () => {
+        expect(repairReadWeaveSafePunctuation("解释。下一句。\n\n`原样。`\n\n$u_i = w_i/p_i$。"))
+            .toBe("解释\n下一句\n\n`原样。`\n\n$u_i = w_i/p_i$");
+    });
+    it("accepts a fact-backed adjacent explanation but rejects invented numbers", () => {
+        const original = "间距决定可容纳的供电线数量";
+        const tasks = [{original,facts:[{needId:"N1",statement:"间距越小，相同宽度内可容纳更多供电线",basis:"source" as const,sourceIds:["context"]}]}];
+        const valid = applyActiveFormatPatchBatch(original,[{original,replacement:`${original}；间距越小，相同宽度内可容纳更多供电线`,operation:"supplement"}],[],tasks);
+        expect(valid.accepted).toBe(1);
+        const invalid = applyActiveFormatPatchBatch(original,[{original,replacement:`${original}；可增加 20%`,operation:"supplement"}],[],tasks);
+        expect(invalid.accepted).toBe(0);
+        expect(invalid.rejected[0]).toContain("未核实数值");
+    });
+    it("does not present a model's nonexistent comma in a verified name as a format fault", async () => {
+        const body = "LPAE 大物理地址扩展（Large Physical Address Extension）";
+        const p = ports([read,ready(requirements),ready(outline),ready({body}),
+            ready({patches:[],tasks:[],remainingIssues:[{code:"FMT-053",original:body,
+                reason:"英文括号内混入逗号与缩写"}]})],false);
+        const result = await runReadWeaveActivePipeline(request,p.config);
+        expect(result.formatIssues).toEqual([]);
     });
     it("accepts layout edits around an already expanded, confirmed name", () => {
         const canonical = "CPU 中央处理器（Central Processing Unit）";
