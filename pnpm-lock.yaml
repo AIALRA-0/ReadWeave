@@ -623,6 +623,9 @@ importers:
       '@anthropic-ai/claude-agent-sdk':
         specifier: ^0.3.207
         version: 0.3.207(@anthropic-ai/sdk@0.111.0(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)
+      '@huggingface/tokenizers':
+        specifier: 0.2.0
+        version: 0.2.0
       '@modelcontextprotocol/sdk':
         specifier: ^1.12.1
         version: 1.29.0(zod@4.4.3)
@@ -3606,6 +3609,9 @@ packages:
     engines: {node: '>=18.14.1'}
     peerDependencies:
       hono: '>=4.12.12'
+
+  '@huggingface/tokenizers@0.2.0':
+    resolution: {integrity: sha512-LidMHe1FpcSYH4vcSjXooda34pC0M8m1gmDOv7SQi6Iv+ib1zX7J3sHBCC9/3FPCkn2k1b55FneVqMRxrr99pg==}
 
   '@humanfs/core@0.19.2':
     resolution: {integrity: sha512-UhXNm+CFMWcbChXywFwkmhqjs3PRCmcSa/hfBgLIb7oQ5HNb1wS0icWsGtSAUNgefHeI+eBrA8I1fxmbHsGdvA==}
@@ -16709,6 +16715,8 @@ snapshots:
   '@hono/node-server@1.19.14(hono@4.12.21)':
     dependencies:
       hono: 4.12.21
+
+  '@huggingface/tokenizers@0.2.0': {}
 
   '@humanfs/core@0.19.2':
     dependencies:

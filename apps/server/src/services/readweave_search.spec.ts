@@ -12,6 +12,7 @@ import {
     normalizeReadWeavePageContent,
     type ReadWeaveSearchPolicy,
     searchReadWeaveEvidence,
+    searchReadWeaveActiveEvidence,
     searchReadWeaveEvidencePlan,
     testReadWeaveSearch,
     withReadWeaveSearchPolicy
@@ -24,6 +25,18 @@ vi.mock("undici", async importOriginal => ({
 }));
 
 describe("ReadWeave free-source search", () => {
+    it("uses the configured general engine at the exact micro-CNY tariff, without category heuristics", async () => {
+        cls.init(() => updateReadWeaveAiSettings({ baseUrl:"https://api.deepseek.com", model:"deepseek-v4-flash", serperApiKey:"test-only" }));
+        const fetcher = vi.fn<typeof fetch>(async () => Response.json({organic:[
+            {title:"First",link:"https://example.org/first",snippet:"First result"},
+            {title:"Second",link:"https://example.org/second",snippet:"Second result"}
+        ]}));
+        const result = await cls.init(() => searchReadWeaveActiveEvidence({query:"heterogeneous chips",provider:"general",budgetCny:0.0072}, {fetcher}));
+        expect(fetcher).toHaveBeenCalledTimes(1);
+        expect(String(fetcher.mock.calls[0][0])).toContain("google.serper.dev");
+        expect(result.searchCostCny).toBe(0.0072);
+        expect(result.sources.map(s => s.title)).toEqual(["First", "Second"]);
+    });
     afterEach(() => vi.restoreAllMocks());
     it("preserves prepared English full-name queries as well as origin queries", () => {
         for (const query of [ '"XPT" full name official documentation',

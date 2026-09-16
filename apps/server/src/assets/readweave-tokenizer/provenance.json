@@ -1,0 +1,21 @@
+{
+  "model": "deepseek-ai/DeepSeek-V4-Flash-0731",
+  "revision": "7872f01b1d1fe23eabc4c98b48bffcef5a386062",
+  "files": [
+    {
+      "name": "tokenizer.json",
+      "sha256": "8f9f37ca37fdc4f5fd36d5cf4d3b0e8392edb4e894fd10cc0d70b4957c8633cf",
+      "bytes": 6367146
+    },
+    {
+      "name": "tokenizer_config.json",
+      "sha256": "6ac8c8dc065ed118161d02dd532749ae3f52c243deac27872134fae2f50d8547",
+      "bytes": 801
+    },
+    {
+      "name": "LICENSE",
+      "sha256": "f2c6c602815669d292889e5be8c802f2ed950653b77999b1584e8e6aed25d040",
+      "bytes": 1084
+    }
+  ]
+}

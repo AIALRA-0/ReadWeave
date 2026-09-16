@@ -13,7 +13,7 @@ import {
     READWEAVE_HOLDOUT_QUALITY_CASES,
     READWEAVE_VISIBLE_QUALITY_CASES
 } from "./readweave_quality_cases.js";
-import { generateUnifiedReadWeaveAnswer } from "./readweave_unified_ai.js";
+import { generateReadWeaveActiveAnswer } from "./readweave_active_ai.js";
 import sql from "./sql.js";
 
 interface HarnessRow {
@@ -566,18 +566,18 @@ async function runTrialJob(trialJobId: string): Promise<void> {
     try {
         const outcomes = await mapWithConcurrency(cases, 2, async testCase => {
             try {
-                const result = await generateUnifiedReadWeaveAnswer({
+                const result = await generateReadWeaveActiveAnswer({
                     articleId: `harness:${trialRow.versionId}`,
                     anchorId: testCase.caseId,
                     anchorType: "range",
-                    kind: /(?:是什么|谁|全称|缩写)/u.test(testCase.question) ? "term" : "question",
+                    kind: "question",
                     title: testCase.question,
                     fragments: [ {
                         id: "selected",
                         role: "selected",
                         text: testCase.context?.trim() || `独立质量回归案例：${testCase.question}`
                     } ]
-                }, undefined, undefined, profile);
+                });
                 return {
                     testCase,
                     answer: result.body,

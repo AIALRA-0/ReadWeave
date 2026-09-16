@@ -25,7 +25,7 @@ import {
     segmentReadWeaveAnswer,
     validateReadWeaveTermIdentity
 } from "./readweave_ai.js";
-import * as unifiedAi from "./readweave_unified_ai.js";
+import * as activeAi from "./readweave_active_ai.js";
 
 function professionalAnswer(definition: string): string {
     return `${[
@@ -138,29 +138,27 @@ describe("ReadWeave AI quality harness", () => {
             .toContain("定义正文未明确指向所选术语");
     });
 
-    it.each(["question", "term"] as const)("uses open-domain quality through the real %s wrapper for Power BI DAX", async kind => {
+    it.each(["question", "term"] as const)("uses active research through the real %s wrapper without a semantic checker", async kind => {
         // Stop at the writer boundary: this verifies the real wrapper's checker,
         // without claiming a live provider or semantic evaluation.
         const writerBoundary = new Error("writer boundary fixture");
-        const unified = vi.spyOn(unifiedAi, "generateUnifiedReadWeaveAnswer").mockRejectedValue(writerBoundary);
+        const unified = vi.spyOn(activeAi, "generateReadWeaveActiveAnswer").mockRejectedValue(writerBoundary);
         vi.stubEnv("READWEAVE_TEST_AI", "");
         vi.stubEnv("READWEAVE_ENABLE_LEGACY_REPLAY", "");
         try {
             const request: ReadWeaveGenerateRequest = {
                 articleId: "dax-formulas", anchorId: "dax-selected", anchorType: "range", kind,
+                autoApplyPlan: false,
                 title: kind === "term" ? "DAX" : "DAX 是什么意思？",
                 fragments: [{ id: "selected", role: "selected", text: `${daxFormulaContext} A&amp;B` }]
             };
             const original = structuredClone(request);
             await expect(generateReadWeaveAnswer(request)).rejects.toBe(writerBoundary);
-            const [normalized, , checker, , , execution] = unified.mock.calls[0];
+            const [normalized, , , execution] = unified.mock.calls[0];
             expect(execution?.originalRequest).toEqual(original);
             expect(normalized.fragments[0].text).toContain("A&B");
             expect(request).toEqual(original);
-            const issues = checker!(daxFormulaBody, request.title, kind, daxFormulaIdentity);
-            expect(issues.some(issue => /DAX 定义|结构化名词身份与已核验规范名称不一致/u.test(issue))).toBe(false);
-            expect(checker!(`${daxFormulaBody}（）`, request.title, kind, daxFormulaIdentity))
-                .toContain("答案包含空括号");
+            expect(unified.mock.calls[0]).toHaveLength(4);
         } finally {
             unified.mockRestore();
             vi.unstubAllEnvs();

@@ -1,0 +1,242 @@
+import { describe, expect, it, vi } from "vitest";
+import type { ReadWeaveGenerateRequest } from "@triliumnext/commons";
+import { ReadWeaveActiveResources } from "./readweave_active_resources.js";
+import { repairReadWeaveExistingAcronyms } from "./readweave_format.js";
+import { applyActiveFormatPatches, runReadWeaveActivePipeline, validateActiveOutline, validateActiveRequirements,
+    type ActivePipelinePorts, type ActiveStage } from "./readweave_active_pipeline.js";
+
+const request: ReadWeaveGenerateRequest = {
+    articleId: "a", anchorId: "x", anchorType: "range", kind: "question", title: "这里的内核是什么？",
+    fragments: [{ id: "selection", role: "selected", text: "内核" },
+        { id: "context", role: "previous", text: "布局工具在 GPU 上执行线长和密度计算内核" }]
+};
+const requirements = { normalizedQuestion: request.title, scope: "布局计算", needs: [{ id: "N1", statement: "计算内核的含义" }], exclusions: [] };
+const outline = { facts: [{ needId: "N1", statement: "此处内核执行线长和密度计算", basis: "source", sourceIds: ["context"] }],
+    nodes: [{ id: "P1", statement: "此处内核执行线长和密度计算", needIds: ["N1"], dependsOn: [] }], terms: [] };
+const ready = (result: unknown) => ({ gaps: [], actions: [], readyReason: "资料已经覆盖本阶段需求", result });
+const read = { gaps: ["需要原文语境"], actions: [{ tool: "fragment", ids: ["context"] }] };
+const search = { gaps: ["核实机制"], actions: [{ tool: "search", query: "GPU computational kernel", direction: "计算机制", provider: "general" }] };
+const format = ready({ patches: [], remainingIssues: [] });
+
+function ports(responses: unknown[], enabled = true) {
+    const calls: Array<{stage: ActiveStage; system: string; input: Record<string, unknown>}> = [];
+    const retrieve = vi.fn<ActivePipelinePorts["retrieve"]>(async (action, resources) => {
+        const id = resources.addExternal({ sourceType: "external", title: "Documentation", provider: "fixture",
+            url: "https://example.org/docs", excerpt: "A kernel executes a computation", accessedAt: "2026-09-15" });
+        resources.open([id]);
+        return { sourceIds: [id], action };
+    });
+    const config: ActivePipelinePorts = {
+        searchEnabled: enabled, writingSkill: "COMPLETE-SKILL", progress: vi.fn(), retrieve,
+        model: vi.fn(async (stage, system, input) => {
+            calls.push({ stage, system, input: input as Record<string, unknown> });
+            if (!responses.length) throw new Error("Unexpected model call");
+            return responses.shift();
+        })
+    };
+    return { config, calls, retrieve };
+}
+
+describe("active resource addressing", () => {
+    it("never aliases an external source to an article's existing identifier", () => {
+        const r = new ReadWeaveActiveResources([{id:"web-1",role:"selected",text:"文章原文"}]);
+        const source = {sourceType:"external" as const,provider:"test",title:"外部资料",excerpt:"外部事实",accessedAt:"2026-09-15"};
+        const id = r.addExternal(source);
+        expect(id).not.toBe("web-1");
+        expect(r.get(id).excerpt).toBe("外部事实");
+        expect(r.get("web-1").excerpt).toBe("文章原文");
+        expect(r.addExternal(source)).toBe(id);
+    });
+    it("keeps the entire article available and delivers repeated text only once", () => {
+        const long = "后文".repeat(20_000);
+        const resources = new ReadWeaveActiveResources([...request.fragments,
+            { id: "later", role: "document", text: long }, { id: "duplicate", role: "document", text: long }]);
+        resources.read({ tool: "article" });
+        expect(resources.catalog()).toHaveLength(4);
+        expect(resources.contents()).toHaveLength(3);
+        expect(resources.contents().find(c => c.sourceIds.includes("later"))?.text).toBe(long);
+        expect(resources.open(["later"]).newSourceIds).toEqual([]);
+        resources.release(["later", "duplicate"]);
+        expect(resources.read({tool: "fragment", ids: ["later"]}).newSourceIds).toEqual(["later"]);
+    });
+    it("supports exact search, neighbors, chapters and whole article", () => {
+        const resources = new ReadWeaveActiveResources([
+            { id: "h1", role: "heading", text: "第一节" }, ...request.fragments,
+            { id: "h2", role: "heading", text: "第二节" }, { id: "last", role: "document", text: "目标证据" }]);
+        expect(resources.read({ tool: "find", text: "目标证据" }).sourceIds).toEqual(["last"]);
+        expect(resources.opened.size).toBe(0);
+        expect(resources.read({tool:"section", id:"context"}).sourceIds).toEqual(["h1", "selection", "context"]);
+        expect(resources.read({tool:"neighbors", id:"last", radius:1}).sourceIds).toEqual(["h2", "last"]);
+        expect(resources.read({tool:"article"}).sourceIds).toHaveLength(5);
+    });
+    it("rejects invalid positions and duplicate IDs", () => {
+        expect(() => new ReadWeaveActiveResources([...request.fragments, request.fragments[0]])).toThrow();
+        const r = new ReadWeaveActiveResources(request.fragments);
+        expect(() => r.read({tool:"fragment", ids:["missing"]})).toThrow();
+        expect(() => r.read({tool:"neighbors", id:"context", radius:-1})).toThrow();
+    });
+    it("indexes a complete web page without loading it all and restores every section", () => {
+        const r = new ReadWeaveActiveResources(request.fragments);
+        const content = "# 起点\n开头\n\n## 中间\n正文\n\n## 末节\n末尾限定条件";
+        const page = r.addDocument({sourceType:"external",provider:"test",url:"https://example.org/full",title:"完整页面",excerpt:content,accessedAt:"2026-09-15"});
+        expect(page.sections).toHaveLength(3);
+        expect(r.contents()).toEqual([]);
+        const matches = r.read({tool:"find",text:"末尾限定条件"});
+        expect(matches.sourceIds).toEqual([page.sections[2].id]);
+        r.open(matches.sourceIds);
+        const restored = new ReadWeaveActiveResources(request.fragments);
+        restored.restore(JSON.parse(JSON.stringify(r.snapshot())));
+        expect(restored.get(page.sourceId).excerpt).toBe(content);
+        expect(restored.contents()).toEqual(r.contents());
+    });
+});
+
+describe("active generation workflow", () => {
+    it.each(["problem", "definition", "annotation", "key-point"] as const)("preserves the explicit user action through every stage: %s", async contentType => {
+        const p = ports([read,ready(requirements),ready(outline),ready({body:"按用户选择的操作生成"}),format], false);
+        await runReadWeaveActivePipeline({...request,contentType}, p.config);
+        expect(p.calls.every(call => call.input.contentType === contentType)).toBe(true);
+    });
+    it("researches a real editable plan and resumes without repeating paid research", async () => {
+        const first = ports([read,ready(requirements),search,ready(outline)]);
+        const preview = await runReadWeaveActivePipeline({...request,autoApplyPlan:false},first.config);
+        expect(preview.body).toBe("");
+        expect(preview.plan.reviewStatus).toBe("draft");
+        expect(first.calls.some(c => c.stage === "writing")).toBe(false);
+        const next = ports([ready({body:"计算内核"}),format]);
+        next.config.checkpoint = JSON.parse(JSON.stringify(preview.checkpoint));
+        const final = await runReadWeaveActivePipeline({...request,autoApplyPlan:false,
+            answerPlan:{...preview.plan,reviewStatus:"approved"}},next.config);
+        expect(final.body).toBe("计算内核");
+        expect(next.retrieve).not.toHaveBeenCalled();
+        expect(next.calls.map(c => c.stage)).toEqual(["writing","format"]);
+        expect(next.calls[0].input.contents).toContainEqual({sourceIds:["context"],text:request.fragments[1].text});
+    });
+    it.each(["short","long"])("preserves all 250 %s LLM fact needs without a semantic fallback", async size => {
+        const needs = Array.from({length:250},(_,i) => ({id:`N${i}`,statement:size === "short" ? `事实 ${i}` : `用户需要理解访问路径第 ${i} 个独立步骤及其成立条件`}));
+        const req = {...requirements,needs};
+        const flow = {terms:[],facts:needs.map(n => ({needId:n.id,statement:n.statement,basis:"established-knowledge",sourceIds:[]})),
+            nodes:needs.map((n,i) => ({id:`P${i}`,statement:n.statement,needIds:[n.id],dependsOn:[]}))};
+        const p = ports([read,ready(req),ready(flow),ready({body:"完整回答"}),format],false);
+        const result = await runReadWeaveActivePipeline(request,p.config);
+        expect(result.requirements.needs).toEqual(needs);
+        expect(result.plan.steps).toEqual(needs.map(n => n.statement));
+        expect(p.calls.find(c => c.stage === "writing")?.input.requirements).toEqual(req);
+        expect(p.calls.filter(c => c.stage === "writing")).toHaveLength(1);
+    });
+    it("reads context before requirements and researches before the final declarative plan", async () => {
+        const p = ports([read, ready(requirements), search, ready(outline), ready({body:"此处内核执行计算"}), format]);
+        const result = await runReadWeaveActivePipeline(request, p.config);
+        expect(p.calls.map(c => c.stage)).toEqual(["requirements", "requirements", "outline", "outline", "writing", "format"]);
+        expect(p.calls[0].input.contents).toEqual([{sourceIds:["selection"], text:"内核"}]);
+        expect(p.calls[1].input.contents).toContainEqual({sourceIds:["context"], text:request.fragments[1].text});
+        expect(result.plan.steps).toEqual([outline.nodes[0].statement]);
+        expect(result.body).toBe("此处内核执行计算");
+        expect(p.calls.find(c => c.stage === "writing")?.system).toContain("COMPLETE-SKILL");
+        expect(p.calls.find(c => c.stage === "format")?.system).toContain("COMPLETE-SKILL");
+        expect(p.retrieve).toHaveBeenCalledTimes(1);
+    });
+    it("allows new research immediately before writing, not only at task start", async () => {
+        const later = {gaps:["遗漏技术标准"], actions:[{tool:"search", query:"kernel execution standard", direction:"标准依据", provider:"general"}]};
+        const p = ports([read, ready(requirements), search, ready(outline), later, ready(outline), ready({body:"计算内核"}), format]);
+        await runReadWeaveActivePipeline(request, p.config);
+        expect(p.retrieve).toHaveBeenCalledTimes(2);
+        expect(p.calls.filter(c => c.stage === "writing")).toHaveLength(2);
+        expect(p.calls.findLast(c => c.stage === "writing")?.input.lastToolResults).toEqual(expect.arrayContaining([expect.objectContaining({key:expect.stringContaining("execution standard")})]));
+    });
+    it("does not dispatch duplicate searches, but tells the model which result exists", async () => {
+        const p = ports([read, ready(requirements), search, search, ready(outline), ready({body:"计算内核"}), format]);
+        const result = await runReadWeaveActivePipeline(request, p.config);
+        expect(p.retrieve).toHaveBeenCalledTimes(1);
+        expect(result.trace.some(t => t.error?.includes("重复获取"))).toBe(true);
+    });
+    it("makes no external calls when search is disabled, including a model requesting it", async () => {
+        const p = ports([read, ready(requirements), search, ready(outline), ready({body:"计算内核"}), format], false);
+        const result = await runReadWeaveActivePipeline({...request, autoExternalSearch:false}, p.config);
+        expect(p.retrieve).not.toHaveBeenCalled();
+        expect(result.trace.some(t => t.error?.includes("关闭外部搜索"))).toBe(true);
+    });
+    it("does not accept readiness without having read article context", async () => {
+        const p = ports([ready(requirements), read, ready(requirements), ready(outline), ready({body:"计算内核"}), format], false);
+        const result = await runReadWeaveActivePipeline(request, p.config);
+        expect(result.trace[0].error).toContain("先主动读取");
+    });
+    it("does not treat URLs in article data as completed searches", async () => {
+        const p = ports([read, ready(requirements), ready(outline), search, ready(outline), ready({body:"计算内核"}), format]);
+        const result = await runReadWeaveActivePipeline(request, p.config);
+        expect(result.trace.some(t => t.error?.includes("文章链接不算"))).toBe(true);
+        expect(p.retrieve).toHaveBeenCalledTimes(1);
+    });
+    it("does not turn provider errors into a different answer, route or schema retry", async () => {
+        const p = ports([]);
+        p.config.model = vi.fn(async () => { throw new Error("provider unavailable"); });
+        await expect(runReadWeaveActivePipeline(request, p.config)).rejects.toThrow("provider unavailable");
+        expect(p.config.model).toHaveBeenCalledTimes(1);
+    });
+    it("does not reissue a paid request on a resource transport failure", async () => {
+        const p = ports([read, ready(requirements), search]);
+        p.retrieve.mockRejectedValueOnce(new Error("network timeout"));
+        await expect(runReadWeaveActivePipeline(request, p.config)).rejects.toThrow("network timeout");
+        expect(p.retrieve).toHaveBeenCalledTimes(1);
+    });
+    it("cancels before any model or retrieval call", async () => {
+        const p = ports([]), controller = new AbortController();
+        controller.abort(new Error("cancelled")); p.config.signal = controller.signal;
+        await expect(runReadWeaveActivePipeline(request, p.config)).rejects.toThrow("cancelled");
+        expect(p.config.model).not.toHaveBeenCalled();
+    });
+    it("does not discard or substitute a completed draft if format review cannot run", async () => {
+        const p = ports([read, ready(requirements), ready(outline), ready({body:"计算内核执行计算"})], false);
+        const result = await runReadWeaveActivePipeline(request, p.config);
+        expect(result.body).toBe("计算内核执行计算");
+        expect(result.formatIssues).toEqual(expect.arrayContaining([expect.stringContaining("格式修复未完成")]));
+        expect(result.repairRounds).toBe(0);
+    });
+    it("does not turn optional recorded gaps into a content rejection gate", async () => {
+        const p = ports([read, {...ready(requirements),gaps:["本文未列每代硬件架构，但本题只需通用概念"]},ready(outline),ready({body:"计算内核执行计算"}),format],false);
+        const result = await runReadWeaveActivePipeline(request,p.config);
+        expect(result.trace.some(t => t.error)).toBe(false);
+        expect(result.requirements).toEqual(requirements);
+    });
+    it.each(["异构是什么", "Jiawei Hu 是谁", "IEEE 754 的精度", "内核是什么"])("uses the same workflow without code category branches: %s", async title => {
+        const p = ports([read, ready({...requirements, normalizedQuestion:title}), ready(outline), ready({body:"由本题模型事实生成的答案"}), format], false);
+        const result = await runReadWeaveActivePipeline({...request, title}, p.config);
+        expect(p.calls.every(c => c.input.originalQuestion === title)).toBe(true);
+        expect(result.requirements.normalizedQuestion).toBe(title);
+        expect(result).not.toHaveProperty("domainProfile");
+    });
+});
+
+describe("declarative protocol and format-only transactions", () => {
+    it("reorders supplied abbreviations without requiring a semantic registry or touching formulas", () => {
+        const result = repairReadWeaveExistingAcronyms("图形处理器（Graphics Processing Unit，GPU）处理数据\n\n$GPU+x$\n\n`GPU`\n\n未知缩写 ABC");
+        expect(result.body).toBe("GPU 图形处理器（Graphics Processing Unit）处理数据\n\n$GPU+x$\n\n`GPU`\n\n未知缩写 ABC");
+        expect(result.count).toBe(1);
+        expect(repairReadWeaveExistingAcronyms(result.body).count).toBe(0);
+    });
+    it("rejects questions and missing requirements rather than generating defaults", () => {
+        expect(() => validateActiveRequirements({...requirements, needs:[{id:"N1", statement:"这是什么？"}]})).toThrow("陈述句");
+        expect(() => validateActiveRequirements({...requirements, needs:[]})).toThrow();
+        const resources = new ReadWeaveActiveResources(request.fragments);
+        expect(() => validateActiveOutline(outline, requirements.needs, resources)).toThrow("尚未读取");
+        resources.read({tool:"article"});
+        expect(() => validateActiveOutline({...outline, nodes:[]}, requirements.needs, resources)).toThrow("未在资料");
+        expect(() => validateActiveOutline({...outline, nodes:[{...outline.nodes[0], dependsOn:["P1"]}]}, requirements.needs, resources)).toThrow("循环");
+    });
+    it("repairs line breaks without rewriting the facts", () => {
+        const body = "有两类开销：同步通信随线程增长；内存竞争降低吞吐";
+        const replacement = "有两类开销：\n\n- 同步通信随线程增长\n- 内存竞争降低吞吐";
+        expect(applyActiveFormatPatches(body, [{original:body,replacement}], [])).toBe(replacement);
+    });
+    it("accepts only researched canonical name expansions", () => {
+        expect(applyActiveFormatPatches("IP 用于此处", [{original:"IP",replacement:"IP 知识产权（Intellectual Property）"}],
+            [{original:"IP", canonical:"IP 知识产权（Intellectual Property）", sourceIds:[]}])).toContain("知识产权");
+        expect(() => applyActiveFormatPatches("IP 用于此处", [{original:"IP", replacement:"Internet Protocol"}], [])).toThrow();
+    });
+    it("rejects ambiguous, overlapping, semantic and math edits atomically", () => {
+        expect(() => applyActiveFormatPatches("重复 重复", [{original:"重复",replacement:"重复内容"}], [])).toThrow("唯一");
+        expect(() => applyActiveFormatPatches("金额为 10", [{original:"10",replacement:"100"}], [])).toThrow();
+        expect(() => applyActiveFormatPatches("公式 $x+y$", [{original:"$x+y$",replacement:"$x-y$"}], [])).toThrow("受保护");
+        expect(() => applyActiveFormatPatches("abc", [{original:"ab",replacement:"a b"},{original:"bc",replacement:"b c"}], [])).toThrow("重叠");
+    });
+});

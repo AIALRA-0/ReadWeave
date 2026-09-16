@@ -3,8 +3,8 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 const answers = vi.hoisted(() => new Map<string, string>());
 const blockers = vi.hoisted(() => new Map<string, Promise<void>>());
 
-vi.mock("./readweave_unified_ai.js", () => ({
-    generateUnifiedReadWeaveAnswer: vi.fn(async (request: { anchorId: string }) => {
+vi.mock("./readweave_active_ai.js", () => ({
+    generateReadWeaveActiveAnswer: vi.fn(async (request: { anchorId: string }) => {
         await blockers.get(request.anchorId);
         return {
             body: answers.get(request.anchorId) ?? "缺少案例答案",

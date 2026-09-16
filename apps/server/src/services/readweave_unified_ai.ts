@@ -117,7 +117,7 @@ function runtimePriceSnapshot(config: ReadWeaveModelRuntimeConfig, rates?: ReadW
         rates: rates ?? config.rates ?? readWeaveModelRates(config.model) });
 }
 
-interface CompletionUsage {
+export interface CompletionUsage {
     readWeaveRates?: ReadWeaveModelRates;
     readWeavePricingVersion?: string;
     readWeavePriceSnapshot?: ReadWeavePriceSnapshot;
@@ -163,6 +163,7 @@ export type ReadWeaveUnifiedQualityChecker = (
 
 /** Server-only execution state, never deserialized from a client request. */
 export interface ReadWeaveUnifiedExecutionContext {
+    activeState?: import("./readweave_active_ai.js").ActiveSavedState;
     /** Server-only evaluation control, never accepted from a browser request. */
     interpretationMode?: "root-only";
     budget?: ReadWeaveBudget;
@@ -561,7 +562,7 @@ function completeJsonStringField(content: string, field: string): string | undef
     return undefined;
 }
 
-async function requestJson<T>(
+export async function requestJson<T>(
     system: string,
     user: string,
     maxTokens: number,
@@ -571,7 +572,9 @@ async function requestJson<T>(
     stage = "回答生成",
     budget?: ReadWeaveBudget,
     onUsage?: (usage?: CompletionUsage) => void,
-    attemptedModels: ReadonlySet<string> = new Set()
+    attemptedModels: ReadonlySet<string> = new Set(),
+    strictRoute = false,
+    protocol?: { inputTokens: number; schema?: Record<string, unknown> }
 ): Promise<ModelCallResult<T>> {
     const requestedConfig = runtimeConfig ?? getReadWeaveRuntimeConfig();
     const config = requestedConfig;
@@ -593,7 +596,10 @@ async function requestJson<T>(
     const reservationPrices = runtimePriceSnapshot(config, reserveRates);
     // Budget planning may reduce optional external work, never truncate the
     // answer by silently shrinking its reserved output after context arrives.
-    const reservation = readWeaveModelReservation(jsonSystem, user, effectiveMaxTokens, reserveRates);
+    if (protocol && (!Number.isSafeInteger(protocol.inputTokens) || protocol.inputTokens < 0)) throw new Error("Invalid input token reservation");
+    const reservation = protocol
+        ? (protocol.inputTokens * Math.max(reserveRates.cacheHitInput,reserveRates.cacheMissInput) + effectiveMaxTokens * reserveRates.output) / 1e6
+        : readWeaveModelReservation(jsonSystem, user, effectiveMaxTokens, reserveRates);
     signal?.throwIfAborted();
     const receipt = budget?.reserveModelRequest(reservation, reservationPrices);
     if (budget && receipt === undefined) {
@@ -633,7 +639,9 @@ async function requestJson<T>(
                             // Chat Completions route below.
                             temperature: 0,
                             max_output_tokens: effectiveMaxTokens,
-                            text: { format: { type: "json_object" } }
+                            text: { format: protocol?.schema
+                                ? { type:"json_schema", name:"readweave_stage", schema:protocol.schema }
+                                : { type: "json_object" } }
                         }
                         : {
                             model: config.model,
@@ -771,6 +779,7 @@ async function requestJson<T>(
             };
         } catch (error) {
             if (signal?.aborted) throw signal.reason ?? error;
+            if (strictRoute) throw error;
             if (error instanceof NonRetryableReadWeaveError) throw error;
             lastError = error;
             const detail = error instanceof Error ? error.message : String(error);
@@ -4128,7 +4137,7 @@ function _verifierSystemPrompt(harness?: ReadWeaveHarnessProfile): string {
         .join("\n");
 }
 
-function usageSummary(usages: CompletionUsage[], searchCostCny: number, budgetCny = COST_BUDGET_CNY, ledger?: ReadWeaveBudget): ReadWeaveUsageSummary {
+export function usageSummary(usages: CompletionUsage[], searchCostCny: number, budgetCny = COST_BUDGET_CNY, ledger?: ReadWeaveBudget): ReadWeaveUsageSummary {
     const inputTokens = usages.reduce((sum, usage) => sum + (usage.prompt_tokens ?? 0), 0);
     const cacheHitInputTokens = usages.reduce((sum, usage) => sum + (usage.prompt_cache_hit_tokens ?? 0), 0);
     const cacheMissInputTokens = usages.reduce(
@@ -4889,6 +4898,12 @@ export async function generateUnifiedReadWeaveAnswer(
     signal?: AbortSignal,
     execution?: ReadWeaveUnifiedExecutionContext
 ): Promise<ReadWeaveGenerateResponse> {
+    // Keep historical fixtures replayable without granting the retired executor
+    // control of any production entry point, including administrator trials.
+    if (process.env.VITEST !== "true") {
+        const { generateReadWeaveActiveAnswer } = await import("./readweave_active_ai.js");
+        return generateReadWeaveActiveAnswer(request, onProgress, signal, execution);
+    }
     if (!request || typeof request !== "object") throw new ValidationError("ReadWeave 生成请求无效");
     request = structuredClone(request);
     const configuredRuntime = getReadWeaveRuntimeConfig();

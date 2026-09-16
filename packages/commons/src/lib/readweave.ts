@@ -264,7 +264,15 @@ export interface ReadWeaveClaim {
 export interface ReadWeaveGenerationAudit {
     formatVersion?: string;
     research?: ReadWeaveResearchAudit;
-    workflowVersion: "unified-evidence-v1" | "quality-closure-v2";
+    workflowVersion: "unified-evidence-v1" | "quality-closure-v2" | "active-research-v1";
+    /** Private job audit; not a factual correctness certificate. */
+    activeExecution?: {
+        requirements: unknown;
+        outline: unknown;
+        stages: unknown[];
+        reads: unknown[];
+        warnings: string[];
+    };
     harnessVersion?: string;
     qualityState?: ReadWeaveQualityState;
     evidenceState?: ReadWeaveEvidenceState;
@@ -349,7 +357,7 @@ export interface ReadWeaveGenerationJob {
     sourceLocator?: ReadWeaveSourceLocator;
     questionStack?: ReadWeaveQuestionItem[];
     answerPlan?: ReadWeaveAnswerPlan;
-    status: "queued" | "running" | "ready-for-review" | "saving" | "saved" | "paused" | "cancelled" | "failed";
+    status: "queued" | "running" | "awaiting-plan" | "ready-for-review" | "saving" | "saved" | "paused" | "cancelled" | "failed";
     qualityState: ReadWeaveQualityState;
     harnessVersion: string;
     evidenceState: ReadWeaveEvidenceState;
@@ -507,6 +515,8 @@ export interface ReadWeaveGenerateRequest {
 }
 
 export interface ReadWeaveGenerateResponse {
+    /** Research completed; the user has not yet authorized writing. */
+    awaitingPlan?: boolean;
     body: string;
     contentType?: ReadWeaveContentType;
     origin?: ReadWeaveContentOrigin;

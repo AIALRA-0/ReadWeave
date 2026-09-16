@@ -189,16 +189,24 @@ describe("ReadWeave panel generation actions", () => {
         expect(checkbox("quote-selected-text").checked).toBe(false);
         expect(readReadWeaveGenerationPreferences()).toMatchObject({ optimizeQuestion: true, quoteSelectedText: true, externalSearchDisabled: false });
     });
-    it("creates an editable plan on the first click and only one job on the second", async () => {
+    it("researches an editable plan in one job, then approves that same job for writing", async () => {
+        state.post.mockImplementation(async (url: string, body: Record<string, unknown>) => ({job:state.job = {
+            ...body,jobId:"planned-job",draftId:"planned-job",status:url.endsWith("/regenerate") ? "running" : "awaiting-plan",
+            stateVersion:1,createdAt:"2026-01-01T00:00:00.000Z",updatedAt:"2026-01-01T00:00:00.000Z",progress:[],
+            sourceExcerpt:body.rootSourceExcerpt, result:{body:"",awaitingPlan:true,answerPlan:{version:1,reviewStatus:"draft",answerType:"general",
+                normalizedQuestion:"“First selection”是什么意思？",objective:"解释本次选区",steps:["选区说明计算过程"],answerRequirements:["选区含义"],autoApplied:false}}
+        }}));
         await select("First selection");
         await toggle("auto-apply-plan");
         await act(() => button().click());
         await vi.waitFor(() => expect(host.querySelector('[data-testid="readweave-answer-plan-editor"]')).not.toBeNull());
-        expect(state.post).not.toHaveBeenCalled();
+        expect(state.post).toHaveBeenCalledTimes(1);
+        expect(state.post.mock.calls[0][1]).toMatchObject({autoApplyPlan:false,answerPlan:undefined});
         expect(button().disabled).toBe(false);
         await act(() => { button().click(); button().click(); });
-        await vi.waitFor(() => expect(state.post).toHaveBeenCalledTimes(1));
-        expect(state.post.mock.calls[0][1]).toMatchObject({ autoApplyPlan: false, answerPlan: { normalizedQuestion: "“First selection”是什么意思？", reviewStatus: "approved", autoApplied: false } });
+        await vi.waitFor(() => expect(state.post).toHaveBeenCalledTimes(2));
+        expect(state.post.mock.calls[1][0]).toBe("readweave/generation-jobs/planned-job/regenerate");
+        expect(state.post.mock.calls[1][1]).toMatchObject({ autoApplyPlan: false, answerPlan: { normalizedQuestion: "“First selection”是什么意思？", reviewStatus: "approved", autoApplied: false } });
     });
     it("keeps a successful request attached to the confirmed selection", async () => {
         state.post.mockImplementation(async (_url: string, body: Record<string, unknown>) => ({ job: state.job = {

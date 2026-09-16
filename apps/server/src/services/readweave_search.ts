@@ -1408,6 +1408,49 @@ export async function searchReadWeaveEvidence(
     }
 }
 
+/** Resource selection comes from the model's explicit information gap, not a question classifier.
+ * Preserve provider order and all returned rows; the research model assesses relevance. */
+export async function searchReadWeaveActiveEvidence(input: {
+    query: string; provider: "general" | "academic" | "people"; budgetCny: number;
+}, options: { fetcher?: FetchLike; signal?: AbortSignal } = {}): Promise<ReadWeaveSearchEvidence> {
+    checkCancellation(options.signal);
+    requireRetrieval("search", options.signal);
+    const started = Date.now(), query = plainText(input.query);
+    if (!query) throw new Error("Search query is empty.");
+    const config = getReadWeaveSearchRuntimeConfig();
+    const fetcher = policyFetcher(options.fetcher, options.signal);
+    const generalTariff = Math.round(0.001 * CNY_PER_USD * 1e6) / 1e6;
+    const peopleTariff = Math.round(0.007 * CNY_PER_USD * 1e6) / 1e6;
+    const adapters: Array<[string, SearchAdapter, number]> = [];
+    const warnings: string[] = [];
+    if (input.provider === "academic") {
+        adapters.push(["Crossref", crossrefSearch, 0], ["OpenAlex", openAlexSearch, 0]);
+    } else if (input.provider === "people" && config.exaApiKey && input.budgetCny >= peopleTariff) {
+        adapters.push(["Exa People", exaPeopleSearch, peopleTariff]);
+    } else if (config.serperApiKey && input.budgetCny >= generalTariff) {
+        adapters.push(["Serper", serperSearch, generalTariff]);
+        if (input.provider === "people") warnings.push("Exa is unavailable or exceeds this retrieval allowance; general web search was explicitly used.");
+    } else {
+        adapters.push(["Wikipedia", wikipediaSearch, 0]);
+        warnings.push("General web provider is unavailable or its tariff exceeds the remaining research allowance; only the free index was queried.");
+    }
+    const results = await Promise.all(adapters.map(async ([name, adapter, cost]) => ({
+        ...await runAdapter(name, adapter, query, config, fetcher), cost
+    })));
+    checkCancellation(options.signal);
+    const seen = new Set<string>();
+    const sources = results.flatMap(r => r.sources).filter(s => {
+        const key = `${s.url}\n${s.snippet}`;
+        if (seen.has(key)) return false;
+        seen.add(key); return true;
+    });
+    return {
+        used: sources.length > 0, query, sources, providers: adapters.map(([name]) => name), memo: "",
+        warnings: [...warnings, ...results.flatMap(r => r.warning ? [r.warning] : [])],
+        elapsedMs: Date.now() - started, cacheHit: false, searchCostCny: results.reduce((sum, r) => sum + r.cost, 0)
+    };
+}
+
 export function buildReadWeaveSearchVariants(query: string): string[] {
     const normalized = normalizeQuery(query);
     // Evidence-need scheduling supplies alternatives explicitly.

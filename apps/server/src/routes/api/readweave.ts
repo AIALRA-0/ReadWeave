@@ -103,7 +103,9 @@ function deleteLink(req: Request<{ linkId: string }>) {
 
 async function generate(req: Request) {
     validateReadWeaveFollowUp(req.body as ReadWeaveGenerateRequest);
-    return await generateReadWeaveAnswer(req.body as ReadWeaveGenerateRequest);
+    const result = await generateReadWeaveAnswer(req.body as ReadWeaveGenerateRequest);
+    const { activeState: _privateState, ...response } = result as import("../../services/readweave_active_ai.js").ActiveStoredResult;
+    return response;
 }
 
 async function rewriteLocal(req: Request) {

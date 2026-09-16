@@ -19,6 +19,7 @@ import {
     mergeReadWeaveTermIdentity
 } from "./readweave_ai.js";
 import { openReadWeaveJobBudget } from "./readweave_durable_budget.js";
+import type { ActiveStoredResult } from "./readweave_active_ai.js";
 import { NonRetryableReadWeaveError } from "./readweave_errors.js";
 import { getPublishedReadWeaveHarnessProfile, initializeReadWeaveHarnessTrials } from "./readweave_harness.js";
 import { editReadWeaveLink, saveReadWeaveEntry, validateReadWeaveFollowUp } from "./readweave_repository.js";
@@ -91,9 +92,10 @@ function requireReadableArticle(articleId: string) {
 }
 
 function requireReviewedAnswerPlan(request: ReadWeaveGenerateRequest) {
-    if (request.autoApplyPlan !== false) return;
+    if (request.kind !== "question" || request.autoApplyPlan !== false) return;
     const plan = request.answerPlan;
-    if (!plan || plan.reviewStatus !== "approved") {
+    if (!plan) return; // The first job researches a real plan without invoking the writer.
+    if (plan.reviewStatus !== "approved") {
         throw new ValidationError("请先审核并确认回答流程，再生成最终答案。");
     }
     if (!Array.isArray(plan.steps) || plan.steps.length === 0
@@ -323,11 +325,12 @@ function eventsFor(jobId: string, afterSequence = 0): ReadWeaveGenerationProgres
 
 function publicJob(row: JobRow, includeProgress = true): ReadWeaveGenerationJob {
     requireReadableArticle(row.articleId);
-    const storedResult = parseJson<ReadWeaveGenerateResponse>(decodeStoredValue(row.resultJson, row.isProtected));
-    let result = storedResult;
+    const storedResult = parseJson<ActiveStoredResult>(decodeStoredValue(row.resultJson, row.isProtected));
+    const { activeState: _privateState, ...publicResult } = storedResult ?? {};
+    let result = storedResult ? publicResult as ReadWeaveGenerateResponse : undefined;
     if (row.kind === "term" && storedResult?.termIdentity) {
         try {
-            result = { ...storedResult, termIdentity: mergeReadWeaveTermIdentity(storedResult.termIdentity, undefined) };
+            result = { ...result!, termIdentity: mergeReadWeaveTermIdentity(storedResult.termIdentity, undefined) };
         } catch {
             // Keep the persisted draft visible for manual recovery if a legacy
             // model result is too malformed to normalize safely.
@@ -357,7 +360,7 @@ function publicJob(row: JobRow, includeProgress = true): ReadWeaveGenerationJob 
         sourceExcerpt: decodeStoredValue(row.sourceExcerpt, row.isProtected) ?? "",
         sourceLocator: storedRequest?.sourceLocator,
         questionStack: storedRequest?.questionStack,
-        answerPlan: storedRequest?.answerPlan,
+        answerPlan: row.status === "awaiting-plan" ? result?.answerPlan : storedRequest?.answerPlan,
         status: row.status,
         qualityState: row.qualityState === "verified" || row.qualityState === "provisional" ? row.qualityState : "legacy-unverified",
         harnessVersion: row.harnessVersion || "legacy",
@@ -702,7 +705,9 @@ function runJob(jobId: string) {
         for (let attempt = 1; attempt <= MAX_BACKGROUND_GENERATION_ATTEMPTS; attempt++) {
             try {
                 validateReadWeaveFollowUp(request);
-                const result = await generateReadWeaveAnswer(request, progress => appendProgress(jobId, progress), controller.signal, { budget });
+                const stored = parseJson<ActiveStoredResult>(decodeStoredValue(row.resultJson, row.isProtected));
+                const activeState = stored?.awaitingPlan && request.answerPlan?.reviewStatus === "approved" ? stored.activeState : undefined;
+                const result = await generateReadWeaveAnswer(request, progress => appendProgress(jobId, progress), controller.signal, { budget, activeState });
                 // A non-empty, structurally valid answer with review warnings is
                 // still a deliverable draft.  The unified workflow has already
                 // rejected empty, unparsable, unsafe and invariant-breaking
@@ -741,6 +746,10 @@ function runJob(jobId: string) {
             return;
         }
         const contentType = readWeaveContentTypeForKind(request.kind, request.contentType);
+        if (result.awaitingPlan) {
+            setJobState(jobId, "awaiting-plan", {result, unread:false, activeAttemptId:null, clearLease:true});
+            return;
+        }
         const resultWithMetadata = {
             ...result,
             contentType,
@@ -1160,6 +1169,11 @@ export function regenerateReadWeaveGenerationJob(jobId: string, inputValue: unkn
     }
     requireReviewedAnswerPlan(request);
     // Regenerations in the same millisecond still need distinct budget epochs.
+    const resumingPlan = row.status === "awaiting-plan" && request.title === previousRequest.title
+        && JSON.stringify(request.fragments) === JSON.stringify(previousRequest.fragments)
+        && request.autoExternalSearch === previousRequest.autoExternalSearch
+        && request.activeExternalSearch === previousRequest.activeExternalSearch
+        && request.answerPlan?.reviewStatus === "approved";
     const now = new Date(Math.max(Date.now(), Date.parse(row.createdAt) + 1)).toISOString();
     const harnessVersion = getPublishedReadWeaveHarnessProfile().versionId;
     validateReadWeaveFollowUp(request);
@@ -1182,15 +1196,18 @@ export function regenerateReadWeaveGenerationJob(jobId: string, inputValue: unkn
             encodeStoredJson([], !!row.isProtected),
             encodeStoredJson([], !!row.isProtected),
             attemptId,
-            now,
+            resumingPlan ? row.createdAt : now,
             now,
             jobId
         ]);
-        sql.execute("DELETE FROM readweave_generation_events WHERE jobId = ?", [ jobId ]);
+        if (!resumingPlan) {
+            sql.execute("DELETE FROM readweave_generation_events WHERE jobId = ?", [ jobId ]);
+            if (row.status === "awaiting-plan") sql.execute("UPDATE readweave_generation_jobs SET resultJson = NULL WHERE jobId = ?", [jobId]);
+        }
         appendProgress(jobId, {
             stage: "queued",
             round: 0,
-            message: feedback
+            message: resumingPlan ? "已确认构造流，继续使用已获取资料与同一预算生成答案" : feedback
                 ? "已收到修正意见，旧草稿会保留到新结果成功。"
                 : request.title !== previousRequest.title
                     ? "已按当前问题重新排队，旧草稿会保留到新结果成功。"

@@ -6,6 +6,7 @@ import { ReadWeaveBudget } from "./readweave_budget.js";
 import { openReadWeaveJobBudget } from "./readweave_durable_budget.js";
 import { NonRetryableReadWeaveError } from "./readweave_errors.js";
 import * as unifiedAi from "./readweave_unified_ai.js";
+import * as activeAi from "./readweave_active_ai.js";
 
 const generateMock = vi.hoisted(() => vi.fn());
 const protectedSession = protectedSessionModule.default;
@@ -65,7 +66,7 @@ function result(body = "测试片段说明后台任务能够生成、检查并�
     };
 }
 
-async function waitForStatus(jobId: string, status: "ready-for-review" | "saved" | "paused" | "failed") {
+async function waitForStatus(jobId: string, status: "awaiting-plan" | "ready-for-review" | "saved" | "paused" | "failed") {
     for (let attempt = 0; attempt < 400; attempt++) {
         const job = getReadWeaveGenerationJob(jobId);
         if (job.status === status) return job;
@@ -135,16 +136,27 @@ describe("ReadWeave persisted generation jobs", () => {
         });
     });
 
-    it("requires an approved answer plan when automatic adoption is disabled", () => {
-        expect(() => startReadWeaveGenerationJob({ ...request, autoApplyPlan: false }))
-            .toThrow("请先审核并确认回答流程");
-        expect(sql.getValue<number>("SELECT COUNT(*) FROM readweave_generation_jobs")).toBe(0);
-        expect(generateMock).not.toHaveBeenCalled();
+    it("persists research, awaits plan approval, and resumes within the same budget epoch", async () => {
+        const plan = {version:1 as const, reviewStatus:"draft" as const, answerType:"general" as const,
+            objective:"解释片段",steps:["片段说明生成流程"],answerRequirements:["解释片段"],autoApplied:false};
+        generateMock.mockResolvedValueOnce({...result(),body:"",awaitingPlan:true,answerPlan:plan,
+            activeState:{checkpoint:{test:"server-only"}}});
+        const started = startReadWeaveGenerationJob({...request,autoApplyPlan:false,autoSave:true});
+        const preview = await waitForStatus(started.jobId,"awaiting-plan");
+        expect(preview.result?.body).toBe("");
+        expect(preview.result).not.toHaveProperty("activeState");
+        expect(preview.savedLinkId).toBeUndefined();
+        expect(() => commitReadWeaveGenerationJob(started.jobId,{expectedStateVersion:preview.stateVersion})).toThrow();
+        regenerateReadWeaveGenerationJob(started.jobId,{answerPlan:{...plan,reviewStatus:"approved"},autoSave:false});
+        const completed = await waitForStatus(started.jobId,"ready-for-review");
+        expect(completed.createdAt).toBe(preview.createdAt);
+        expect(generateMock.mock.calls[1][3].activeState).toEqual({checkpoint:{test:"server-only"}});
+        expect(completed.progress.some(p => p.message.includes("同一预算"))).toBe(true);
     });
 
     it("passes the server budget and detached original request through the real wrapper before normalization", async () => {
         const actual = await vi.importActual<typeof import("./readweave_ai.js")>("./readweave_ai.js");
-        const unified = vi.spyOn(unifiedAi, "generateUnifiedReadWeaveAnswer").mockResolvedValue(result());
+        const unified = vi.spyOn(activeAi, "generateReadWeaveActiveAnswer").mockResolvedValue(result());
         vi.stubEnv("READWEAVE_TEST_AI", "");
         vi.stubEnv("READWEAVE_ENABLE_LEGACY_REPLAY", "");
         try {
@@ -155,7 +167,7 @@ describe("ReadWeave persisted generation jobs", () => {
             const signal = new AbortController().signal;
             const progress = vi.fn();
             await actual.generateReadWeaveAnswer(input, progress, signal, { budget });
-            const [normalized, passedProgress, checker, , passedSignal, execution] = unified.mock.calls[0];
+            const [normalized, passedProgress, passedSignal, execution] = unified.mock.calls[0];
             expect(normalized.title).toBe("Mira Vale是什么");
             expect(normalized.fragments[0].text).toBe("A&B");
             expect(passedProgress).toBe(progress);
@@ -166,13 +178,12 @@ describe("ReadWeave persisted generation jobs", () => {
             expect(execution?.originalRequest?.fragments[0]).not.toBe(input.fragments[0]);
             expect(input).toEqual(original);
 
-            // Article words cannot change the quality check's subject classification.
-            const body = "Mira Vale 用于保存资料并按输入顺序输出已有内容，其功能由公开接口定义";
-            const baseline = checker!(body, normalized.title, "question");
+            // The wrapper forwards article data without installing a semantic classifier/checker.
             await actual.generateReadWeaveAnswer({ ...input,
                 fragments: [{ id: "selected", role: "selected", text: "教授 professor researcher scientist engineer faculty" }] }, undefined, undefined, { budget });
-            const contextualChecker = unified.mock.calls[1][2]!;
-            expect(contextualChecker(body, normalized.title, "question")).toEqual(baseline);
+            expect(unified.mock.calls[1][0].title).toBe(normalized.title);
+            expect(unified.mock.calls[1][3]?.budget).toBe(budget);
+            expect(unified.mock.calls[1]).toHaveLength(4);
         } finally {
             unified.mockRestore();
             vi.unstubAllEnvs();

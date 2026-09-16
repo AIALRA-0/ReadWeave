@@ -228,6 +228,26 @@ const TRAILING_ACRONYM_NAME = new RegExp(
     + String.raw`[ \t]*[，,][ \t]*([A-Z][A-Z0-9+/#_-]{1,15})[）)]`, "gu"
 );
 
+/** Move an explicitly supplied abbreviation; never invent a name or expansion. */
+export function repairReadWeaveExistingAcronyms(body: string) {
+    let count = 0;
+    const repaired = mapReadWeaveProse(body, prose => prose.replace(TRAILING_ACRONYM_NAME,
+        (original, rawLabel: string, englishName: string, abbreviation: string) => {
+            const sentence = /^[A-Z]/u.test(rawLabel) ? undefined
+                : rawLabel.match(/^(.*?(?:属于|涉及|采用|使用|通过|基于|面向|以及|和|与|是|为))([\p{Script=Han}]{2,30})$/u);
+            const connector = sentence?.[1] ?? "", label = sentence?.[2] ?? rawLabel;
+            const replacement = `${connector}${connector ? " " : ""}${abbreviation} ${label}（${englishName}）`;
+            // The transaction proves all lexical fields are preserved. It may
+            // reject an ambiguous match; that text stays for the model reviewer.
+            try {
+                const next = applyReadWeaveFormatPatches(original,[{start:0,original,replacement,rule:"FMT-local"}]);
+                if (next !== original) count++;
+                return next;
+            } catch { return original; }
+        }));
+    return {body:repaired,count};
+}
+
 /** Reorder names whose complete fields are already present. No model knowledge
  * or lexical content is introduced by this operation. */
 export function formatReadWeaveCanonicalEntities(body: string): string {
@@ -557,7 +577,7 @@ export function applyReadWeaveFormatPatches(body: string, patches: ReadWeaveText
         const safeAcronymMove = patch.rule === "FMT-local" && acronym && (() => {
             const [originalPair, englishName, abbreviation] = acronym;
             const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
-            const canonical = new RegExp(`${escaped(abbreviation)}\\s+[\\p{Script=Han}]{2,30}（${escaped(englishName)}）`, "u");
+            const canonical = new RegExp(`${escaped(abbreviation)}\\s+(?:[A-Z][A-Za-z'’.-]*[ \\t]+){0,4}[\\p{Script=Han}]{2,30}（${escaped(englishName)}）`, "u");
             return canonical.test(patch.replacement)
                 && words(patch.original.replace(originalPair, `（${englishName}）`))
                     === words(patch.replacement.replace(new RegExp(`(?<![A-Za-z0-9])${escaped(abbreviation)}(?![A-Za-z0-9])`, "u"), ""));
@@ -593,7 +613,7 @@ export function readWeaveFormatIssues(body: string): string[] {
             /^[a-z]{4,}$/u.test(word)
             && (index === 0 || !/^(?:of|the|and|for|in|on|to|with|from)$/u.test(word)))))
         issues.add("FMT-062：普通双语术语标签的英文名称需要核对标题式大小写与官方拼写");
-    if (formatReadWeaveCanonicalEntities(body) !== body)
+    if (repairReadWeaveExistingAcronyms(body).count > 0)
         issues.add("FMT-052：缩写必须置于中文全称和英文全称之前");
     const headings = Lexer.lex(body).filter((token): token is Tokens.Heading => token.type === "heading");
     if (headings.some((heading, index) => index > 0 && heading.depth > headings[index - 1].depth + 1))

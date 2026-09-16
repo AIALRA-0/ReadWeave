@@ -22,7 +22,7 @@ import {
 import { getReadWeaveRuntimeConfig } from "./readweave_settings.js";
 import { HUMAN_READABLE_CHINESE_STYLE_CONTRACT } from "./readweave_style_contract.js";
 import { KNOWN_ENTITY_NAMING_NOTES, KNOWN_PRODUCT_CANONICAL_FORMS } from "./readweave_term_catalog.js";
-import { generateUnifiedReadWeaveAnswer, type ReadWeaveUnifiedExecutionContext } from "./readweave_unified_ai.js";
+import type { ReadWeaveUnifiedExecutionContext } from "./readweave_unified_ai.js";
 
 interface ChatCompletionResponse {
     model?: string;
@@ -5722,7 +5722,7 @@ function validateRequest(request: ReadWeaveGenerateRequest): void {
     if (request.autoApplyPlan !== undefined && typeof request.autoApplyPlan !== "boolean") {
         throw new ValidationError("autoApplyPlan must be a boolean.");
     }
-    if (request.autoApplyPlan === false && request.answerPlan?.reviewStatus !== "approved") {
+    if (request.kind === "question" && request.autoApplyPlan === false && request.answerPlan && request.answerPlan.reviewStatus !== "approved") {
         throw new ValidationError("请先审核并确认回答流程，再生成最终答案。");
     }
     if (request.quoteSelectedText !== undefined && typeof request.quoteSelectedText !== "boolean") {
@@ -7627,8 +7627,12 @@ export async function generateReadWeaveAnswer(
                             : /(?:方法|算法|framework|method|algorithm)/iu.test(mockIdentityLabel)
                                 ? `${mockCanonicalTerm}是一种把输入约束转换为可验证输出的技术方法，其步骤、目标函数和适用条件共同限定使用边界。`
                                 : `${mockCanonicalTerm}是当前测试资料中可独立识别的专门对象，其上位类型、区分特征和作用范围由所选片段及相邻语境共同限定；定义不扩展到资料没有支持的实现细节、履历或书目信息。`;
+        const awaitingPlan = request.kind === "question" && request.autoApplyPlan === false && request.answerPlan?.reviewStatus !== "approved";
         return {
-            body: request.kind === "term"
+            awaitingPlan,
+            answerPlan: awaitingPlan ? {version:1,reviewStatus:"draft",answerType:"general",normalizedQuestion:effectiveTitle,
+                objective:effectiveTitle,summary:"解释测试选区的含义",answerRequirements:["解释测试选区的含义"],steps:["测试选区说明计算过程"],autoApplied:false} : request.answerPlan,
+            body: awaitingPlan ? "" : request.kind === "term"
                 ? joinReadWeaveAnswerSegments(segmentReadWeaveAnswer(mockTermBody), { maxParagraphs: 2 })
                 : mockQuestionBody,
             optimizedTitle,
@@ -7653,20 +7657,8 @@ export async function generateReadWeaveAnswer(
         && process.env.READWEAVE_ENABLE_LEGACY_REPLAY === "1"
     );
     if (legacyReplayRetired) {
-        const harness = getPublishedReadWeaveHarnessProfile();
-        const profile = buildReadWeaveTaskProfile(request.kind, request.title);
-        return generateUnifiedReadWeaveAnswer(request, onProgress,
-            (body, objective, kind, termIdentity, verifiedNonExpandableArtifact) =>
-                findReadWeaveQualityIssues(body, objective, {
-                    openDomain: true,
-                    originalQuestion: originalRequest.title,
-                    articleContext: originalRequest.fragments.map(fragment => fragment.text).join("\n"),
-                    kind,
-                    subject: profile.subject ?? request.title,
-                    knowledgeScope: profile.knowledgeScope,
-                    termIdentity,
-                    verifiedNonExpandableArtifact
-                }), harness, signal, { ...execution, originalRequest });
+        const { generateReadWeaveActiveAnswer } = await import("./readweave_active_ai.js");
+        return generateReadWeaveActiveAnswer(request, onProgress, signal, { ...execution, originalRequest });
     }
 
     // Explicitly isolated migration replay only; production and normal tests never enter this branch.

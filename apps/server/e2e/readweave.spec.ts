@@ -229,6 +229,34 @@ async function ensureGeneratedItemSaved(panel: Locator) {
     if (await manualSave.count() > 0) await expect(manualSave).toBeDisabled();
 }
 
+test("ReadWeave researches a plan before writing and resumes the same durable job after approval", async ({page,context}) => {
+    test.setTimeout(90_000);
+    const app = new App(page,context), pageErrors:string[] = [];
+    page.on("pageerror",e => pageErrors.push(e.message));
+    await gotoReadWeave(app,page);
+    const editor = await createTextNote(app,uniqueTitle("ReadWeave active plan"),"计算内核用于处理一组并行数据");
+    const panel = await openSelectionEditor(page,app,editor.locator("p").first(),"计算内核","Ask");
+    await panel.getByTestId("readweave-auto-apply-plan").uncheck();
+    const noteId = await page.evaluate(() => (window as unknown as TestAppWindow).glob.appContext.tabManager.getActiveContext().noteId);
+    const origin = new URL(page.url()).origin;
+    const jobs = async () => (await (await page.request.get(`${origin}/api/readweave/articles/${noteId}/generation-jobs`)).json()).jobs;
+    await panel.getByTestId("readweave-generate").click();
+    await expect(panel.getByTestId("readweave-answer-plan-editor")).toBeVisible({timeout:20_000});
+    await expect.poll(async () => (await jobs())[0]?.status).toBe("awaiting-plan");
+    const before = (await jobs())[0];
+    expect(before.result.body).toBe("");
+    expect(before.result.activeState).toBeUndefined();
+    expect(before.answerPlan.steps).toEqual(["测试选区说明计算过程"]);
+    await panel.getByTestId("readweave-generate").click();
+    await expect.poll(async () => (await jobs())[0]?.status,{timeout:20_000}).toBe("ready-for-review");
+    const after = await jobs();
+    expect(after).toHaveLength(1);
+    expect(after[0].jobId).toBe(before.jobId);
+    expect(after[0].createdAt).toBe(before.createdAt);
+    await expect(panel.getByTestId("readweave-answer")).toContainText(/\S/u);
+    expect(pageErrors).toEqual([]);
+});
+
 test("ReadWeave isolates the same ambiguous word across articles without body writes or duplicate results", async ({ page, context }) => {
     test.setTimeout(180_000);
     const app = new App(page, context);
@@ -361,9 +389,11 @@ test("ReadWeave passes the whole article, remembers checkboxes and generates dir
     const app = new App(page, context);
     const errors: string[] = [];
     const starts: Record<string, unknown>[] = [];
+    const continuations: Record<string, unknown>[] = [];
     page.on("pageerror", error => errors.push(error.message));
     page.on("request", request => {
         if (request.method() === "POST" && new URL(request.url()).pathname === "/api/readweave/generation-jobs") starts.push(request.postDataJSON());
+        if (request.method() === "POST" && /\/api\/readweave\/generation-jobs\/[^/]+\/regenerate$/u.test(new URL(request.url()).pathname)) continuations.push(request.postDataJSON());
     });
     await gotoReadWeave(app, page);
     const source = `The kernel computes wirelength gradients for chip placement.\n\n${"Complete original article content. ".repeat(2600)}ARTICLE END: boundary constraints are essential.`;
@@ -378,11 +408,15 @@ test("ReadWeave passes the whole article, remembers checkboxes and generates dir
     await panel.getByTestId("readweave-auto-apply-plan").uncheck();
     await panel.getByTestId("readweave-generate").click();
     await expect(panel.locator(".readweave-answer-plan-editor")).toBeVisible();
-    expect(starts).toHaveLength(0);
+    expect(starts).toHaveLength(1);
+    expect(continuations).toHaveLength(0);
+    expect(starts[0].answerPlan).toBeUndefined();
     await panel.getByTestId("readweave-generate").click();
     await expect(panel.getByTestId("readweave-answer")).toBeVisible({timeout:30_000});
     expect(starts).toHaveLength(1);
-    expect(starts[0]).toMatchObject({quoteSelectedText:false,autoApplyPlan:false,answerPlan:{reviewStatus:"approved"}});
+    expect(starts[0]).toMatchObject({quoteSelectedText:false,autoApplyPlan:false});
+    expect(continuations).toHaveLength(1);
+    expect(continuations[0]).toMatchObject({answerPlan:{reviewStatus:"approved"}});
     const fragments = starts[0].fragments as Array<{id:string;text:string}>;
     expect(fragments.find(fragment=>fragment.id==="current-block")?.text).toContain("chip placement");
     expect(fragments.map(fragment=>fragment.text).join("\n")).toContain("ARTICLE END: boundary constraints are essential.");
@@ -440,9 +474,11 @@ test("ReadWeave follows selected answers through the same editor and a separate 
     test.setTimeout(120_000);
     const errors: string[] = [];
     const starts: Record<string, unknown>[] = [];
+    const continuations: Record<string, unknown>[] = [];
     page.on("pageerror", error => errors.push(error.message));
     page.on("request", request => {
         if (request.method() === "POST" && new URL(request.url()).pathname === "/api/readweave/generation-jobs") starts.push(request.postDataJSON());
+        if (request.method() === "POST" && /\/api\/readweave\/generation-jobs\/[^/]+\/regenerate$/u.test(new URL(request.url()).pathname)) continuations.push(request.postDataJSON());
     });
     const app = new App(page, context);
     await gotoReadWeave(app, page);
@@ -502,10 +538,14 @@ test("ReadWeave follows selected answers through the same editor and a separate 
         await expect(panel.getByTestId("readweave-auto-apply-plan")).not.toBeChecked();
         await panel.getByTestId("readweave-generate").click();
         await expect(panel.getByTestId("readweave-answer-plan-editor")).toBeVisible();
-        expect(starts).toHaveLength(level);
+        expect(starts).toHaveLength(level + 1);
+        expect(starts[level].answerPlan).toBeUndefined();
+        expect(continuations).toHaveLength(level - 1);
         await panel.getByTestId("readweave-generate").click();
         const answer = panel.locator('.readweave-readable-body[data-testid="readweave-answer"]');
         await expect(answer).toBeVisible();
+        expect(continuations).toHaveLength(level);
+        expect(continuations[level - 1]).toMatchObject({ answerPlan: { reviewStatus: "approved" } });
         await expect(floating.locator(".readweave-answer-marker-dot")).toBeVisible();
         await expect(floating.locator(".readweave-answer-marker-line").first()).toBeVisible();
         await expect(panel.locator(".readweave-follow-up-context")).toContainText(`Level ${level} follow-up`);
@@ -531,8 +571,8 @@ test("ReadWeave follows selected answers through the same editor and a separate 
     }
     expect(starts).toHaveLength(4);
     expect(starts.slice(1).every(request => request.parentLinkId && request.answerSelection)).toBe(true);
-    expect(starts.slice(1).every(request => request.autoApplyPlan === false
-        && (request.answerPlan as { reviewStatus?: string })?.reviewStatus === "approved")).toBe(true);
+    expect(starts.slice(1).every(request => request.autoApplyPlan === false && request.answerPlan === undefined)).toBe(true);
+    expect(continuations).toHaveLength(3);
     expect((starts[1].answerSelection as { text?: string }).text).toBe("$C = A B$");
     await panel.getByTestId("readweave-open-chapter-map").click();
     const map = page.getByRole("dialog", { name: "文章章节思维导图" });
@@ -1089,6 +1129,7 @@ test("ReadWeave copies rendered article math as one editable TeX formula", async
     await expect(panel.getByTestId("readweave-question")).toBeHidden();
     await panel.getByTestId("readweave-question-rendered").getByRole("button", { name: "编辑" }).click();
     await expect(panel.getByTestId("readweave-question")).toBeVisible();
+    await expect(panel.getByTestId("readweave-question")).toBeFocused();
     await panel.getByTestId("readweave-question").evaluate(element => (element as HTMLTextAreaElement).blur());
     await expect(panel.getByTestId("readweave-question-rendered").locator(".katex-html")).toBeVisible();
     const after = await page.request.get(`${origin}/api/notes/${encodeURIComponent(noteId)}/blob`);

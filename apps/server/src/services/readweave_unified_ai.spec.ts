@@ -1082,89 +1082,9 @@ describe.skip("ReadWeave retired multi-stage workflow", () => {
 });
 
 describe("ReadWeave one-pass workflow", () => {
-    it.each([ "250 short requirements", "oversized optional projection" ] as const)(
-        "keeps the root writer affordable with %s", async fixture => {
-            const input: ReadWeaveGenerateRequest = {
-                ...request("解释缓存为何提速，比较命中与未命中的访问路径，并说明失效条件；不要讨论作者背景"),
-                activeExternalSearch: false,
-                autoExternalSearch: false,
-                fragments: [
-                    { id: "selected", role: "selected", text: "缓存保存可复用的数据副本，命中时直接读取副本" },
-                    { id: "article", role: "document", text: "未命中时访问原始数据并回填；原始数据变化或副本过期时，需要失效或更新副本" },
-                    { id: "tail", role: "next", text: "末段限定：这里只比较访问路径，不讨论文章作者" }
-                ]
-            };
-            const originalInput = structuredClone(input);
-            const advice = Array.from({ length: 250 }, (_, index) => fixture === "250 short requirements"
-                ? String(index) : `cache path ${index}`);
-            const semanticProposal = proposalFromReadWeavePlan(captureReadWeaveTask(input, false), {
-                objective: input.title, answerRequirements: advice
-            });
-            const answer = "缓存通过复用数据副本减少反复访问原始数据的开销；命中时直接读取副本，未命中时访问原始数据并回填；原始数据变化或副本过期时，需要失效或更新副本";
-            const budget = new ReadWeaveBudget(.05, { hardLimitCny: .10 });
-            if (fixture === "oversized optional projection") {
-                // The proposal must fit the remaining allowance, not a fresh ceiling.
-                const priorResource = budget.reserveResourceRequest(.01);
-                expect(priorResource).toBeDefined();
-                expect(budget.reportUsage(priorResource!, .01, "actual")).toBe(true);
-            }
-            const rates = readWeaveModelRates("deepseek-v4-flash");
-            const reservationsAtDispatch: number[] = [];
-            vi.stubGlobal("fetch", vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-                const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
-                const system = requestSystem(payload);
-                const user = requestUser(payload);
-                const maxTokens = Number(payload.max_tokens ?? payload.max_output_tokens);
-                // Check the paid dispatch reservation, not just a tiny mock usage bill.
-                reservationsAtDispatch.push(budget.upperBoundCny);
-                expect(budget.upperBoundCny).toBeLessThanOrEqual(.10);
-                expect(readWeaveModelReservation(system, user, maxTokens, rates)).toBeLessThanOrEqual(.10);
-                const planning = system.includes("统一问题分析器");
-                const value = planning ? { semanticProposal } : { body: answer, claims: [], unresolvedClaims: [] };
-                const promptTokens = readWeaveEstimatedInputTokens(system + user);
-                const completionTokens = planning ? 1_500 : 120;
-                return Response.json({
-                    choices: [ { message: { content: JSON.stringify(value) }, finish_reason: "stop" } ],
-                    usage: { prompt_tokens: promptTokens, completion_tokens: completionTokens,
-                        total_tokens: promptTokens + completionTokens }
-                });
-            }));
-            const result = await generateUnifiedReadWeaveAnswer(input, undefined, undefined, undefined, undefined, { budget });
-            const writers = expectUnifiedWriterRequest(input);
-            expect(writers).toHaveLength(1);
-            expect(vi.mocked(fetch).mock.calls.filter(([ , init ]) =>
-                requestSystem(JSON.parse(String(init?.body))).includes("统一问题分析器"))).toHaveLength(1);
-            expect(requestSystem(writers[0])).toContain(readWeaveWritingSkill(false).prompt);
-            expect(result.body).toBe(answer);
-            expect(input).toEqual(originalInput);
-            expect(searchMock).not.toHaveBeenCalled();
-            const task = result.audit?.questionContract.taskContract;
-            expect(task?.rootRequirement.instruction).toBe(input.title);
-            expect(task?.request.questionText).toBe(input.title);
-            for (const fragment of input.fragments) {
-                expect(task?.request.blocks.some(block => block.text === fragment.text)).toBe(true);
-            }
-            if (fixture === "250 short requirements") {
-                expect(task?.interpretation.status).toBe("accepted");
-                expect(task?.interpretation.proposal.answerPlan?.requiredPoints).toEqual(advice);
-                expect(result.audit?.questionContract.answerRequirements).toEqual(expect.arrayContaining(advice));
-                expect(requestUser(writers[0])).toContain(`"requiredPoints":${JSON.stringify(advice)}`);
-            } else {
-                expect(task?.interpretation.status).toBe("fallback");
-                expect(task?.interpretation.diagnostics).toContain("advisory-resource-demand-exceeds-authorized-budget");
-                for (const point of advice) expect(requestUser(writers[0])).not.toContain(point);
-            }
-            // Analyzer + writer + the domain-neutral semantic audit required by this
-            // compound question must all remain inside the same hard ceiling.
-            expect(reservationsAtDispatch).toHaveLength(3);
-            expect(budget.hardLimitCny).toBe(.10);
-            expect(budget.upperBoundCny).toBeLessThanOrEqual(.10);
-            expect(result.usage).toMatchObject({ targetCny: .05, withinBudget: true });
-            expect(result.usage?.costCny).toBeLessThanOrEqual(.10);
-            expect(result.audit?.questionContract.answerRequirements.map(requirement => requirement.normalize("NFKC")))
-                .toContain(input.title.normalize("NFKC"));
-        }
-    );
+    // The former oversized-advice fallback contract is intentionally retired.
+    // Active pipeline tests retain both 250-need fixtures and now assert that
+    // every need reaches writing unchanged, with no semantic fallback.
 
     it.each([
         {

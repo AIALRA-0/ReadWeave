@@ -13,7 +13,7 @@ import { readReadWeaveGenerationPreferences, type ReadWeaveGenerationPreferences
 import { DEFAULT_READWEAVE_QUESTION_TEMPLATES, renderReadWeaveQuestionTemplate } from "./readweave_question_templates.js";
 import { ReadWeaveAnswer } from "./ReadWeaveAnswer.js";
 import { hasReadWeaveQuestionMath, ReadWeaveQuestionText } from "./ReadWeaveQuestionText.js";
-import { createEditableReadWeaveAnswerPlan, normalizeEditableReadWeaveAnswerPlan, splitPlanLines } from "./readweave_answer_plan.js";
+import { normalizeEditableReadWeaveAnswerPlan, splitPlanLines } from "./readweave_answer_plan.js";
 
 export function ReadWeaveFollowUpWindow({
     parent,
@@ -56,7 +56,10 @@ export function ReadWeaveFollowUpWindow({
     const accept = useCallback((next: ReadWeaveGenerationJob) => {
         onJobRef.current(next);
         sessionStorage.setItem(key, next.jobId);
-        if (mounted.current) setJob(next);
+        if (mounted.current) {
+            setJob(next);
+            if (next.status === "awaiting-plan") setAnswerPlan(next.answerPlan ?? next.result?.answerPlan);
+        }
     }, [key]);
     useEffect(() => {
         mounted.current = true;
@@ -123,13 +126,9 @@ export function ReadWeaveFollowUpWindow({
     }
     async function generate() {
         if (!title.trim() || parent.depth >= READWEAVE_MAX_FOLLOW_UP_DEPTH || active) return;
-        if (!preferences.autoApplyPlan && !answerPlan) {
-            setAnswerPlan(createEditableReadWeaveAnswerPlan(title, "problem", preferences.quoteSelectedText));
-            return;
-        }
         const preparedPlan = answerPlan
             ? normalizeEditableReadWeaveAnswerPlan(answerPlan, true, preferences.autoApplyPlan) : undefined;
-        if (!preferences.autoApplyPlan && !preparedPlan) {
+        if (!preferences.autoApplyPlan && answerPlan && !preparedPlan) {
             setError("流程需要填写目标、必答项和至少一个有效步骤");
             return;
         }

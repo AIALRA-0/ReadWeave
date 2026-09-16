@@ -25,3 +25,8 @@ demo/**/*.css eol=lf
 # a string literal) doesn't make Git/GitHub treat the whole file as binary.
 *.ts diff
 *.tsx diff
+
+# Public pinned vocabulary assets: retain upstream bytes and provenance hashes.
+apps/server/src/assets/readweave-tokenizer/* -text linguist-vendored=true
+# Upstream license is intentionally byte-preserved with CRLF line endings.
+apps/server/src/assets/readweave-tokenizer/LICENSE whitespace=cr-at-eol

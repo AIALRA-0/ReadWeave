@@ -31,7 +31,7 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 
 import { t } from "../../services/i18n.js";
 import server from "../../services/server.js";
-import { createEditableReadWeaveAnswerPlan, normalizeEditableReadWeaveAnswerPlan, splitPlanLines } from "./readweave_answer_plan.js";
+import { normalizeEditableReadWeaveAnswerPlan, splitPlanLines } from "./readweave_answer_plan.js";
 import utils from "../../services/utils.js";
 import { useActiveNoteContext, useContentElement } from "../react/hooks.js";
 import {
@@ -451,7 +451,7 @@ export default function ReadWeavePanel() {
         setAnswerPlan(job.answerPlan ?? job.result?.answerPlan ?? savedDraft?.answerPlan);
         setBodyEditing(false);
         setBodyEdited(!!savedDraft?.bodyEdited);
-        if (job.kind === "question") setQuestionTitle(restored.questionTitle);
+        if (job.kind === "question") setQuestionTitle(job.status === "awaiting-plan" ? job.title : restored.questionTitle);
         if (reviewedTermIdentity) {
             setTermIdentity(restored.termIdentity);
             setTermIdentityEdited(restored.termIdentityEdited);
@@ -956,6 +956,12 @@ export default function ReadWeavePanel() {
                         await delay(600);
                         continue;
                     }
+                    if (job.status === "awaiting-plan") {
+                        hydrateGenerationJob({ ...job, progress: accumulated });
+                        setStatus("已完成资料获取，请审核或编辑构造流，再点击生成答案");
+                        setStatusTone("normal");
+                        return;
+                    }
                     if (!isReadWeaveGenerationReviewable(job.status) || !job.result) {
                         setBusy(false);
                         return;
@@ -1055,16 +1061,10 @@ export default function ReadWeavePanel() {
             setStatusTone("warning");
             return;
         }
-        if (kind === "question" && !autoApplyPlan && !answerPlan) {
-            setAnswerPlan(createEditableReadWeaveAnswerPlan(currentTitle, contentType, quoteSelectedText));
-            setStatus("回答流程已生成，可以编辑流程内容；再次点击“生成答案”才会调用写作模型");
-            setStatusTone("normal");
-            return;
-        }
-        const preparedPlan = kind === "question"
-            ? normalizeEditableReadWeaveAnswerPlan(answerPlan ?? createEditableReadWeaveAnswerPlan(currentTitle, contentType, quoteSelectedText), true, autoApplyPlan)
+        const preparedPlan = kind === "question" && !autoApplyPlan && answerPlan
+            ? normalizeEditableReadWeaveAnswerPlan(answerPlan, true, false)
             : undefined;
-        if (kind === "question" && !preparedPlan) {
+        if (kind === "question" && !autoApplyPlan && answerPlan && !preparedPlan) {
             setStatus("回答流程不完整，请补齐目标、步骤和必答项");
             setStatusTone("warning");
             return;
@@ -1377,10 +1377,10 @@ export default function ReadWeavePanel() {
 
     async function regenerateDraft() {
         if (!generationJobId) return;
-        const preparedPlan = kind === "question"
-            ? normalizeEditableReadWeaveAnswerPlan(answerPlan ?? createEditableReadWeaveAnswerPlan(currentTitle, contentType, quoteSelectedText), true, autoApplyPlan)
+        const preparedPlan = kind === "question" && !autoApplyPlan && answerPlan
+            ? normalizeEditableReadWeaveAnswerPlan(answerPlan, true, false)
             : undefined;
-        if (kind === "question" && !preparedPlan) {
+        if (kind === "question" && !autoApplyPlan && answerPlan && !preparedPlan) {
             setStatus("回答流程不完整，请补齐目标、步骤和必答项");
             setStatusTone("warning");
             return;
