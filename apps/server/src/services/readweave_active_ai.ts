@@ -2,6 +2,7 @@ import type { ReadWeaveGenerateRequest, ReadWeaveGenerateResponse, ReadWeaveGene
 import { createHash } from "node:crypto";
 import { ReadWeaveBudget, readWeaveGenerationBudgetMode, readWeaveModelRates } from "./readweave_budget.js";
 import { runReadWeaveActivePipeline, type ActiveStage, type ActiveCheckpoint } from "./readweave_active_pipeline.js";
+import { READWEAVE_FORMAT_VERSION } from "./readweave_format.js";
 import { readReadWeavePageWithJina, searchReadWeaveActiveEvidence, withReadWeaveSearchPolicy } from "./readweave_search.js";
 import { getReadWeaveRuntimeConfig } from "./readweave_settings.js";
 import { readWeaveWritingSkill } from "./readweave_writing_skill.js";
@@ -153,7 +154,7 @@ export async function generateReadWeaveActiveAnswer(
             answerPlan: result.plan, externalSearchDecision: decision, qualityState: "provisional", evidenceState: "not-checked",
             harnessVersion: VERSION, unresolvedIssues: issues,
             audit: {
-                workflowVersion: "active-research-v1", harnessVersion: VERSION, formatVersion: `skill-${writingSkill.revision}`,
+                workflowVersion: "active-research-v1", harnessVersion: VERSION, formatVersion: `${READWEAVE_FORMAT_VERSION}+skill-${writingSkill.revision}`,
                 questionContract: { normalizedQuestion: result.requirements.normalizedQuestion, objective: result.requirements.scope,
                     answerRequirements: result.requirements.needs.map(n => n.statement), exclusions: result.requirements.exclusions,
                     searchQueries, requiresCurrentEvidence: false },

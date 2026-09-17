@@ -30,11 +30,21 @@ describe("selectable Markdown answers", () => {
         expect(host.querySelector(".readweave-readable-body")?.textContent).not.toContain("$$");
         expect(host.querySelector(".readweave-math-invalid")).toBeNull();
     });
+    it("renders the reported same-line definition formula without losing dollar delimiters", async () => {
+        const body = "它的定义式是\r\n\r\n$$u_i = \\frac{w_i}{p_i}$$\r\n\r\n### 定义式中的符号\r\n\r\n- 宽度 $w_i$";
+        await act(() => render(<ReadWeaveAnswer body={body} />, host));
+        await vi.waitFor(() => expect(host.querySelector(".readweave-readable-body .katex-display")).toBeTruthy());
+        expect(host.querySelector(".readweave-math-invalid")).toBeNull();
+        expect(host.querySelector(".readweave-readable-body .katex-display annotation")?.textContent)
+            .toBe("u_i = \\frac{w_i}{p_i}");
+        expect(host.querySelectorAll(".readweave-readable-body .katex")).toHaveLength(2);
+    });
     it("keeps an invalid formula readable with a specific error instead of red KaTeX output", async () => {
         await act(() => render(<ReadWeaveAnswer body={"$$\\unknowncommand{x}$$"} />, host));
         await vi.waitFor(() => expect(host.querySelector(".readweave-math-invalid")).toBeTruthy());
         expect(host.querySelector(".katex-error")).toBeNull();
         expect(host.querySelector(".readweave-math-invalid")?.getAttribute("title")).toContain("公式无法渲染");
+        expect(host.querySelector(".readweave-math-invalid")?.textContent).toBe("$$\\unknowncommand{x}$$");
     });
     it("removes script and event handlers", async () => {
         await act(() =>

@@ -431,7 +431,7 @@ describe("declarative protocol and format-only transactions", () => {
                 tasks:[{original:"**结果说明**",instruction:"改为二级标题",sourceIds:[]}],remainingIssues:[]}),
             ready({patches:[{original:"**结果说明**",replacement:"## 结果说明"}]})],false);
         const result = await runReadWeaveActivePipeline(request,p.config);
-        expect(result.body).toBe("## 计算过程\n\n## 结果说明");
+        expect(result.body).toBe("## 1. 计算过程\n\n## 2. 结果说明");
         expect(result.trace.findLast(t => t.stage === "format")?.result).toEqual(expect.objectContaining({executorCalls:1,accepted:2}));
         const task = p.calls.findLast(c => c.stage === "format")?.input;
         expect(task).not.toHaveProperty("body");
@@ -446,7 +446,7 @@ describe("declarative protocol and format-only transactions", () => {
             {...ready({patches:[{original:"**甲**",replacement:"## 甲"},{original:"**乙**",replacement:"## 乙"}]}),
                 actions:[{type:"patch",target:"标题"}]}],false);
         const result = await runReadWeaveActivePipeline(request,p.config);
-        expect(result.body).toBe("## 甲\n\n## 乙");
+        expect(result.body).toBe("## 1. 甲\n\n## 2. 乙");
         expect(result.formatIssues).toEqual([]);
         expect(p.calls.filter(c => c.stage === "format")).toHaveLength(2);
         expect(p.calls.at(-1)?.input.tasks).toHaveLength(2);
@@ -474,6 +474,18 @@ describe("declarative protocol and format-only transactions", () => {
         expect(result.body).toBe("GPU 图形处理器（Graphics Processing Unit）处理数据\n\n$GPU+x$\n\n`GPU`\n\n未知缩写 ABC");
         expect(result.count).toBe(1);
         expect(repairReadWeaveExistingAcronyms(result.body).count).toBe(0);
+    });
+    it("normalizes supported acronym order and separators without duplicating an existing prefix", () => {
+        expect(repairReadWeaveExistingAcronyms("高斯过程（Gaussian Process；GP）").body)
+            .toBe("GP 高斯过程（Gaussian Process）");
+        expect(repairReadWeaveExistingAcronyms("高斯过程（GP，Gaussian Process）").body)
+            .toBe("GP 高斯过程（Gaussian Process）");
+        expect(repairReadWeaveExistingAcronyms("GP 高斯过程（GP，Gaussian Process）").body)
+            .toBe("GP 高斯过程（Gaussian Process）");
+        expect(repairReadWeaveExistingAcronyms("GP 高斯过程（Gaussian Process，GP）").body)
+            .toBe("GP 高斯过程（Gaussian Process）");
+        expect(repairReadWeaveExistingAcronyms("基于高斯过程（GP，Gaussian Process）预测").body)
+            .toBe("基于 GP 高斯过程（Gaussian Process）预测");
     });
     it("rejects questions and missing requirements rather than generating defaults", () => {
         expect(() => validateActiveRequirements({...requirements, needs:[{id:"N1", statement:"这是什么？"}]})).toThrow("陈述句");

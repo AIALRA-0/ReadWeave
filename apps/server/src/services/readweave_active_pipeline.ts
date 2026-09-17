@@ -1,5 +1,5 @@
 import type { ReadWeaveAnswerPlan, ReadWeaveGenerateRequest } from "@triliumnext/commons";
-import { applyReadWeaveFormatPatches, mapReadWeaveProse, readWeaveFormatIssues, readWeaveNameReviewTargets, repairReadWeaveExistingAcronyms } from "./readweave_format.js";
+import { applyReadWeaveFormatPatches, mapReadWeaveProse, numberReadWeaveAnswerHeadings, readWeaveFormatIssues, readWeaveNameReviewTargets, repairReadWeaveExistingAcronyms, repairReadWeaveVerifiedNameCase } from "./readweave_format.js";
 import { ReadWeaveActiveResources, type ArticleRead } from "./readweave_active_resources.js";
 import { ReadWeaveProtocolError } from "./readweave_protocol.js";
 
@@ -584,14 +584,27 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
 每个原始问题按构造流逐一回答；已给事实、完整技能、必要资料和用户问题共同输入，不再次分类、不缩成作者署名报告
 所有资料方向的查证在写作之前完成，有缺口就返回工具动作，不能边写边建议用户自己搜索
 先按技能组织好段落、术语和公式解释再写，保持事实限定，不把 unresolved 扩大成整题不能回答
+所有实际 Markdown 标题默认编号，依层级写成 1.、1.1.、1.1.1.，每级末尾都有点号；单一连续语义区块无需硬加标题
+在标题、段落、列表和定义内部逐一检查名称：缩写 中文全称（已核实英文全称），英文名称括号不追加缩写或中文别名；普通英文名称按已核实拼写采用标题式大小写，官方小写名称和代码标识保留原样
 最终只给用户要的答案，不把内部计划、审核及工具日志塞入正文`, v => text(record(v).body));
-    const exactFormat = repairReadWeaveExistingAcronyms(body);
-    body = repairReadWeaveSafePunctuation(exactFormat.body);
-    if (exactFormat.count) trace.push({stage:"format",gaps:[],actions:[],readyReason:"确定性局部排版，不增加名称或事实",result:{acronymMoves:exactFormat.count}});
+    const verifiedEnglishNames = outline!.terms.map(term => term.canonical.match(/（([^（）]+)）/u)?.[1])
+        .filter((name): name is string => !!name && !/^[a-z]{4,}(?=[\s-]|$)/u.test(name));
+    const currentIssues = (value: string) => readWeaveFormatIssues(value, verifiedEnglishNames);
+    const normalizePresentation = (value: string) => {
+        const moved = repairReadWeaveExistingAcronyms(value);
+        const cased = repairReadWeaveVerifiedNameCase(moved.body, outline!.terms);
+        return { body:numberReadWeaveAnswerHeadings(repairReadWeaveSafePunctuation(cased.body)),
+            acronymMoves:moved.count, nameCaseEdits:cased.count };
+    };
+    const exactFormat = normalizePresentation(body);
+    body = exactFormat.body;
+    if (exactFormat.acronymMoves || exactFormat.nameCaseEdits) trace.push({stage:"format",gaps:[],actions:[],readyReason:"基于已提供字段和已核实名称的确定性局部排版",result:{acronymMoves:exactFormat.acronymMoves,nameCaseEdits:exactFormat.nameCaseEdits}});
     for (let pass = formatPass; pass < 2; pass++) {
         try {
             ports.progress("format", pass ? "只复核并修复上一轮尚未解决的局部格式问题" : "按完整写作技能复核整份回答格式");
             const system = `${ports.writingSkill}\n你是 ReadWeave 格式复核角色，只按完整技能检查格式与表达，不判定内容真伪，不重新搜索或重写全文
+            每一个实际 Markdown 标题都必须有连续层级编号及末尾点号，如 1.、1.1.、1.1.1.；公式、代码、逐字引用和正式专名不改
+            逐一核对标题、段落、列表与定义项中的中文（English Full Name，ABC）、中文（ABC，English Full Name）、中文（english full name）和首次裸露缩写；已核实的缩写必须置于中文与纯英文名称括号之前，英文名称按已核实拼写使用标题式大小写，不盲改官方小写名称
             返回 {gaps:[],actions:[],readyReason:"格式复核完成",result:{patches:[{original:"原文片段",replacement:"准确的局部替换",before:"重复片段前的相邻文字，可省略",after:"重复片段后的相邻文字，可省略"}],tasks:[{original:"需要补写的最小原文片段",instruction:"明确补写要求",sourceIds:[]}],remainingIssues:[{code:"FMT-009",original:"当前正文中准确存在的原文",reason:"实际违规原因"}]}}
             先直接提出能准确写出的局部补丁；只有真正需要另一个执行模型补写时才提交 tasks
             原文片段重复时用 before、after 的准确相邻文字定位；不重复时省略这两个字段
@@ -601,10 +614,9 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
             第一轮检查全文，第二轮只针对未解决项；最多两轮，不得把内部建议列为错误`;
             const modelResult = record(await ports.model("format",system,{
                 body,originalQuestion:request.title,contentType:request.contentType,budget:ports.budgetStatus?.(),
-                formatDiagnostics:[...readWeaveFormatIssues(body),...(pass ? failedPatches : [])],
+                formatDiagnostics:[...currentIssues(body),...(pass ? failedPatches : [])],
                 nameCaseTargets:readWeaveNameReviewTargets(body).filter(target => !target.diagnostics.length
                     && /^[A-Za-z][A-Za-z ,&-]*$/u.test(target.englishName)
-                    && /[ -]/u.test(target.englishName)
                     && target.englishName.split(/[ ,&-]+/u).some((word,index) => /^[a-z]{4,}$/u.test(word)
                         && (index === 0 || !/^(?:of|the|and|for|in|on|to|with|from)$/u.test(word))))
                     .map(target => ({original:target.original,englishName:target.englishName})),
@@ -653,12 +665,13 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
             }
             const submitted = [...patches,...executedPatches];
             const applied = applyActiveFormatPatchBatch(body,submitted,outline!.terms,localTasks,outline!.facts);
-            body = repairReadWeaveSafePunctuation(applied.body);
+            const normalized = normalizePresentation(applied.body);
+            body = normalized.body;
             failedPatches = [...applied.rejected,...taskIssues,
                 ...(requestedTools.length ? ["格式阶段没有执行额外资料工具，已保留并处理可应用的局部补丁"] : [])];
             const verifiedIssues = anchoredFormatIssues(rawRemainingIssues,body);
-            formatIssues = [...new Set([...verifiedIssues,...readWeaveFormatIssues(body)])];
-            trace.push({stage:"format",gaps:[],actions:[],readyReason:"已按完整技能提出局部修改",result:{submitted:submitted.length,accepted:applied.accepted,rejected:failedPatches.length,rejectionReasons:failedPatches,executorCalls:localTasks.length ? 1 : 0}});
+            formatIssues = [...new Set([...verifiedIssues,...currentIssues(body)])];
+            trace.push({stage:"format",gaps:[],actions:[],readyReason:"已按完整技能提出局部修改",result:{submitted:submitted.length,accepted:applied.accepted,rejected:failedPatches.length,rejectionReasons:failedPatches,executorCalls:localTasks.length ? 1 : 0,acronymMoves:normalized.acronymMoves,nameCaseEdits:normalized.nameCaseEdits}});
             if (applied.accepted) repairRounds++;
             formatPass = pass + 1;
             saveCheckpoint("format");
@@ -671,7 +684,7 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
             // Record the failed review in the execution trace, not as a fabricated
             // defect in the answer. Only still-visible defects can prompt repair.
             const issue = `格式复核调用未完成，已保留当前正文：${error instanceof Error ? error.message : String(error)}`;
-            formatIssues = [...new Set([...formatIssues, ...readWeaveFormatIssues(body)])];
+            formatIssues = [...new Set([...formatIssues, ...currentIssues(body)])];
             trace.push({stage:"format",gaps:[],actions:[],readyReason:"",error:issue});
             ports.progress("format", issue);
             if (error instanceof ReadWeaveProtocolError && pass === 0) {
@@ -683,6 +696,9 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
             break;
         }
     }
+    const finalized = normalizePresentation(body);
+    body = finalized.body;
+    formatIssues = [...new Set([...formatIssues,...currentIssues(body)])];
     const plan = makePlan();
     return { body, requirements, outline, plan, resources, trace, formatIssues, repairRounds };
 }

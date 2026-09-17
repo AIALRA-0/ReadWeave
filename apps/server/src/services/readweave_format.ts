@@ -1,6 +1,6 @@
 import { Lexer, type Tokens } from "marked";
 
-export const READWEAVE_FORMAT_VERSION = "format-2026-09-v6";
+export const READWEAVE_FORMAT_VERSION = "format-2026-09-v7";
 
 function normalizeSimpleMathNotation(value: string): string {
     const scientific = new RegExp(
@@ -225,7 +225,11 @@ export function formatReadWeavePersonNameOrder(body: string, subject: string): s
 const TRAILING_ACRONYM_NAME = new RegExp(
     String.raw`((?:[A-Z][A-Za-z'’.-]*[ \t]+){0,4}[\p{Script=Han}]{2,30})[ \t]*[（(]`
     + String.raw`([A-Za-z][A-Za-z'’.-]*(?:[ \t-]+[A-Za-z][A-Za-z'’.-]*){0,12})`
-    + String.raw`[ \t]*[，,][ \t]*([A-Z][A-Z0-9+/#_-]{1,15})[）)]`, "gu"
+    + String.raw`[ \t]*[，,；;][ \t]*([A-Z][A-Z0-9+/#_-]{1,15})[）)]`, "gu"
+);
+const LEADING_ACRONYM_IN_NAME = new RegExp(
+    String.raw`([\p{Script=Han}]{2,30})[ \t]*[（(][ \t]*([A-Z][A-Z0-9+/#_-]{1,15})`
+    + String.raw`[ \t]*[，,；;][ \t]*([A-Za-z][A-Za-z'’.-]*(?:[ \t-]+[A-Za-z][A-Za-z'’.-]*){0,12})[）)]`, "gu"
 );
 
 /** Move an explicitly supplied abbreviation; never invent a name or expansion. */
@@ -233,6 +237,10 @@ export function repairReadWeaveExistingAcronyms(body: string) {
     let count = 0;
     const repaired = mapReadWeaveProse(body, prose => prose.replace(TRAILING_ACRONYM_NAME,
         (original, rawLabel: string, englishName: string, abbreviation: string) => {
+            if (rawLabel.startsWith(`${abbreviation} `) && /\p{Script=Han}/u.test(rawLabel.slice(abbreviation.length))) {
+                count++;
+                return `${rawLabel}（${englishName}）`;
+            }
             const sentence = rawLabel.match(/^(.*(?:属于|涉及|采用|使用|通过|基于|面向|以及|和|与|是|为|由))([\p{Script=Han}]{2,30})$/u);
             // A Latin prefix can be a project name or a quantity, not part of
             // the adjacent Chinese term. Leave ambiguous boundaries unchanged.
@@ -246,6 +254,13 @@ export function repairReadWeaveExistingAcronyms(body: string) {
                 if (next !== original) count++;
                 return next;
             } catch { return original; }
+        }).replace(LEADING_ACRONYM_IN_NAME,
+        (_original, rawLabel: string, abbreviation: string, englishName: string, offset: number) => {
+            const sentence = rawLabel.match(/^(.*(?:属于|涉及|采用|使用|通过|基于|面向|以及|和|与|是|为|用))([\p{Script=Han}]{2,30})$/u);
+            const connector = sentence?.[1] ?? "", label = sentence?.[2] ?? rawLabel;
+            count++;
+            if (prose.slice(0, offset).endsWith(`${abbreviation} `)) return `${rawLabel}（${englishName}）`;
+            return `${connector}${connector ? " " : ""}${abbreviation} ${label}（${englishName}）`;
         }));
     return {body:repaired,count};
 }
@@ -310,6 +325,49 @@ export function formatReadWeaveAnswerHeadings(body: string, enabled = true, answ
     const start = body.indexOf(firstHeading.raw);
     if (start < 0 || body.slice(0, start).trim()) return body;
     return `${body.slice(0, start)}${body.slice(start + firstHeading.raw.length)}`.trimStart();
+}
+
+/** Number only rendered Markdown headings, leaving quotations and code intact. */
+export function numberReadWeaveAnswerHeadings(body: string): string {
+    const tokens = Lexer.lex(body);
+    const headings = tokens.filter((token): token is Tokens.Heading => token.type === "heading");
+    if (!headings.length) return body;
+    const baseDepth = Math.min(...headings.map(heading => heading.depth));
+    const counts: number[] = [];
+    return tokens.map(token => {
+        if (token.type !== "heading") return token.raw;
+        const level = token.depth - baseDepth;
+        while (counts.length <= level) counts.push(0);
+        counts.length = level + 1;
+        for (let index = 0; index < level; index++) counts[index] ||= 1;
+        counts[level]++;
+        const label = token.text.replace(/^\d{1,2}(?:\.\d{1,2}){0,5}\.?[ \t]+/u, "").trim();
+        const suffix = token.raw.match(/\r?\n$/u)?.[0] ?? "";
+        return `${"#".repeat(token.depth)} ${counts.join(".")}. ${label}${suffix}`;
+    }).join("");
+}
+
+/** Use only already-researched outline names to correct their exact case. */
+export function repairReadWeaveVerifiedNameCase(
+    body: string, terms: Array<{ canonical: string }>
+): { body: string; count: number } {
+    let count = 0;
+    for (const { canonical } of terms) {
+        const pair = canonical.match(/^(?:(?:[A-Z][A-Z0-9+/#_-]{1,15}) )?([\p{Script=Han}][^（）\n]{0,60})（([A-Za-z][^（）\n]*)）$/u);
+        if (!pair) continue;
+        // A lowercase outline candidate is not proof of an official lowercase
+        // spelling. Leave its resolution to the contextual format reviewer.
+        if (/^[a-z]{4,}(?=[\s-]|$)/u.test(pair[2])) continue;
+        const chinese = pair[1].replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+        const english = pair[2].replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+        const pattern = new RegExp(`${chinese}（(${english})）`, "giu");
+        body = mapReadWeaveProse(body, prose => prose.replace(pattern, (original, actual: string) => {
+            if (actual === pair[2]) return original;
+            count++;
+            return original.replace(`（${actual}）`, `（${pair[2]}）`);
+        }));
+    }
+    return { body, count };
 }
 
 /** Mark explicit bilingual definitions; never infer a definition from prose. */
@@ -582,7 +640,7 @@ export function applyReadWeaveFormatPatches(body: string, patches: ReadWeaveText
             .match(/[-+]?\d+(?:[.,:]\d+)*/gu) ?? [];
         if (JSON.stringify(numbers(patch.original)) !== JSON.stringify(numbers(patch.replacement)))
             throw new Error("格式补丁改变了数字或数值关系，未应用修改");
-        const acronym = patch.original.match(/（([A-Za-z][^（）\n]*?)[，,][ \t]*([A-Z][A-Z0-9+/#_-]{1,15})）/u);
+        const acronym = patch.original.match(/（([A-Za-z][^（）\n]*?)[，,；;][ \t]*([A-Z][A-Z0-9+/#_-]{1,15})）/u);
         const safeAcronymMove = patch.rule === "FMT-local" && acronym && (() => {
             const [originalPair, englishName, abbreviation] = acronym;
             const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
@@ -609,7 +667,7 @@ export function applyReadWeaveFormatPatches(body: string, patches: ReadWeaveText
         );
 }
 
-export function readWeaveFormatIssues(body: string): string[] {
+export function readWeaveFormatIssues(body: string, verifiedEnglishNames: string[] = []): string[] {
     const issues = new Set<string>();
     const nameTargets = readWeaveNameReviewTargets(body);
     if (nameTargets.some(target => target.diagnostics.includes("mixed-bilingual-name-parentheses")))
@@ -617,6 +675,7 @@ export function readWeaveFormatIssues(body: string): string[] {
     if (nameTargets.some(target => target.diagnostics.includes("extra-english-name-parentheses")))
         issues.add("FMT-121：英文名称括号不能混入缩写、别名或分隔说明，须核对已有名称而非编造展开");
     if (nameTargets.some(target => !target.diagnostics.length
+        && !verifiedEnglishNames.includes(target.englishName)
         && /^[A-Za-z][A-Za-z ,&-]*$/u.test(target.englishName)
         && target.englishName.split(/[ ,&-]+/u).some((word, index) =>
             /^[a-z]{4,}$/u.test(word)
@@ -624,7 +683,8 @@ export function readWeaveFormatIssues(body: string): string[] {
         issues.add("FMT-062：普通双语术语标签的英文名称需要核对标题式大小写与官方拼写");
     let trailingAcronym = false;
     mapReadWeaveProse(body, value => {
-        trailingAcronym ||= new RegExp(TRAILING_ACRONYM_NAME.source,"u").test(value);
+        trailingAcronym ||= new RegExp(TRAILING_ACRONYM_NAME.source,"u").test(value)
+            || new RegExp(LEADING_ACRONYM_IN_NAME.source,"u").test(value);
         return value;
     });
     if (trailingAcronym)
@@ -632,6 +692,8 @@ export function readWeaveFormatIssues(body: string): string[] {
     const headings = Lexer.lex(body).filter((token): token is Tokens.Heading => token.type === "heading");
     if (headings.some((heading, index) => index > 0 && heading.depth > headings[index - 1].depth + 1))
         issues.add("FMT-031：子标题不能跳过必要的父级层级");
+    if (numberReadWeaveAnswerHeadings(body) !== body)
+        issues.add("FMT-032：所有生成标题须使用以点号结尾的连续层级编号");
     if (formatReadWeaveAnswerHeadings(body) !== body)
         issues.add("FMT-023：分区回答的首段缺少小标题");
     mapReadWeaveProse(body, (text) => {

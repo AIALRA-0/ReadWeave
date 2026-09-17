@@ -9,6 +9,8 @@ import {
     formatReadWeaveFullNameOpening,
     formatReadWeaveMarkdown,
     formatReadWeaveNameParentheses,
+    numberReadWeaveAnswerHeadings,
+    repairReadWeaveVerifiedNameCase,
     formatReadWeavePersonNameOrder,
     formatReadWeaveTermReferences,
     groupReadWeaveFormatTargets,
@@ -215,6 +217,28 @@ describe("versioned formatting contract", () => {
             .toContain("FMT-062：普通双语术语标签的英文名称需要核对标题式大小写与官方拼写");
         expect(readWeaveFormatIssues("代码仓库（Repository）；全局布局（Global Placement）"))
             .not.toContain("FMT-062：普通双语术语标签的英文名称需要核对标题式大小写与官方拼写");
+    });
+    it("numbers every generated heading with a trailing dot without touching literal source", () => {
+        const body = "## 1 原理\n\n正文\n\n### 1.1 符号\n\n解释\n\n### 示例\n\n> ## 引文标题\n\n```md\n## 代码标题\n```";
+        const result = numberReadWeaveAnswerHeadings(body);
+        expect(result).toContain("## 1. 原理");
+        expect(result).toContain("### 1.1. 符号");
+        expect(result).toContain("### 1.2. 示例");
+        expect(result).toContain("> ## 引文标题");
+        expect(result).toContain("```md\n## 代码标题\n```");
+        expect(numberReadWeaveAnswerHeadings(result)).toBe(result);
+        expect(readWeaveFormatIssues(body)).toContain("FMT-032：所有生成标题须使用以点号结尾的连续层级编号");
+        expect(readWeaveFormatIssues(result)).not.toContain("FMT-032：所有生成标题须使用以点号结尾的连续层级编号");
+    });
+    it("corrects only names already verified in the outline", () => {
+        const source = "供电网络占用比例（power delivery network occupancy ratio）与 dblp 计算机科学文献数据库（dblp computer science bibliography）";
+        const terms = [ {canonical:"供电网络占用比例（Power Delivery Network Occupancy Ratio）"},
+            {canonical:"dblp 计算机科学文献数据库（dblp computer science bibliography）"} ];
+        const result = repairReadWeaveVerifiedNameCase(source, terms);
+        expect(result.body).toContain("供电网络占用比例（Power Delivery Network Occupancy Ratio）");
+        expect(result.body).toContain("dblp computer science bibliography");
+        expect(result.count).toBe(1);
+        expect(repairReadWeaveVerifiedNameCase(result.body, terms).count).toBe(0);
     });
     it("reports a complex formula whose symbols or operators are unexplained", () => {
         const formula = "$$\\min(\\sum_{e\\in E} WL(e;x,y))+\\lambda D(x,y)$$";
@@ -563,7 +587,7 @@ describe("versioned formatting contract", () => {
             + "```python\n# original comment\nvalue = 1\n```\n\n> # 原样标题\n\n## 边界\n\n说明";
         expect(formatReadWeaveAnswerHeadings(body)).toBe(body);
         expect(formatReadWeaveAnswerHeadings(formatReadWeaveAnswerHeadings(body))).toBe(body);
-        expect(readWeaveFormatIssues(body)).toEqual([]);
+        expect(readWeaveFormatIssues(body)).toContain("FMT-032：所有生成标题须使用以点号结尾的连续层级编号");
         const codeOnly = "```markdown\n# 原样标题\n#### 原样层级\n```";
         expect(formatReadWeaveAnswerHeadings(codeOnly)).toBe(codeOnly);
         expect(readWeaveFormatIssues(codeOnly)).toEqual([]);

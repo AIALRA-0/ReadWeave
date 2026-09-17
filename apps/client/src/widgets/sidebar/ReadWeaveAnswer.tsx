@@ -22,7 +22,9 @@ function renderAnswerMarkdown(body: string): string {
     let html = markdown.parse(protectedBody) as string;
     for (const {slot,source} of formulas) {
         const escaped = source.replace(/&/gu,"&amp;").replace(/</gu,"&lt;").replace(/>/gu,"&gt;");
-        html = html.replace(slot, `<span class="readweave-math-source${source.startsWith("$$") ? " readweave-math-display" : ""}">${escaped}</span>`);
+        // A replacement string interprets "$$" as a special token. A callback
+        // returns the literal formula delimiters needed by the math renderer.
+        html = html.replace(slot, () => `<span class="readweave-math-source${source.startsWith("$$") ? " readweave-math-display" : ""}">${escaped}</span>`);
     }
     return DOMPurify.sanitize(html, {
         FORBID_TAGS: ["script", "style", "iframe", "object", "form", "input", "button"],
@@ -225,6 +227,9 @@ export function ReadWeaveAnswer({
                         katex.render(formula, span, {trust:false,throwOnError:true,displayMode,
                             macros:{...KATEX_MACROS}});
                     } catch (error) {
+                        // KaTeX may clear the target before throwing. Never leave
+                        // a blank formula when its source is still available.
+                        span.textContent = source;
                         span.classList.add("readweave-math-invalid");
                         span.title = `公式无法渲染：${error instanceof Error ? error.message : String(error)}`;
                         span.setAttribute("role","status");
