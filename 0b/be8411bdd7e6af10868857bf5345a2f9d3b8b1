@@ -1,0 +1,40 @@
+apps/client/src/widgets/sidebar/ReadWeaveAnswer.spec.tsx
+  s_f4bc084e1b5e1b::t_0ed80fa2b4006f 33-41,47
+apps/server/src/services/readweave_format.spec.ts
+  s_f4bc084e1b5e1b::t_f6c4acea4c2082 12-13,221-242,590
+apps/server/src/services/readweave_active_pipeline.spec.ts
+  s_f4bc084e1b5e1b::t_8658a9a504746a 487-488
+  s_f4bc084e1b5e1b::t_4d5b720ca5c799 434,449
+  s_f4bc084e1b5e1b::t_f5b79edafbeb47 478-486,489
+apps/server/src/services/readweave_format.ts
+  s_f4bc084e1b5e1b::t_f1ea2907874e3b 670,678
+  s_f4bc084e1b5e1b::t_f752842aa3c2fe 228-232,240-243,257,261,643
+  s_f4bc084e1b5e1b::t_32317f2e20caf9 686-687
+  s_f4bc084e1b5e1b::t_263530643cdba3 258-260,262-263
+  s_f4bc084e1b5e1b::t_bef5d85850858b 3,330-357,361-372,695-696
+  s_f4bc084e1b5e1b::t_46d1d6cf002a33 358-360
+apps/client/src/widgets/sidebar/ReadWeaveAnswer.tsx
+  s_f4bc084e1b5e1b::t_2d63b62264f123 25-27,230-232
+apps/server/src/services/readweave_active_pipeline.ts
+  s_f4bc084e1b5e1b::t_273567ccafacb0 2,592-601,606-607,617,668-669,673-674,687,699-701
+  s_f4bc084e1b5e1b::t_de7434f7ff8b54 587-588
+  s_f4bc084e1b5e1b::t_c0b58d4d387578 590-591
+apps/server/src/services/readweave_active_ai.ts
+  s_f4bc084e1b5e1b::t_0ec42c402e7e94 5,157
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "0bbe8411bdd7e6af10868857bf5345a2f9d3b8b1",
+  "prompts": {},
+  "sessions": {
+    "s_f4bc084e1b5e1b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05e85-d752-7582-abf7-4d4f5901369e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "AIALRA-0 <71060413+AIALRA-0@users.noreply.github.com>"
+    }
+  }
+}
