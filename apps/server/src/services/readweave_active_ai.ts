@@ -139,7 +139,10 @@ export async function generateReadWeaveActiveAnswer(
             reason: searchEnabled ? "default" as const : "disabled" as const, queries: searchQueries, executed: searchQueries.length > 0,
             sourceCount: new Set(external.map(s => s.url ?? s.sourceId)).size };
         const issues = result.formatIssues;
-        onProgress?.({ stage: "complete", round: ++round, message: result.checkpoint ? "资料与构造流已准备，请审核后生成答案" : issues.length ? "回答已生成，格式建议保留在详细日志" : "回答已生成，格式检查完成", issues });
+        const formatReviewInterrupted = !!result.trace.filter(entry => entry.stage === "format").at(-1)?.error;
+        onProgress?.({ stage: "complete", round: ++round, message: result.checkpoint ? "资料与构造流已准备，请审核后生成答案"
+            : formatReviewInterrupted ? "回答已生成，格式复核未完整完成；正文可保存，详情见执行记录"
+                : issues.length ? "回答已生成，格式建议保留在详细日志" : "回答已生成，格式检查完成", issues });
         return {
             awaitingPlan: !!result.checkpoint,
             activeState: result.checkpoint ? {requestKey,checkpoint:result.checkpoint,usages,searchQueries,warnings,searchCost,pageReads} : undefined,

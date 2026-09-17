@@ -1,5 +1,5 @@
 import type { ReadWeaveAnswerPlan, ReadWeaveGenerateRequest } from "@triliumnext/commons";
-import { applyReadWeaveFormatPatches, mapReadWeaveProse, readWeaveFormatIssues, repairReadWeaveExistingAcronyms } from "./readweave_format.js";
+import { applyReadWeaveFormatPatches, mapReadWeaveProse, readWeaveFormatIssues, readWeaveNameReviewTargets, repairReadWeaveExistingAcronyms } from "./readweave_format.js";
 import { ReadWeaveActiveResources, type ArticleRead } from "./readweave_active_resources.js";
 import { ReadWeaveProtocolError } from "./readweave_protocol.js";
 
@@ -179,12 +179,76 @@ export function validateActiveOutline(value: unknown, needs: FactNeed[], resourc
     return { facts, nodes:ordered, terms };
 }
 
-/** A transaction of unique spans. Only layout changes or previously researched term forms are accepted. */
-export function applyActiveFormatPatches(body: string, patches: unknown[], terms: ActiveOutline["terms"]) {
+/** Only a concrete reversal of the same claim may veto an otherwise local edit. */
+function reversesPatchClaim(original: string, replacement: string): boolean {
+    const opposed = [
+        [/(?:增加|提高|上升|增大)/u,/(?:减少|降低|下降|缩小)/u],
+        [/(?:至少|不少于|不低于)/u,/(?:至多|最多|不超过)/u],
+        [/(?:大于|高于)/u,/(?:小于|低于)/u]
+    ];
+    if (opposed.some(([left,right]) => left.test(original) && !right.test(original)
+        && right.test(replacement) && !left.test(replacement)
+        || right.test(original) && !left.test(original)
+        && left.test(replacement) && !right.test(replacement))) return true;
+    // A moved or rephrased negation is not proof that the claim was inverted.
+    if (/(?:没有|不能|不会|不是|不应|不得|不可|无法|未能|不|未|无)/u.test(replacement)) return false;
+    const negatives = Array.from(original.matchAll(/(?:没有|不能|不会|不是|不应|不得|不可|无法|未能|不|未|无)([\p{Script=Han}]{1,2})/gu), match => match[1]);
+    return negatives.some(word => replacement.includes(word));
+}
+
+/** A complete topic substitution is distinguishable from an ordinary paraphrase. */
+function replacesWholeSubject(original: string, replacement: string): boolean {
+    const han = (value: string) => (value.match(/\p{Script=Han}/gu) ?? []).join("");
+    const before = han(original), after = han(replacement);
+    if (before.length < 6 || after.length < 6) return false;
+    const pairs = new Set(Array.from({length:before.length - 1}, (_,i) => before.slice(i,i + 2)));
+    if (Array.from({length:after.length - 1}, (_,i) => after.slice(i,i + 2)).some(pair => pairs.has(pair))) return false;
+    const latin = original.match(/[A-Za-z][A-Za-z0-9_-]*/gu) ?? [];
+    return !latin.some(token => replacement.toLocaleLowerCase().includes(token.toLocaleLowerCase()));
+}
+
+function hasVerifiedNamePair(name: string, replacement: string, original: string,
+    terms: ActiveOutline["terms"], facts: ActiveFact[]): boolean {
+    const normalized = name.toLocaleLowerCase();
+    const marker = `（${normalized}）`;
+    const at = replacement.toLocaleLowerCase().indexOf(marker);
+    if (at < 0) return false;
+    const prefix = replacement.slice(0,at).trimEnd();
+    const sources = [original,...terms.map(term => term.canonical),...facts.map(fact => fact.statement)];
+    return sources.some(source => {
+        const sourceAt = source.toLocaleLowerCase().indexOf(marker);
+        if (sourceAt < 0) return false;
+        const sourceLabel = source.slice(0,sourceAt).match(/[\p{Script=Han}]{2,30}$/u)?.[0];
+        return !!sourceLabel && prefix.endsWith(sourceLabel);
+    });
+}
+
+function locateActivePatch(body: string, proposal: Record<string, unknown>, original: string): number {
+    const matches: number[] = [];
+    let from = 0;
+    while (original && from < body.length) {
+        const at = body.indexOf(original,from);
+        if (at < 0) break;
+        matches.push(at);
+        from = at + 1;
+    }
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) {
+        const before = typeof proposal.before === "string" ? proposal.before : "";
+        const after = typeof proposal.after === "string" ? proposal.after : "";
+        const anchored = matches.filter(at => (!before || body.slice(0,at).endsWith(before))
+            && (!after || body.slice(at + original.length).startsWith(after)));
+        if ((before || after) && anchored.length === 1) return anchored[0];
+        if (Number.isInteger(proposal.start) && matches.includes(proposal.start as number)) return proposal.start as number;
+    }
+    throw new Error(matches.length ? "格式补丁原文出现多次，需提供相邻文字或准确位置" : "格式补丁原文不在当前正文中");
+}
+
+/** Apply locally anchored format edits, preserving literal data and independently sourced names. */
+export function applyActiveFormatPatches(body: string, patches: unknown[], terms: ActiveOutline["terms"], facts: ActiveFact[] = []) {
     const resolved = patches.map(value => {
         const p = record(value), original = text(p.original), replacement = text(p.replacement);
-        const start = body.indexOf(original);
-        if (start < 0 || body.indexOf(original, start + 1) >= 0) throw new Error("格式补丁必须唯一定位，必要时增加左右原文");
+        const start = locateActivePatch(body,p,original);
         return { start, original, replacement, rule: "FMT-local" };
     }).sort((a, b) => a.start - b.start);
     let end = 0;
@@ -193,19 +257,40 @@ export function applyActiveFormatPatches(body: string, patches: unknown[], terms
         end = p.start + p.original.length;
         if (mapReadWeaveProse(p.original, () => "") !== mapReadWeaveProse(p.replacement, () => "")) throw new Error("格式补丁修改了公式、代码或受保护内容");
         let normalized = p.replacement, normalizedOriginal = p.original;
-        for (const t of terms) {
-            normalized = normalized.replaceAll(t.canonical, t.original);
-            normalizedOriginal = normalizedOriginal.replaceAll(t.canonical, t.original);
+        // A verified term remains the same term when only its display case changes.
+        for (const t of [...terms].sort((a,b) => b.canonical.length - a.canonical.length)) {
+            const escaped = t.canonical.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+            const knownForm = new RegExp(escaped,"giu");
+            normalized = normalized.replace(knownForm, () => t.original);
+            normalizedOriginal = normalizedOriginal.replace(knownForm, () => t.original);
         }
         try { applyReadWeaveFormatPatches(normalizedOriginal, [{ ...p, original:normalizedOriginal, replacement: normalized, start: 0 }]); }
-        catch { throw new Error("格式补丁超出排版及已经确认的术语形式，未应用"); }
+        catch {
+            // The model may reword a local sentence while fixing its format. Do not
+            // turn lexical equality into a veto; retain only checkable hard bounds.
+            const numbers = (value: string) => (value.replace(/^[ \t]*\d+[.)][ \t]+/gmu, "")
+                .match(/[-+]?\d+(?:[.,:]\d+)*/gu) ?? []);
+            if (JSON.stringify(numbers(p.original)) !== JSON.stringify(numbers(p.replacement)))
+                throw new Error("格式补丁改变了未核实的数字或数值关系");
+            const invented = Array.from(p.replacement.matchAll(/（([A-Za-z][^（）\n]*?)）/gu), match => match[1])
+                .find(name => !hasVerifiedNamePair(name,p.replacement,p.original,terms,facts));
+            if (invented) throw new Error("格式补丁引入了未核实英文名称");
+            if (/^[A-Z][A-Z0-9+/#_-]{1,15}$/u.test(p.original.trim())
+                && !terms.some(term => term.original === p.original.trim()
+                    && term.canonical.toLocaleLowerCase() === p.replacement.toLocaleLowerCase()))
+                throw new Error("缩写展开未在已有资料中确认");
+            if (reversesPatchClaim(p.original,p.replacement))
+                throw new Error("格式补丁明确反转原文的否定、范围或变化方向");
+            if (replacesWholeSubject(p.original,p.replacement))
+                throw new Error("格式补丁将整句替换为没有共同对象的内容");
+        }
     }
     return resolved.reverse().reduce((result, p) => result.slice(0, p.start) + p.replacement + result.slice(p.start + p.original.length), body);
 }
 
 /** Accept independent safe edits even when one proposal is stale or invalid. */
 export function applyActiveFormatPatchBatch(body: string, patches: unknown[], terms: ActiveOutline["terms"],
-    tasks: Array<{original:string; facts:ActiveFact[]}> = []) {
+    tasks: Array<{original:string; facts:ActiveFact[]}> = [], facts: ActiveFact[] = []) {
     let next = body;
     let accepted = 0;
     const rejected: string[] = [];
@@ -217,26 +302,30 @@ export function applyActiveFormatPatchBatch(body: string, patches: unknown[], te
             // Validate each edit against the current text. A later edit may safely
             // change a word inside a paragraph already edited by an earlier patch.
             if (proposal.operation === "supplement") {
-                const task = tasks.find(item => item.original === original && item.facts.length > 0);
-                if (!task || !replacement.includes(original) || replacement.indexOf(original) !== replacement.lastIndexOf(original))
-                    throw new Error("解释补写缺少唯一原文或已核实事实");
+                const task = tasks.find(item => item.facts.length > 0
+                    && (item.original === original || item.original.includes(original)));
+                if (!task || replacesWholeSubject(original,replacement))
+                    throw new Error("解释补写缺少已核实事实或将原文换成无关内容");
                 if (mapReadWeaveProse(original, () => "") !== mapReadWeaveProse(replacement, () => ""))
                     throw new Error("解释补写修改了公式、代码或受保护内容");
                 const numbers = (value:string) => value.match(/\d+(?:[.,]\d+)*/gu) ?? [];
                 const allowedNumbers = new Set(numbers(original + task.facts.map(f => f.statement).join(" ")));
                 if (numbers(replacement).some(number => !allowedNumbers.has(number)))
                     throw new Error("解释补写引入了未核实数值");
-                const knownNames = [original, ...task.facts.map(f => f.statement), ...terms.map(t => t.canonical)].join(" ");
                 if (Array.from(replacement.matchAll(/（([A-Za-z][^（）]*?)）/gu), match => match[1])
-                    .some(name => !knownNames.includes(name)))
+                    .some(name => !hasVerifiedNamePair(name,replacement,original,terms,task.facts)))
                     throw new Error("解释补写引入了未核实英文名称");
                 const at = next.indexOf(original);
                 if (at < 0 || next.indexOf(original,at + 1) >= 0) throw new Error("解释补写原文无法唯一定位");
                 next = next.slice(0,at) + replacement + next.slice(at + original.length);
-            } else next = applyActiveFormatPatches(next, [proposal], terms);
+            } else next = applyActiveFormatPatches(next, [proposal], terms, facts);
             accepted++;
         } catch (error) {
-            rejected.push(`补丁 ${index + 1}：${error instanceof Error ? error.message : String(error)}`);
+            const proposal = patches[index];
+            const original = proposal && typeof proposal === "object" && !Array.isArray(proposal)
+                && typeof (proposal as Record<string, unknown>).original === "string"
+                ? (proposal as Record<string, string>).original : "未提供可定位原文";
+            rejected.push(`补丁 ${index + 1}（原文：${original}）：${error instanceof Error ? error.message : String(error)}`);
         }
     }
     return {body:next,accepted,rejected};
@@ -503,15 +592,22 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
         try {
             ports.progress("format", pass ? "只复核并修复上一轮尚未解决的局部格式问题" : "按完整写作技能复核整份回答格式");
             const system = `${ports.writingSkill}\n你是 ReadWeave 格式复核角色，只按完整技能检查格式与表达，不判定内容真伪，不重新搜索或重写全文
-            返回 {gaps:[],actions:[],readyReason:"格式复核完成",result:{patches:[{original:"唯一原文",replacement:"准确的局部替换"}],tasks:[{original:"需要补写的最小原文片段",instruction:"明确补写要求",sourceIds:[]}],remainingIssues:[{code:"FMT-009",original:"当前正文中准确存在的原文",reason:"实际违规原因"}]}}
+            返回 {gaps:[],actions:[],readyReason:"格式复核完成",result:{patches:[{original:"原文片段",replacement:"准确的局部替换",before:"重复片段前的相邻文字，可省略",after:"重复片段后的相邻文字，可省略"}],tasks:[{original:"需要补写的最小原文片段",instruction:"明确补写要求",sourceIds:[]}],remainingIssues:[{code:"FMT-009",original:"当前正文中准确存在的原文",reason:"实际违规原因"}]}}
             先直接提出能准确写出的局部补丁；只有真正需要另一个执行模型补写时才提交 tasks
+            原文片段重复时用 before、after 的准确相邻文字定位；不重复时省略这两个字段
             tasks 必须列明完整动作及依据，不能让执行器重新分析整篇文章
-            每项剩余问题必须引用修复后仍实际存在的原文和准确规则；不能把猜测、候选名称或未执行的建议报作错误；有问题不能提交空 patches、空 tasks 后声称修复完成
-            公式、代码、网址、数值、否定和限定条件保持原样；名称只能使用已确认形式
+            remainingIssues 列出当前正文中确实存在且这批补丁应消除的问题，准确给出规则、原文和原因；执行器会在实际替换后逐项重新定位，只保留仍存在的问题；不能把猜测或候选名称报作错误
+            公式、代码、网址、数值、否定和限定条件保持原样；名称本体须有依据，已确认术语的展示大小写可以按技能校正，不把大小写变化当成新名称
             第一轮检查全文，第二轮只针对未解决项；最多两轮，不得把内部建议列为错误`;
             const modelResult = record(await ports.model("format",system,{
                 body,originalQuestion:request.title,contentType:request.contentType,budget:ports.budgetStatus?.(),
                 formatDiagnostics:[...readWeaveFormatIssues(body),...(pass ? failedPatches : [])],
+                nameCaseTargets:readWeaveNameReviewTargets(body).filter(target => !target.diagnostics.length
+                    && /^[A-Za-z][A-Za-z ,&-]*$/u.test(target.englishName)
+                    && /[ -]/u.test(target.englishName)
+                    && target.englishName.split(/[ ,&-]+/u).some((word,index) => /^[a-z]{4,}$/u.test(word)
+                        && (index === 0 || !/^(?:of|the|and|for|in|on|to|with|from)$/u.test(word))))
+                    .map(target => ({original:target.original,englishName:target.englishName})),
                 terms:outline!.terms,facts:outline!.facts,priorFailures:failedPatches
             }));
             const result = record(modelResult.result), patches = array(result.patches);
@@ -548,7 +644,7 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
                     {tasks:localTasks,contentType:request.contentType,budget:ports.budgetStatus?.()}));
                     for (const patch of array(record(execution.result).patches)) {
                         const original = text(record(patch).original);
-                        const task = localTasks.find(task => task.original === original);
+                        const task = localTasks.find(task => task.original === original || task.original.includes(original));
                         if (task) executedPatches.push({ ...record(patch),
                             operation:task.facts.length && text(task.instruction).includes("补写") ? "supplement" : "format" });
                         else taskIssues.push("局部执行器提交了任务范围以外的原文，未应用该项");
@@ -556,23 +652,26 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
                 } catch (error) { taskIssues.push(`局部执行：${error instanceof Error ? error.message : String(error)}`); }
             }
             const submitted = [...patches,...executedPatches];
-            const applied = applyActiveFormatPatchBatch(body,submitted,outline!.terms,localTasks);
+            const applied = applyActiveFormatPatchBatch(body,submitted,outline!.terms,localTasks,outline!.facts);
             body = repairReadWeaveSafePunctuation(applied.body);
             failedPatches = [...applied.rejected,...taskIssues,
                 ...(requestedTools.length ? ["格式阶段没有执行额外资料工具，已保留并处理可应用的局部补丁"] : [])];
             const verifiedIssues = anchoredFormatIssues(rawRemainingIssues,body);
             formatIssues = [...new Set([...verifiedIssues,...readWeaveFormatIssues(body)])];
-            trace.push({stage:"format",gaps:[],actions:[],readyReason:"已按完整技能提出局部修改",result:{submitted:submitted.length,accepted:applied.accepted,rejected:failedPatches.length,executorCalls:localTasks.length ? 1 : 0}});
+            trace.push({stage:"format",gaps:[],actions:[],readyReason:"已按完整技能提出局部修改",result:{submitted:submitted.length,accepted:applied.accepted,rejected:failedPatches.length,rejectionReasons:failedPatches,executorCalls:localTasks.length ? 1 : 0}});
             if (applied.accepted) repairRounds++;
             formatPass = pass + 1;
             saveCheckpoint("format");
-            if (!failedPatches.length && !formatIssues.length) break;
+            // A rejected suggestion is not an answer defect by itself. Keep its
+            // reason in the trace, but spend another pass only on a live issue.
+            if (!formatIssues.length) break;
         } catch (error) {
             ports.signal?.throwIfAborted();
             // A failed format transaction cannot erase the already generated answer.
-            // Preserve its exact bytes, expose the unresolved format status, never fabricate a replacement.
-            const issue = `FMT-runtime：格式修复未完成，正文未替换；${error instanceof Error ? error.message : String(error)}`;
-            formatIssues = [...new Set([...formatIssues, ...readWeaveFormatIssues(body), issue])];
+            // Record the failed review in the execution trace, not as a fabricated
+            // defect in the answer. Only still-visible defects can prompt repair.
+            const issue = `格式复核调用未完成，已保留当前正文：${error instanceof Error ? error.message : String(error)}`;
+            formatIssues = [...new Set([...formatIssues, ...readWeaveFormatIssues(body)])];
             trace.push({stage:"format",gaps:[],actions:[],readyReason:"",error:issue});
             ports.progress("format", issue);
             if (error instanceof ReadWeaveProtocolError && pass === 0) {
@@ -584,8 +683,6 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
             break;
         }
     }
-    if (failedPatches.length)
-        formatIssues.push(`FMT-runtime：${failedPatches.length} 项局部修改未应用，相关格式问题仍需复核`);
     const plan = makePlan();
     return { body, requirements, outline, plan, resources, trace, formatIssues, repairRounds };
 }

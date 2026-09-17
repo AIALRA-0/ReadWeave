@@ -208,7 +208,8 @@ describe("active generation workflow", () => {
         const p = ports([read, ready(requirements), ready(outline), ready({body:"计算内核执行计算"})], false);
         const result = await runReadWeaveActivePipeline(request, p.config);
         expect(result.body).toBe("计算内核执行计算");
-        expect(result.formatIssues).toEqual(expect.arrayContaining([expect.stringContaining("格式修复未完成")]));
+        expect(result.formatIssues).toEqual([]);
+        expect(result.trace.some(entry => entry.stage === "format" && entry.error?.includes("格式复核调用未完成"))).toBe(true);
         expect(result.repairRounds).toBe(0);
     });
     it("does not turn optional recorded gaps into a content rejection gate", async () => {
@@ -283,6 +284,96 @@ describe("declarative protocol and format-only transactions", () => {
         expect(result.body).toBe("## 计算过程\n\n金额为 10");
         expect(result.accepted).toBe(1);
         expect(result.rejected).toHaveLength(1);
+    });
+    it("accepts the complete verified bilingual term when only its display case changes", () => {
+        const original = "最差电压下降（worst-case voltage drop）";
+        const replacement = "最差电压下降（Worst-Case Voltage Drop）";
+        const terms = [{original:"最差电压下降",canonical:original,sourceIds:["web-5"]}];
+        expect(applyActiveFormatPatches(original,[{original,replacement}],terms)).toBe(replacement);
+        expect(applyActiveFormatPatchBatch(original,[{original,replacement}],terms).accepted).toBe(1);
+    });
+    it("passes the exact casing target to format review and applies its full-span repair", async () => {
+        const original = "最差电压下降（worst-case voltage drop）";
+        const replacement = "最差电压下降（Worst-Case Voltage Drop）";
+        const withTerm = {...outline,terms:[{original:"最差电压下降",canonical:original,sourceIds:["context"]}]};
+        const p = ports([read,ready(requirements),ready(withTerm),ready({body:original}),
+            ready({patches:[{original,replacement}],remainingIssues:[]})],false);
+        const result = await runReadWeaveActivePipeline(request,p.config);
+        expect(result.body).toBe(replacement);
+        expect(result.trace.findLast(stage => stage.stage === "format")?.result).toEqual(expect.objectContaining({accepted:1,rejectionReasons:[]}));
+        expect(p.calls.find(call => call.stage === "format")?.input.nameCaseTargets)
+            .toEqual(expect.arrayContaining([expect.objectContaining({englishName:"worst-case voltage drop"})]));
+    });
+    it("accepts a local wording repair but rejects clear fact reversal or an unrelated replacement", () => {
+        expect(applyActiveFormatPatches("它能够稳定运行",[{original:"它能够稳定运行",replacement:"它可以稳定运行"}],[]))
+            .toBe("它可以稳定运行");
+        expect(() => applyActiveFormatPatches("模型没有运行",[{original:"模型没有运行",replacement:"模型已经运行"}],[]))
+            .toThrow("反转");
+        expect(() => applyActiveFormatPatches("供电压降增加",[{original:"供电压降增加",replacement:"供电压降下降"}],[]))
+            .toThrow("反转");
+        expect(() => applyActiveFormatPatches("至少需要 5 次",[{original:"至少需要 5 次",replacement:"至多需要 5 次"}],[]))
+            .toThrow("反转");
+        expect(() => applyActiveFormatPatches("芯片布局需要优化",[{original:"芯片布局需要优化",replacement:"天气预报已经发布"}],[]))
+            .toThrow("没有共同对象");
+        expect(applyActiveFormatPatches("模型可以运行",[{original:"模型可以运行",replacement:"模型可以运行，但不能替代人工判断"}],[]))
+            .toBe("模型可以运行，但不能替代人工判断");
+        expect(applyActiveFormatPatches("模型没有运行",[{original:"模型没有运行",replacement:"模型的运行尚未开始"}],[]))
+            .toBe("模型的运行尚未开始");
+        expect(applyActiveFormatPatches("机体温度上升",[{original:"机体温度上升",replacement:"设备变热"}],[]))
+            .toBe("设备变热");
+        expect(() => applyActiveFormatPatches("先取 10 再取 20",[{original:"先取 10 再取 20",replacement:"先取 20 再取 10"}],[]))
+            .toThrow("数字");
+        expect(() => applyActiveFormatPatches("解析布局（Analytical Placement）与错误定义",[
+            {original:"错误定义",replacement:"错误定义（Analytical Placement）"}],[]))
+            .toThrow("未核实英文名称");
+        expect(applyActiveFormatPatches("采用最差电压下降",[
+            {original:"采用最差电压下降",replacement:"采用最差电压下降（Worst-Case Voltage Drop）"}],
+            [{original:"最差电压下降",canonical:"最差电压下降（Worst-Case Voltage Drop）",sourceIds:["web-5"]}]))
+            .toBe("采用最差电压下降（Worst-Case Voltage Drop）");
+        expect(() => applyActiveFormatPatches("解析布局（Analytical Placement）",[
+            {original:"解析布局（Analytical Placement）",replacement:"芯片封装（Analytical Placement）"}],[]))
+            .toThrow("未核实英文名称");
+    });
+    it("disambiguates a repeated format target with exact adjacent text", () => {
+        const original = "术语（old name）";
+        const body = `第一处 ${original}；第二处 ${original}`;
+        expect(applyActiveFormatPatches(body,[{original,replacement:"术语（Old Name）",before:"第二处 "}],[]))
+            .toBe(`第一处 ${original}；第二处 术语（Old Name）`);
+        expect(() => applyActiveFormatPatches(body,[{original,replacement:"术语（Old Name）"}],[]))
+            .toThrow("出现多次");
+    });
+    it("records an irrelevant rejected suggestion without another paid pass or a false answer warning", async () => {
+        const body = "芯片布局需要优化";
+        const p = ports([read,ready(requirements),ready(outline),ready({body}),
+            ready({patches:[{original:body,replacement:"天气预报已经发布"}],remainingIssues:[]})],false);
+        const result = await runReadWeaveActivePipeline(request,p.config);
+        expect(result.body).toBe(body);
+        expect(result.formatIssues).toEqual([]);
+        expect(p.calls.filter(call => call.stage === "format")).toHaveLength(1);
+        expect(result.trace.findLast(stage => stage.stage === "format")?.result)
+            .toEqual(expect.objectContaining({accepted:0,rejected:1,
+                rejectionReasons:[expect.stringContaining("没有共同对象")]}));
+    });
+    it("repairs a still-visible defect after rejecting one harmful patch", async () => {
+        const body = "中文English";
+        const p = ports([read,ready(requirements),ready(outline),ready({body}),
+            ready({patches:[{original:body,replacement:"中文 English 7"}],
+                remainingIssues:[{code:"FMT-047",original:body,reason:"中文与英文之间缺少空格"}]}),
+            ready({patches:[{original:body,replacement:"中文 English"}],remainingIssues:[]})],false);
+        const result = await runReadWeaveActivePipeline(request,p.config);
+        expect(result.body).toBe("中文 English");
+        expect(result.formatIssues).toEqual([]);
+        expect(p.calls.filter(call => call.stage === "format")).toHaveLength(2);
+        expect(p.calls.filter(call => call.stage === "format")[1].input.priorFailures)
+            .toEqual(expect.arrayContaining([expect.stringContaining(`原文：${body}`)]));
+    });
+    it("allows a researched explanation to smooth the original sentence without verbatim copying", () => {
+        const original = "间距决定可容纳的供电线数量";
+        const facts = [{needId:"N1",statement:"间距越小，相同宽度内可容纳更多供电线",basis:"source" as const,sourceIds:["context"]}];
+        const result = applyActiveFormatPatchBatch(original,[{original,
+            replacement:"供电线间距决定相同宽度内可容纳的线数；间距越小，能放入的线越多",operation:"supplement"}],[],[{original,facts}]);
+        expect(result.accepted).toBe(1);
+        expect(result.rejected).toEqual([]);
     });
     it("applies compatible edits inside an already edited paragraph without calling them overlap", () => {
         const body = "异构布局（heterogeneous placement）有意义。";
@@ -404,7 +495,7 @@ describe("declarative protocol and format-only transactions", () => {
         expect(() => applyActiveFormatPatches("IP 用于此处", [{original:"IP", replacement:"Internet Protocol"}], [])).toThrow();
     });
     it("rejects ambiguous, overlapping, semantic and math edits atomically", () => {
-        expect(() => applyActiveFormatPatches("重复 重复", [{original:"重复",replacement:"重复内容"}], [])).toThrow("唯一");
+        expect(() => applyActiveFormatPatches("重复 重复", [{original:"重复",replacement:"重复内容"}], [])).toThrow("出现多次");
         expect(() => applyActiveFormatPatches("金额为 10", [{original:"10",replacement:"100"}], [])).toThrow();
         expect(() => applyActiveFormatPatches("公式 $x+y$", [{original:"$x+y$",replacement:"$x-y$"}], [])).toThrow("受保护");
         expect(() => applyActiveFormatPatches("abc", [{original:"ab",replacement:"a b"},{original:"bc",replacement:"b c"}], [])).toThrow("重叠");
