@@ -62,6 +62,13 @@ function provider(overrides: Partial<ReadWeaveApiProviderProfile> = {}): ReadWea
         hasApiKey: true,
         maskedApiKey: "sk-••••test",
         credentialSource: "api-control",
+        pricing: {
+            currency: "CNY",
+            cacheHitInputPerMillion: 0.054,
+            cacheMissInputPerMillion: 1.62,
+            outputPerMillion: 4.86,
+            source: "verified-dashboard"
+        },
         health: {
             state: "healthy",
             latencyMs: 420,
@@ -147,6 +154,7 @@ describe("ReadWeave API settings", () => {
         expect(container.textContent).toContain("420 ms");
         expect(container.textContent).toContain("97.5%");
         expect(container.textContent).toContain("4.2 USD");
+        expect(container.textContent).toContain("readweave_api.pricing_model CNY 0.054 1.62 4.86");
         expect(container.textContent).toContain("Quota is low");
         expect(inputByLabel("readweave_api.api_key").placeholder).toBe("sk-••••test");
     });

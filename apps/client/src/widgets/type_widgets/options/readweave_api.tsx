@@ -58,6 +58,26 @@ function formatQuota(provider: ReadWeaveApiProviderProfile): string {
     return values.join(" · ") || t("readweave_api.quota_available");
 }
 
+function formatPricing(provider: ReadWeaveApiProviderProfile): string {
+    const pricing = provider.pricing;
+    if (!pricing) return EMPTY_VALUE;
+    const source = t("readweave_api.pricing_source", { source: pricing.source });
+    if (pricing.searchPerRequest !== undefined) {
+        return `${t("readweave_api.pricing_search", { value: pricing.searchPerRequest, currency: pricing.currency })} · ${source}`;
+    }
+    if (pricing.cacheHitInputPerMillion !== undefined
+        && pricing.cacheMissInputPerMillion !== undefined
+        && pricing.outputPerMillion !== undefined) {
+        return `${t("readweave_api.pricing_model", {
+            currency: pricing.currency,
+            cacheHit: pricing.cacheHitInputPerMillion,
+            cacheMiss: pricing.cacheMissInputPerMillion,
+            output: pricing.outputPerMillion
+        })} · ${source}`;
+    }
+    return source;
+}
+
 function errorMessage(error: unknown): string {
     if (error instanceof Error && error.message) return error.message;
     if (typeof error === "string" && error.trim()) return error;
@@ -332,6 +352,7 @@ function ProviderCard({ provider, draft, alerts, busy, probing, onChange, onProb
                 <StatusValue label={t("readweave_api.last_success")} value={formatDateTime(provider.health.lastSuccessAt)} />
                 <StatusValue label={t("readweave_api.last_failure")} value={formatDateTime(provider.health.lastFailureAt)} />
                 <StatusValue label={t("readweave_api.quota_state")} value={formatQuota(provider)} wide />
+                <StatusValue label={t("readweave_api.pricing_state")} value={formatPricing(provider)} wide />
                 <StatusValue label={t("readweave_api.available_models")}
                     value={(provider.health.detectedModels?.length ? provider.health.detectedModels : provider.configuredModels).join(", ") || EMPTY_VALUE} wide />
                 <StatusValue label={t("readweave_api.last_error")} value={provider.health.lastError || EMPTY_VALUE} wide />

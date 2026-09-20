@@ -146,13 +146,21 @@ async function probeOpenAlex(profile: ReadWeaveApiProviderProfile, apiKey: strin
         const failure = classifyStatus(result.response.status, result.text);
         return { ok: false, statusCode: result.response.status, latencyMs: result.latencyMs, errorCode: failure.code, error: failure.message };
     }
-    const rate = full ? undefined : result.json?.rate_limit;
+    let rate = result.json?.rate_limit;
+    let latencyMs = result.latencyMs;
+    if (full) {
+        const rateQuery = new URL(`${profile.baseUrl}/rate-limit`);
+        rateQuery.searchParams.set("api_key", apiKey);
+        const rateResult = await request(rateQuery.toString(), {});
+        latencyMs += rateResult.latencyMs;
+        if (rateResult.response.ok) rate = rateResult.json?.rate_limit;
+    }
     const quota = rate ? {
         supported: true, unit: "USD" as const, limit: Number(rate.daily_budget_usd), used: Number(rate.daily_used_usd),
         remaining: Number(rate.daily_remaining_usd), resetsAt: rate.resets_at,
         detail: `今日剩余 ${Number(rate.daily_remaining_usd).toFixed(4)} USD`
     } : profile.health.quota;
-    return { ok: true, statusCode: 200, latencyMs: result.latencyMs, callableVerified: full ? Array.isArray(result.json?.results) : profile.health.callableVerified, quota };
+    return { ok: true, statusCode: 200, latencyMs, callableVerified: full ? Array.isArray(result.json?.results) : profile.health.callableVerified, quota };
 }
 
 async function probePaidSearch(profile: ReadWeaveApiProviderProfile, apiKey: string): Promise<ProbeResult> {
