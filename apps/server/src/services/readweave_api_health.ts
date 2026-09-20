@@ -6,7 +6,7 @@ import type {
     ReadWeaveApiProviderId,
     ReadWeaveApiProviderProfile
 } from "@triliumnext/commons";
-import { getLog } from "@triliumnext/core";
+import { cls, getLog } from "@triliumnext/core";
 
 import {
     getReadWeaveApiControlSettings,
@@ -259,7 +259,7 @@ export function initializeReadWeaveApiHealthMonitor(): void {
             const last = settings.monitor.lastCycleAt ? Date.parse(settings.monitor.lastCycleAt) : 0;
             if (Date.now() - last < settings.healthCheckIntervalMinutes * 60_000) return;
             const full = Date.now() - lastFullProbeAt >= settings.fullProbeIntervalMinutes * 60_000;
-            await runReadWeaveApiHealthChecks(full);
+            await cls.init(() => runReadWeaveApiHealthChecks(full));
         } catch (error) {
             getLog().error(`ReadWeave API health monitor failed: ${safeErrorMessage(error)}`);
         }

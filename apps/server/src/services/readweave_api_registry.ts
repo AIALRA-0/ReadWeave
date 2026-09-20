@@ -117,7 +117,7 @@ const DEFINITIONS: readonly ProviderDefinition[] = [
         baseUrl: "https://api.openalex.org", endpoint: "/works", authType: "query",
         requestProtocol: "rest-search", enabled: false, role: "supplemental", priority: 5,
         configuredModels: [], modelParameters: { perPage: 10 },
-        pricing: { currency: "USD", searchPerRequest: 0.001, source: "verified-api" }
+        pricing: { currency: "USD", searchPerRequest: 0.001, source: "official" }
     },
     {
         id: "parallel", name: "Parallel Search", kind: "search",

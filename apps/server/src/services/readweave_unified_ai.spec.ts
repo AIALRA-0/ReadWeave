@@ -1729,7 +1729,7 @@ describe("ReadWeave one-pass workflow", () => {
         let calls = 0;
         vi.stubGlobal("fetch",vi.fn(async (_input,init) => {
             const payload = JSON.parse(String(init?.body)) as Record<string, unknown>;
-            expect(payload.text ?? { format: payload.response_format }).toEqual({ format:{ type:"json_object" } });
+            expect(JSON.stringify(payload.text ?? { format: payload.response_format })).toBe(JSON.stringify({ format:{ type:"json_object" } }));
             expect(requestSystem(payload)).toMatch(/json/iu);
             const content = calls++ === 0
                 ? { body,claims:[],namingEvidence:[ { bodyText:body,sourceId:"S1",quote } ] }
