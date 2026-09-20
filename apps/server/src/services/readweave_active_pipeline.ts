@@ -1,5 +1,5 @@
 import type { ReadWeaveAnswerPlan, ReadWeaveGenerateRequest } from "@triliumnext/commons";
-import { applyReadWeaveFormatPatches, mapReadWeaveProse, numberReadWeaveAnswerHeadings, readWeaveFormatIssues, readWeaveNameReviewTargets, repairReadWeaveExistingAcronyms, repairReadWeaveVerifiedNameCase } from "./readweave_format.js";
+import { applyReadWeaveFormatPatches, isReadWeaveLowercaseNanosecondTarget, mapReadWeaveProse, numberReadWeaveAnswerHeadings, readWeaveFormatIssues, readWeaveNameReviewTargets, repairReadWeaveExistingAcronyms, repairReadWeaveNanosecondUnit, repairReadWeaveVerifiedNameCase } from "./readweave_format.js";
 import { ReadWeaveActiveResources, type ArticleRead } from "./readweave_active_resources.js";
 import { ReadWeaveProtocolError } from "./readweave_protocol.js";
 
@@ -591,7 +591,7 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
         .filter((name): name is string => !!name && !/^[a-z]{4,}(?=[\s-]|$)/u.test(name));
     const currentIssues = (value: string) => readWeaveFormatIssues(value, verifiedEnglishNames);
     const normalizePresentation = (value: string) => {
-        const moved = repairReadWeaveExistingAcronyms(value);
+        const moved = repairReadWeaveExistingAcronyms(repairReadWeaveNanosecondUnit(value));
         const cased = repairReadWeaveVerifiedNameCase(moved.body, outline!.terms);
         return { body:numberReadWeaveAnswerHeadings(repairReadWeaveSafePunctuation(cased.body)),
             acronymMoves:moved.count, nameCaseEdits:cased.count };
@@ -616,6 +616,7 @@ export async function runReadWeaveActivePipeline(request: ReadWeaveGenerateReque
                 body,originalQuestion:request.title,contentType:request.contentType,budget:ports.budgetStatus?.(),
                 formatDiagnostics:[...currentIssues(body),...(pass ? failedPatches : [])],
                 nameCaseTargets:readWeaveNameReviewTargets(body).filter(target => !target.diagnostics.length
+                    && !isReadWeaveLowercaseNanosecondTarget(target)
                     && /^[A-Za-z][A-Za-z ,&-]*$/u.test(target.englishName)
                     && target.englishName.split(/[ ,&-]+/u).some((word,index) => /^[a-z]{4,}$/u.test(word)
                         && (index === 0 || !/^(?:of|the|and|for|in|on|to|with|from)$/u.test(word))))

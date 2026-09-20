@@ -292,7 +292,7 @@ const defaultOptions: DefaultOption[] = [
     { name: "readWeaveVerifierApiKey", value: "", isSynced: false },
     { name: "readWeaveVerifierBaseUrl", value: "", isSynced: false },
     { name: "readWeaveVerifierModel", value: "", isSynced: false },
-    { name: "readWeaveSearchMode", value: "automatic", isSynced: false },
+    { name: "readWeaveSearchMode", value: "always", isSynced: false },
     { name: "readWeaveSearchBudgetCny", value: "0.009", isSynced: false },
     { name: "readWeaveMathShortcut", value: "Alt+=", isSynced: false },
     { name: "readWeaveSerperApiKey", value: "", isSynced: false },
@@ -303,7 +303,6 @@ const defaultOptions: DefaultOption[] = [
     { name: "readWeaveSemanticScholarApiKey", value: "", isSynced: false },
     { name: "readWeaveOpenAlexApiKey", value: "", isSynced: false },
     { name: "readWeaveUnpaywallEmail", value: "", isSynced: false },
-
     // OCR options
     { name: "ocrAutoProcessImages", value: "false", isSynced: true },
     { name: "ocrMinConfidence", value: "0.75", isSynced: true },

@@ -15,6 +15,7 @@ import {
     readWeaveCalloutForContentType,
     readWeaveCompactStatusText,
     readWeaveGenerationProgressForDisplay,
+    readWeaveReuseObjectId,
     readWeaveGenerationVisualState,
     recoverReadWeaveGenerationFields,
     shouldRemoveReadWeaveAnchorAfterDelete,
@@ -66,7 +67,7 @@ describe("ReadWeave panel state", () => {
         expect(calloutAfterKindChange("caution", "term")).toBe("caution");
     });
 
-    it("shows every relevant reuse candidate in confidence order", () => {
+    it("shows at most three reuse candidates by confidence, then title", () => {
         const visible = visibleReadWeaveCandidates([
             { objectId: "low", kind: "term", title: "low", confidence: READWEAVE_CANDIDATE_MIN_CONFIDENCE - 0.001, reuseRecommended: false },
             { objectId: "threshold", kind: "term", title: "threshold", confidence: READWEAVE_CANDIDATE_MIN_CONFIDENCE, reuseRecommended: false },
@@ -76,8 +77,19 @@ describe("ReadWeave panel state", () => {
             { objectId: "second", kind: "term", title: "second", confidence: 0.8, reuseRecommended: false }
         ]);
 
-        expect(visible).toHaveLength(4);
-        expect(visible.map(candidate => candidate.objectId)).toEqual([ "first", "second", "third", "fourth" ]);
+        expect(visible).toHaveLength(3);
+        expect(visible.map(candidate => candidate.objectId)).toEqual([ "first", "second", "third" ]);
+        expect(visibleReadWeaveCandidates([
+            { objectId: "z", kind: "term", title: "Zulu", confidence: 0.8, reuseRecommended: false },
+            { objectId: "b", kind: "term", title: "Beta", confidence: 0.8, reuseRecommended: false },
+            { objectId: "a", kind: "term", title: "Alpha", confidence: 0.8, reuseRecommended: false },
+            { objectId: "d", kind: "term", title: "Delta", confidence: 0.8, reuseRecommended: false }
+        ]).map(candidate => candidate.title)).toEqual([ "Alpha", "Beta", "Delta" ]);
+        expect(visibleReadWeaveCandidates([])).toEqual([]);
+    });
+    it("selects an independent object for hard copy and the existing object for soft copy", () => {
+        expect(readWeaveReuseObjectId("hard", "original")).toBeUndefined();
+        expect(readWeaveReuseObjectId("soft", "original")).toBe("original");
     });
 
     it("keeps completed and failed drafts retryable but blocks active jobs", () => {

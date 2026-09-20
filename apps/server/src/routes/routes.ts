@@ -32,6 +32,7 @@ import metricsRoute from "./api/metrics.js";
 import ocrRoute from "./api/ocr.js";
 import onenoteImportRoute from "./api/onenote_import.js";
 import readweaveRoute from "./api/readweave.js";
+import readweaveApiRoute from "./api/readweave_api.js";
 import recoveryCodes from './api/recovery_codes.js';
 import senderRoute from "./api/sender.js";
 import systemInfoRoute from "./api/system_info.js";
@@ -181,6 +182,10 @@ function register(app: express.Application) {
     apiRoute(PUT, "/api/readweave/settings", readweaveRoute.updateSettings);
     asyncApiRoute(GET, "/api/readweave/settings/models", readweaveRoute.getModels);
     asyncApiRoute(PST, "/api/readweave/settings/search-test", readweaveRoute.testSearch);
+    apiRoute(GET, "/api/readweave/api-control", readweaveApiRoute.getSnapshot);
+    apiRoute(PUT, "/api/readweave/api-control", readweaveApiRoute.update);
+    asyncApiRoute(PST, "/api/readweave/api-control/probe-all", readweaveApiRoute.probeAll);
+    asyncApiRoute(PST, "/api/readweave/api-control/providers/:providerId/probe", readweaveApiRoute.probe);
     apiRoute(GET, "/api/readweave/harness", readweaveRoute.listHarnessProfiles);
     apiRoute(PST, "/api/readweave/harness", readweaveRoute.createHarnessDraft);
     apiRoute(GET, "/api/readweave/harness/:versionId", readweaveRoute.getHarnessProfile);

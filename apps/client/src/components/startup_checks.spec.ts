@@ -3,10 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import server from "../services/server";
 import toast from "../services/toast";
 
-import { showOAuthEnrollmentResultToast } from "./startup_checks";
+import { showOAuthEnrollmentResultToast, syncReadWeaveApiAlertToast } from "./startup_checks";
 
 vi.mock("../services/server", () => ({ default: { get: vi.fn() } }));
-vi.mock("../services/toast", () => ({ default: { showMessage: vi.fn() } }));
+vi.mock("../services/toast", () => ({ default: {
+    showMessage: vi.fn(), showPersistent: vi.fn(), closePersistent: vi.fn()
+} }));
 // Echo interpolation values so assertions can verify the resolved account/provider.
 vi.mock("../services/i18n", () => ({
     t: (key: string, opts?: Record<string, unknown>) => (opts ? `${key} ${JSON.stringify(opts)}` : key)
@@ -56,5 +58,34 @@ describe("showOAuthEnrollmentResultToast", () => {
 
         expect(serverGet).not.toHaveBeenCalled();
         expect(showMessage).not.toHaveBeenCalled();
+    });
+});
+
+describe("syncReadWeaveApiAlertToast", () => {
+    afterEach(() => vi.clearAllMocks());
+
+    it("shows every active provider alarm with route and fallback state", async () => {
+        serverGet.mockResolvedValue({
+            providers: [ { id: "kuafu", name: "夸父社 V4.1 专线" } ],
+            alerts: [ {
+                id: "kuafu:authentication", providerId: "kuafu", routeRole: "primary",
+                model: "deepseek-v4.1-flash", code: "authentication", message: "API Key 无效",
+                active: true, firstSeenAt: "2026-09-19T00:00:00Z", lastSeenAt: "2026-09-19T00:00:00Z",
+                fallbackAvailable: false, requiresAction: true
+            } ]
+        });
+
+        await syncReadWeaveApiAlertToast();
+
+        expect(toast.showPersistent).toHaveBeenCalledWith(expect.objectContaining({
+            id: "readweave-api-alerts",
+            message: expect.stringContaining("夸父社 V4.1 专线")
+        }));
+    });
+
+    it("closes the persistent alarm after every active issue is resolved", async () => {
+        serverGet.mockResolvedValue({ providers: [], alerts: [] });
+        await syncReadWeaveApiAlertToast();
+        expect(toast.closePersistent).toHaveBeenCalledWith("readweave-api-alerts");
     });
 });

@@ -75,7 +75,14 @@ export function calloutAfterKindChange(current: ReadWeaveCalloutType, nextKind: 
 export function visibleReadWeaveCandidates(candidates: ReadWeaveCandidate[]): ReadWeaveCandidate[] {
     return candidates
         .filter(candidate => candidate.confidence > READWEAVE_CANDIDATE_MIN_CONFIDENCE)
-        .toSorted((left, right) => right.confidence - left.confidence || left.title.localeCompare(right.title));
+        .toSorted((left, right) => right.confidence - left.confidence
+            || left.title.localeCompare(right.title)
+            || left.objectId.localeCompare(right.objectId))
+        .slice(0, 3);
+}
+
+export function readWeaveReuseObjectId(mode: "hard" | "soft", objectId: string): string | undefined {
+    return mode === "soft" ? objectId : undefined;
 }
 
 export function isReadWeaveGenerationDisabled(input: {

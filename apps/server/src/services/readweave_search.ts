@@ -119,7 +119,8 @@ function networkCapability(url: URL): SearchCapability {
     return new Set([
         "api.crossref.org", "api.openalex.org", "api.semanticscholar.org", "pub.orcid.org",
         "api.unpaywall.org", "google.serper.dev", "api.exa.ai", "api.search.brave.com",
-        "api.tavily.com", "s.jina.ai", "export.arxiv.org"
+        "api.tavily.com", "s.jina.ai", "export.arxiv.org", "api.search.tinyfish.ai",
+        "api.octen.ai", "api.parallel.ai"
     ]).has(host)
         || host.endsWith(".wikipedia.org") && url.pathname === "/w/api.php"
         || host === "dblp.org" && url.pathname === "/search/publ/api"
@@ -389,7 +390,7 @@ async function fetchJson<T>(
     timeoutMs = PROVIDER_TIMEOUT_MS
 ): Promise<T> {
     let lastError = "request failed";
-    const metered = /(?:serper\.dev|exa\.ai|tavily\.com|search\.brave\.com|jina\.ai)/u.test(url);
+    const metered = /(?:serper\.dev|exa\.ai|tavily\.com|search\.brave\.com|jina\.ai|octen\.ai|parallel\.ai)/u.test(url);
     for (let attempt = 0; attempt < (metered ? 1 : 2); attempt++) {
         const response = await fetcher(url, {
             ...init,
@@ -485,7 +486,7 @@ const openAlexSearch: SearchAdapter = async (query, config, fetcher) => {
             authorships?: Array<{ author?: { display_name?: string } }>;
         }>;
     }
-    const url = new URL("https://api.openalex.org/works");
+    const url = new URL(`${(config.openAlexBaseUrl ?? "https://api.openalex.org").replace(/\/$/u, "")}/works`);
     url.searchParams.set("search", query);
     url.searchParams.set("per-page", "3");
     if (config.openAlexApiKey) url.searchParams.set("api_key", config.openAlexApiKey);
@@ -519,7 +520,7 @@ const openAlexAuthorSearch: SearchAdapter = async (query, config, fetcher) => {
             topics?: Array<{ display_name?: string; count?: number }>;
         }>;
     }
-    const url = new URL("https://api.openalex.org/authors");
+    const url = new URL(`${(config.openAlexBaseUrl ?? "https://api.openalex.org").replace(/\/$/u, "")}/authors`);
     url.searchParams.set("search", query);
     url.searchParams.set("per-page", "3");
     if (config.openAlexApiKey) url.searchParams.set("api_key", config.openAlexApiKey);
@@ -966,6 +967,77 @@ const serperSearch: SearchAdapter = async (query, config, fetcher) => {
     });
 };
 
+const tinyFishSearch: SearchAdapter = async (query, config, fetcher) => {
+    if (!config.tinyFishApiKey) return [];
+    interface Payload {
+        results?: Array<{ title?: string; url?: string; snippet?: string; position?: number }>;
+    }
+    const url = new URL(config.tinyFishBaseUrl ?? "https://api.search.tinyfish.ai");
+    url.searchParams.set("query", query);
+    const payload = await fetchJson<Payload>(fetcher, url.toString(), {
+        headers: { "X-API-Key": config.tinyFishApiKey }
+    });
+    return (payload.results ?? []).flatMap((item, index) => {
+        const originalRank = Number.isFinite(item.position) && Number(item.position) > 0
+            ? Number(item.position)
+            : index + 1;
+        const value = source("TinyFish Search", item.title, item.url, item.snippet, undefined, 78 - originalRank, {
+            originalRank,
+            retrievalMode: "raw-serp"
+        });
+        return value ? [ value ] : [];
+    });
+};
+
+const octenSearch: SearchAdapter = async (query, config, fetcher) => {
+    if (!config.octenApiKey) return [];
+    interface Payload {
+        data?: { results?: Array<{ title?: string; url?: string; highlight?: string }> };
+    }
+    const octenUrl = `${(config.octenBaseUrl ?? "https://api.octen.ai").replace(/\/$/u, "")}${config.octenEndpoint ?? "/search"}`;
+    const payload = await fetchJson<Payload>(fetcher, octenUrl, {
+        method: "POST",
+        headers: { "x-api-key": config.octenApiKey, "Content-Type": "application/json" },
+        body: JSON.stringify({ query, count: config.octenCount ?? 8 })
+    });
+    return (payload.data?.results ?? []).flatMap((item, index) => {
+        const value = source("Octen Search", item.title, item.url, item.highlight, undefined, 77 - index, {
+            originalRank: index + 1,
+            retrievalMode: "raw-serp"
+        });
+        return value ? [ value ] : [];
+    });
+};
+
+const parallelSearch: SearchAdapter = async (query, config, fetcher) => {
+    if (!config.parallelApiKey) return [];
+    interface Payload {
+        results?: Array<{ title?: string; url?: string; excerpts?: string[] | string }>;
+    }
+    const parallelUrl = `${(config.parallelBaseUrl ?? "https://api.parallel.ai").replace(/\/$/u, "")}${config.parallelEndpoint ?? "/v1/search"}`;
+    const payload = await fetchJson<Payload>(fetcher, parallelUrl, {
+        method: "POST",
+        headers: { "x-api-key": config.parallelApiKey, "Content-Type": "application/json" },
+        body: JSON.stringify({
+            objective: query,
+            search_queries: [ query ],
+            mode: config.parallelMode ?? "turbo",
+            advanced_settings: {
+                max_results: config.parallelMaxResults ?? 8,
+                excerpt_settings: { max_chars_per_result: 2_000 }
+            }
+        })
+    });
+    return (payload.results ?? []).flatMap((item, index) => {
+        const excerpts = Array.isArray(item.excerpts) ? item.excerpts.join(" ") : item.excerpts;
+        const value = source("Parallel Search", item.title, item.url, excerpts, undefined, 76 - index, {
+            originalRank: index + 1,
+            retrievalMode: "semantic"
+        });
+        return value ? [ value ] : [];
+    });
+};
+
 const exaPeopleSearch: SearchAdapter = async (query, config, fetcher) => {
     if (!config.exaApiKey) return [];
     interface Payload {
@@ -1308,11 +1380,14 @@ async function searchUncached(input: SearchInput, fetcher: FetchLike): Promise<R
     let sources = deduplicateAndRank(freeSources, query);
     let searchCostCny = 0;
 
-    const needsGeneralSearch = input.allowPaid !== false
-        && (input.forcePaidFallback === true || isFreshnessSensitiveQuery(query) || sources.length < 2 || config.mode === "always");
+    const needsGeneralSearch = input.forcePaidFallback === true
+        || isFreshnessSensitiveQuery(query) || sources.length < 2 || config.mode === "always";
     if (needsGeneralSearch) {
         const focusedQuery = buildFocusedGeneralSearchQuery(query);
-        const paidFallbacks: Array<[string, SearchAdapter, number, boolean]> = [
+        const generalFallbacks: Array<[string, SearchAdapter, number, boolean]> = [
+            [ "TinyFish Search", tinyFishSearch, 0, !!config.tinyFishApiKey ],
+            [ "Octen Search", octenSearch, 0.001 * CNY_PER_USD, !!config.octenApiKey ],
+            [ "Parallel Search", parallelSearch, 0.001 * CNY_PER_USD, !!config.parallelApiKey ],
             // Tavily's Researcher plan has a monthly free quota and pay-as-you-go
             // is off by default. Exhaustion therefore fails closed rather than billing.
             [ "Serper", serperSearch, 0.001 * CNY_PER_USD, !!config.serperApiKey ],
@@ -1321,11 +1396,12 @@ async function searchUncached(input: SearchInput, fetcher: FetchLike): Promise<R
             [ "Jina Search", jinaSearch, 0.001 * CNY_PER_USD, !!config.jinaApiKey ]
         ];
         if (input.resourceHints?.includes("person") && config.exaApiKey)
-            paidFallbacks.push(["Exa People", exaPeopleSearch, 0.007 * CNY_PER_USD, true]);
+            generalFallbacks.push(["Exa People", exaPeopleSearch, 0.007 * CNY_PER_USD, true]);
         // One shared fallback chain. An advisory person resource can supply an
         // additional candidate, but never replace general search or raise budget.
-        for (const [name, adapter, estimatedCost, configured] of paidFallbacks) {
-            if (!configured || searchCostCny + estimatedCost > config.budgetCny) continue;
+        for (const [name, adapter, estimatedCost, configured] of generalFallbacks) {
+            if (!configured || estimatedCost > 0 && input.allowPaid === false
+                || searchCostCny + estimatedCost > config.budgetCny) continue;
             requireRetrieval("search");
             const fallback = await runAdapter(name, adapter, focusedQuery, config, fetcher);
             // These are conservative configured-rate estimates, including
@@ -1377,6 +1453,9 @@ export async function searchReadWeaveEvidence(
         budgetCny: input.budgetCny ?? config.budgetCny,
         mode: config.mode,
         providers: [
+            !!config.tinyFishApiKey,
+            !!config.octenApiKey,
+            !!config.parallelApiKey,
             !!config.serperApiKey,
             !!config.exaApiKey,
             !!config.tavilyApiKey,
@@ -1427,25 +1506,49 @@ export async function searchReadWeaveActiveEvidence(input: {
         adapters.push(["Crossref", crossrefSearch, 0], ["OpenAlex", openAlexSearch, 0]);
     } else if (input.provider === "people" && config.exaApiKey && input.budgetCny >= peopleTariff) {
         adapters.push(["Exa People", exaPeopleSearch, peopleTariff]);
+    } else if (input.provider === "general") {
+        adapters.push(
+            ["TinyFish Search", tinyFishSearch, 0],
+            ["Octen Search", octenSearch, generalTariff],
+            ["Parallel Search", parallelSearch, generalTariff],
+            ["Serper", serperSearch, generalTariff]
+        );
     } else if (config.serperApiKey && input.budgetCny >= generalTariff) {
         adapters.push(["Serper", serperSearch, generalTariff]);
-        if (input.provider === "people") warnings.push("Exa is unavailable or exceeds this retrieval allowance; general web search was explicitly used.");
+        warnings.push("Exa is unavailable or exceeds this retrieval allowance; general web search was explicitly used.");
     } else {
         adapters.push(["Wikipedia", wikipediaSearch, 0]);
         warnings.push("General web provider is unavailable or its tariff exceeds the remaining research allowance; only the free index was queried.");
     }
-    const results = await Promise.all(adapters.map(async ([name, adapter, cost]) => ({
-        ...await runAdapter(name, adapter, query, config, fetcher), cost
-    })));
+    const results: Array<{ sources: ReadWeaveSearchSource[]; warning?: string; cost: number; name: string }> = [];
+    if (input.provider === "general") {
+        let spent = 0;
+        for (const [name, adapter, cost] of adapters) {
+            const configured = name === "TinyFish Search" ? !!config.tinyFishApiKey
+                : name === "Octen Search" ? !!config.octenApiKey
+                    : name === "Parallel Search" ? !!config.parallelApiKey
+                        : name === "Serper" ? !!config.serperApiKey
+                            : true;
+            if (!configured || spent + cost > input.budgetCny) continue;
+            const result = await runAdapter(name, adapter, query, config, fetcher);
+            results.push({ ...result, cost, name });
+            spent += cost;
+            if (result.sources.length > 0) break;
+        }
+    } else {
+        results.push(...await Promise.all(adapters.map(async ([name, adapter, cost]) => ({
+            ...await runAdapter(name, adapter, query, config, fetcher), cost, name
+        }))));
+    }
+    if (results.every(result => result.sources.length === 0) && input.provider === "general") {
+        const fallback = await runAdapter("Wikipedia", wikipediaSearch, query, config, fetcher);
+        results.push({ ...fallback, cost: 0, name: "Wikipedia" });
+        warnings.push("Configured general web providers returned no usable evidence; the free index was queried.");
+    }
     checkCancellation(options.signal);
-    const seen = new Set<string>();
-    const sources = results.flatMap(r => r.sources).filter(s => {
-        const key = `${s.url}\n${s.snippet}`;
-        if (seen.has(key)) return false;
-        seen.add(key); return true;
-    });
+    const sources = deduplicateAndRank(results.flatMap(result => result.sources), query);
     return {
-        used: sources.length > 0, query, sources, providers: adapters.map(([name]) => name), memo: "",
+        used: sources.length > 0, query, sources, providers: results.map(result => result.name), memo: "",
         warnings: [...warnings, ...results.flatMap(r => r.warning ? [r.warning] : [])],
         elapsedMs: Date.now() - started, cacheHit: false, searchCostCny: results.reduce((sum, r) => sum + r.cost, 0)
     };

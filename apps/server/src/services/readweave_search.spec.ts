@@ -17,8 +17,24 @@ import {
     testReadWeaveSearch,
     withReadWeaveSearchPolicy
 } from "./readweave_search.js";
-import { updateReadWeaveAiSettings } from "./readweave_settings.js";
+import * as readWeaveSettings from "./readweave_settings.js";
 import sqlInit from "./sql_init.js";
+
+const { updateReadWeaveAiSettings } = readWeaveSettings;
+
+function mockSearchRuntimeConfig(
+    overrides: Partial<ReturnType<typeof readWeaveSettings.getReadWeaveSearchRuntimeConfig>>
+): void {
+    const current = readWeaveSettings.getReadWeaveSearchRuntimeConfig();
+    vi.spyOn(readWeaveSettings, "getReadWeaveSearchRuntimeConfig").mockReturnValue({
+        ...current,
+        tinyFishApiKey: undefined,
+        octenApiKey: undefined,
+        parallelApiKey: undefined,
+        serperApiKey: undefined,
+        ...overrides
+    });
+}
 
 vi.mock("undici", async importOriginal => ({
     ...await importOriginal<typeof import("undici")>(), fetch: vi.fn()
@@ -36,6 +52,130 @@ describe("ReadWeave free-source search", () => {
         expect(String(fetcher.mock.calls[0][0])).toContain("google.serper.dev");
         expect(result.searchCostCny).toBe(0.0072);
         expect(result.sources.map(s => s.title)).toEqual(["First", "Second"]);
+    });
+
+    it("uses TinyFish first and preserves every returned result", async () => {
+        mockSearchRuntimeConfig({ tinyFishApiKey: "tinyfish-test-key" });
+        const rows = Array.from({ length: 9 }, (_, index) => ({
+            title: `TinyFish result ${index + 1}`,
+            url: `https://example.org/tinyfish/${index + 1}`,
+            snippet: `Evidence ${index + 1}`,
+            position: index + 1
+        }));
+        const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+            const url = new URL(String(input));
+            expect(url.origin).toBe("https://api.search.tinyfish.ai");
+            expect(url.searchParams.get("query")).toBe("complete evidence question");
+            expect(new Headers(init?.headers).get("X-API-Key")).toBe("tinyfish-test-key");
+            return Response.json({ results: rows });
+        });
+
+        const result = await cls.init(() => searchReadWeaveActiveEvidence({
+            query: "complete evidence question", provider: "general", budgetCny: 0
+        }, { fetcher }));
+
+        expect(fetcher).toHaveBeenCalledTimes(1);
+        expect(result.providers).toEqual(["TinyFish Search"]);
+        expect(result.searchCostCny).toBe(0);
+        expect(result.sources).toHaveLength(9);
+        expect(result.sources.map(source => source.originalRank)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    });
+
+    it("uses Octen after TinyFish is unavailable and sends the production request shape", async () => {
+        mockSearchRuntimeConfig({ octenApiKey: "octen-test-key" });
+        const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+            expect(String(input)).toBe("https://api.octen.ai/search");
+            expect(init?.method).toBe("POST");
+            expect(new Headers(init?.headers).get("x-api-key")).toBe("octen-test-key");
+            expect(JSON.parse(String(init?.body))).toEqual({ query: "Octen evidence", count: 8 });
+            return Response.json({ data: { results: [
+                { title: "Octen first", url: "https://example.org/octen/1", highlight: "First highlight" },
+                { title: "Octen second", url: "https://example.org/octen/2", highlight: "Second highlight" }
+            ] } });
+        });
+
+        const result = await cls.init(() => searchReadWeaveActiveEvidence({
+            query: "Octen evidence", provider: "general", budgetCny: 0.0072
+        }, { fetcher }));
+
+        expect(fetcher).toHaveBeenCalledTimes(1);
+        expect(result.providers).toEqual(["Octen Search"]);
+        expect(result.searchCostCny).toBe(0.0072);
+        expect(result.sources.map(source => source.snippet)).toEqual(["First highlight", "Second highlight"]);
+    });
+
+    it("uses Parallel after earlier providers are unavailable and keeps all excerpts", async () => {
+        mockSearchRuntimeConfig({ parallelApiKey: "parallel-test-key" });
+        const fetcher = vi.fn<typeof fetch>(async (input, init) => {
+            expect(String(input)).toBe("https://api.parallel.ai/v1/search");
+            expect(init?.method).toBe("POST");
+            expect(new Headers(init?.headers).get("x-api-key")).toBe("parallel-test-key");
+            expect(JSON.parse(String(init?.body))).toEqual({
+                objective: "Parallel evidence",
+                search_queries: ["Parallel evidence"],
+                mode: "turbo",
+                advanced_settings: {
+                    max_results: 8,
+                    excerpt_settings: { max_chars_per_result: 2000 }
+                }
+            });
+            return Response.json({ results: [ {
+                title: "Parallel result",
+                url: "https://example.org/parallel/1",
+                excerpts: ["First excerpt", "Second excerpt"]
+            } ] });
+        });
+
+        const result = await cls.init(() => searchReadWeaveActiveEvidence({
+            query: "Parallel evidence", provider: "general", budgetCny: 0.0072
+        }, { fetcher }));
+
+        expect(fetcher).toHaveBeenCalledTimes(1);
+        expect(result.providers).toEqual(["Parallel Search"]);
+        expect(result.searchCostCny).toBe(0.0072);
+        expect(result.sources[0].snippet).toBe("First excerpt Second excerpt");
+    });
+
+    it.each([
+        ["TinyFish Search", { tinyFishApiKey: "invalid" }, "api.search.tinyfish.ai"],
+        ["Octen Search", { octenApiKey: "invalid" }, "api.octen.ai"],
+        ["Parallel Search", { parallelApiKey: "invalid" }, "api.parallel.ai"]
+    ] as const)("reports %s authentication errors and continues to the free fallback", async (provider, keys, host) => {
+        mockSearchRuntimeConfig(keys);
+        const fetcher = vi.fn<typeof fetch>(async input => {
+            const url = new URL(String(input));
+            if (url.hostname === host) return new Response("Unauthorized", { status: 401, statusText: "Unauthorized" });
+            if (url.hostname.endsWith("wikipedia.org")) return Response.json({ query: { pages: {} } });
+            throw new Error(`Unexpected URL ${url}`);
+        });
+
+        const result = await cls.init(() => searchReadWeaveActiveEvidence({
+            query: `${provider} error`, provider: "general", budgetCny: 0.02
+        }, { fetcher }));
+
+        expect(result.warnings).toContain(`${provider}: HTTP 401`);
+        expect(fetcher.mock.calls.some(([input]) => new URL(String(input)).hostname === host)).toBe(true);
+        expect(result.providers.at(-1)).toBe("Wikipedia");
+    });
+
+    it.each([
+        ["TinyFish Search", "api.search.tinyfish.ai"],
+        ["Octen Search", "api.octen.ai"],
+        ["Parallel Search", "api.parallel.ai"]
+    ] as const)("skips %s when its API key is missing", async (_provider, host) => {
+        mockSearchRuntimeConfig({});
+        const fetcher = vi.fn<typeof fetch>(async input => {
+            const url = new URL(String(input));
+            if (url.hostname.endsWith("wikipedia.org")) return Response.json({ query: { pages: {} } });
+            throw new Error(`Unexpected URL ${url}`);
+        });
+
+        const result = await cls.init(() => searchReadWeaveActiveEvidence({
+            query: "missing provider key", provider: "general", budgetCny: 0.02
+        }, { fetcher }));
+
+        expect(fetcher.mock.calls.some(([input]) => new URL(String(input)).hostname === host)).toBe(false);
+        expect(result.providers).toEqual(["Wikipedia"]);
     });
     afterEach(() => vi.restoreAllMocks());
     it("preserves prepared English full-name queries as well as origin queries", () => {

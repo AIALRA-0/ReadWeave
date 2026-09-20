@@ -1,6 +1,6 @@
 import { Lexer, type Tokens } from "marked";
 
-export const READWEAVE_FORMAT_VERSION = "format-2026-09-v7";
+export const READWEAVE_FORMAT_VERSION = "format-2026-09-v8";
 
 function normalizeSimpleMathNotation(value: string): string {
     const scientific = new RegExp(
@@ -125,6 +125,24 @@ const ENGLISH_NAME = /^[A-Za-z][A-Za-z0-9'’ ,.&+/#_-]*$/u;
 const CHINESE_ALIAS = /^(?:(?:也称|又称|亦称|别称|简称|中文名为|中文称为|中文名|中文称|也叫|又叫)[ \t]*[\p{Script=Han}][\p{Script=Han}· \t]*)(?:[，,、][ \t]*(?:(?:也称|又称|亦称|简称|也叫|又叫)[ \t]*)?[\p{Script=Han}][\p{Script=Han}· \t]*)*$/u;
 const ENGLISH_ALIAS = /^(?:也称|又称|亦称|别称|简称|也叫|又叫)[ \t]+[A-Za-z][A-Za-z'’ .&+/#_-]*$/u;
 
+/** A unit name is not a title-style technical name. Preserve the user's
+ * accepted `ns 纳秒（nanosecond）` spelling while moving a mixed unit gloss
+ * out of one pair of parentheses. */
+export function repairReadWeaveNanosecondUnit(body: string): string {
+    return mapReadWeaveProse(body, prose => prose
+        .replace(
+            /(?<![\p{L}\p{N}])(\d+(?:\.\d+)?[ \t]+ns)[ \t]*[（(][ \t]*纳秒[ \t]*[，,][ \t]*nanosecond[ \t]*[）)]/giu,
+            "$1 纳秒（nanosecond）"
+        )
+        .replace(/(?<![\p{L}\p{N}])(\d+(?:\.\d+)?[ \t]+ns[ \t]+纳秒)[ \t]*[（(][ \t]*nanosecond[ \t]*[）)]/giu,
+            "$1（nanosecond）"));
+}
+
+export function isReadWeaveLowercaseNanosecondTarget(target: ReadWeaveNameReviewTarget): boolean {
+    return target.englishName.toLowerCase() === "nanosecond"
+        && /(?:^|[ \t])ns[ \t]+纳秒$/u.test(target.before);
+}
+
 /** Collect ordinary bilingual names, including non-acronyms. Correct-looking
  * English names still need article context; no catalog can prove their meaning.
  * Run this for both fields and send the targets plus article context to the
@@ -186,6 +204,7 @@ export function readWeaveNameReviewTargets(
 
 /** Reposition only supplied aliases; never correct or invent an English name. */
 export function formatReadWeaveNameParentheses(body: string): string {
+    body = repairReadWeaveNanosecondUnit(body);
     for (const target of readWeaveNameReviewTargets(body).reverse()) {
         if (target.replacement === undefined) continue;
         body = body.slice(0, target.start) + target.replacement + body.slice(target.end);
@@ -357,7 +376,8 @@ export function repairReadWeaveVerifiedNameCase(
         if (!pair) continue;
         // A lowercase outline candidate is not proof of an official lowercase
         // spelling. Leave its resolution to the contextual format reviewer.
-        if (/^[a-z]{4,}(?=[\s-]|$)/u.test(pair[2])) continue;
+        if (/^[a-z]{4,}(?=[\s-]|$)/u.test(pair[2])
+            || (pair[1] === "纳秒" && /^nanosecond$/iu.test(pair[2]))) continue;
         const chinese = pair[1].replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
         const english = pair[2].replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
         const pattern = new RegExp(`${chinese}（(${english})）`, "giu");
@@ -675,6 +695,7 @@ export function readWeaveFormatIssues(body: string, verifiedEnglishNames: string
     if (nameTargets.some(target => target.diagnostics.includes("extra-english-name-parentheses")))
         issues.add("FMT-121：英文名称括号不能混入缩写、别名或分隔说明，须核对已有名称而非编造展开");
     if (nameTargets.some(target => !target.diagnostics.length
+        && !isReadWeaveLowercaseNanosecondTarget(target)
         && !verifiedEnglishNames.includes(target.englishName)
         && /^[A-Za-z][A-Za-z ,&-]*$/u.test(target.englishName)
         && target.englishName.split(/[ ,&-]+/u).some((word, index) =>

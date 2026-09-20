@@ -11,6 +11,7 @@ import {
     formatReadWeaveNameParentheses,
     numberReadWeaveAnswerHeadings,
     repairReadWeaveVerifiedNameCase,
+    repairReadWeaveNanosecondUnit,
     formatReadWeavePersonNameOrder,
     formatReadWeaveTermReferences,
     groupReadWeaveFormatTargets,
@@ -217,6 +218,17 @@ describe("versioned formatting contract", () => {
             .toContain("FMT-062：普通双语术语标签的英文名称需要核对标题式大小写与官方拼写");
         expect(readWeaveFormatIssues("代码仓库（Repository）；全局布局（Global Placement）"))
             .not.toContain("FMT-062：普通双语术语标签的英文名称需要核对标题式大小写与官方拼写");
+    });
+    it("moves only a mixed nanosecond gloss out of parentheses and preserves the accepted lowercase unit name", () => {
+        const mixed = "动态检查覆盖 10 ns（纳秒， Nanosecond）的工作时间窗";
+        const canonical = "动态检查覆盖 10 ns 纳秒（nanosecond）的工作时间窗";
+        expect(repairReadWeaveNanosecondUnit(mixed)).toBe(canonical);
+        expect(repairReadWeaveNanosecondUnit(canonical)).toBe(canonical);
+        expect(repairReadWeaveNanosecondUnit("动态检查覆盖 10 ns 纳秒（Nanosecond）的工作时间窗")).toBe(canonical);
+        expect(repairReadWeaveNanosecondUnit("`10 ns（纳秒， Nanosecond）`\n\n> 10 ns（纳秒， Nanosecond）"))
+            .toBe("`10 ns（纳秒， Nanosecond）`\n\n> 10 ns（纳秒， Nanosecond）");
+        expect(readWeaveFormatIssues(canonical).some(issue => issue.startsWith("FMT-062"))).toBe(false);
+        expect(repairReadWeaveVerifiedNameCase(canonical, [ { canonical: "纳秒（Nanosecond）" } ]).body).toBe(canonical);
     });
     it("numbers every generated heading with a trailing dot without touching literal source", () => {
         const body = "## 1 原理\n\n正文\n\n### 1.1 符号\n\n解释\n\n### 示例\n\n> ## 引文标题\n\n```md\n## 代码标题\n```";

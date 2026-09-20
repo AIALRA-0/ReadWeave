@@ -1,0 +1,214 @@
+.readweave-api-header-actions,
+.readweave-api-badges,
+.readweave-api-alert-flags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.readweave-api-monitor-grid,
+.readweave-api-fields,
+.readweave-api-status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr));
+    gap: 0.75rem;
+}
+
+.readweave-api-monitor-grid > label,
+.readweave-api-fields > label {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+
+.readweave-api-monitor-grid > label > span,
+.readweave-api-fields > label > span,
+.readweave-api-status-value > span {
+    color: var(--muted-text-color);
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+
+.readweave-api-message {
+    margin: 0.9rem 0 0;
+    overflow-wrap: anywhere;
+}
+
+.readweave-api-provider-list,
+.readweave-api-alert-list {
+    display: grid;
+    gap: 1rem;
+}
+
+.readweave-api-provider {
+    min-width: 0;
+    padding: 1rem;
+    border: 1px solid var(--main-border-color);
+    border-inline-start-width: 0.3rem;
+    border-radius: 0.65rem;
+    background: var(--main-background-color);
+}
+
+.readweave-api-state-healthy {
+    border-inline-start-color: var(--accented-background-color);
+}
+
+.readweave-api-state-degraded,
+.readweave-api-state-unknown {
+    border-inline-start-color: #d6a521;
+}
+
+.readweave-api-state-unavailable {
+    border-inline-start-color: #d94b4b;
+}
+
+.readweave-api-state-disabled {
+    border-inline-start-color: var(--muted-text-color);
+}
+
+.readweave-api-provider-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-block-end: 1rem;
+}
+
+.readweave-api-provider-header h5 {
+    margin: 0 0 0.45rem;
+}
+
+.readweave-api-badges span,
+.readweave-api-alert-flags span {
+    padding: 0.16rem 0.48rem;
+    border-radius: 999px;
+    background: var(--hover-item-background-color);
+    font-size: 0.76rem;
+}
+
+.readweave-api-health-healthy {
+    color: var(--accented-text-color);
+}
+
+.readweave-api-health-degraded,
+.readweave-api-health-unknown {
+    color: #b48100;
+}
+
+.readweave-api-health-unavailable {
+    color: #d94b4b;
+}
+
+.readweave-api-fields {
+    padding-block-end: 1rem;
+    border-block-end: 1px solid var(--main-border-color);
+}
+
+.readweave-api-fields input,
+.readweave-api-fields select,
+.readweave-api-monitor-grid input {
+    min-width: 0;
+}
+
+.readweave-api-wide-field,
+.readweave-api-status-wide {
+    grid-column: span 2;
+}
+
+.readweave-api-checkbox-field {
+    align-self: end;
+    flex-direction: row !important;
+    align-items: center;
+    min-height: 2.35rem;
+}
+
+.readweave-api-checkbox-field input {
+    width: 1rem;
+    height: 1rem;
+}
+
+.readweave-api-readonly {
+    min-height: 2.35rem;
+    padding: 0.48rem 0.7rem;
+    overflow-wrap: anywhere;
+    border: 1px solid var(--main-border-color);
+    border-radius: var(--bs-border-radius);
+    background: var(--hover-item-background-color);
+}
+
+.readweave-api-status-grid {
+    padding-block-start: 1rem;
+}
+
+.readweave-api-status-value {
+    min-width: 0;
+}
+
+.readweave-api-status-value strong {
+    display: block;
+    margin-block-start: 0.2rem;
+    overflow-wrap: anywhere;
+    font-weight: 500;
+}
+
+.readweave-api-provider-alerts {
+    display: grid;
+    gap: 0.6rem;
+    margin-block-start: 1rem;
+}
+
+.readweave-api-alert {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 0.75rem;
+    padding: 0.8rem;
+    border-inline-start: 0.25rem solid #d6a521;
+    border-radius: 0.45rem;
+    background: var(--hover-item-background-color);
+}
+
+.readweave-api-alert-critical {
+    border-inline-start-color: #d94b4b;
+}
+
+.readweave-api-alert > div:first-child {
+    min-width: min(100%, 18rem);
+    flex: 1;
+}
+
+.readweave-api-alert strong,
+.readweave-api-alert small {
+    display: block;
+    overflow-wrap: anywhere;
+}
+
+.readweave-api-alert small {
+    margin-block-start: 0.25rem;
+    color: var(--muted-text-color);
+}
+
+.readweave-api-alert-compact {
+    padding: 0.6rem;
+}
+
+.readweave-api-empty {
+    margin: 0;
+    color: var(--muted-text-color);
+}
+
+@media (max-width: 38rem) {
+    .readweave-api-header-actions,
+    .readweave-api-header-actions .btn,
+    .readweave-api-provider-header .btn {
+        width: 100%;
+    }
+
+    .readweave-api-wide-field,
+    .readweave-api-status-wide {
+        grid-column: auto;
+    }
+}

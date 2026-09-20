@@ -1,4 +1,4 @@
-import type { OAuthStatus } from "@triliumnext/commons";
+import type { OAuthStatus, ReadWeaveApiControlSettings } from "@triliumnext/commons";
 
 import { t } from "../services/i18n";
 import { oauthAccountLabel, oauthProviderDisplayName } from "../services/oauth_status";
@@ -19,6 +19,8 @@ export class StartupChecks extends Component {
         // Shared by desktop and mobile (both reach here via appContext.start), so the post-enrollment
         // toast lives here rather than being duplicated in each entry point.
         showOAuthEnrollmentResultToast();
+        void syncReadWeaveApiAlertToast();
+        setInterval(() => void syncReadWeaveApiAlertToast(), 5 * 60_000);
     }
 
     async checkCpuArchMismatch() {
@@ -30,6 +32,47 @@ export class StartupChecks extends Component {
         } catch (error) {
             console.warn("Could not check CPU arch status:", error);
         }
+    }
+}
+
+/**
+ * Mirrors active server-side API alarms into one persistent, replaceable
+ * notification. The server owns detection; this client poll only makes an
+ * already-recorded outage visible without requiring the settings page to be
+ * open.
+ */
+export async function syncReadWeaveApiAlertToast() {
+    try {
+        const settings = await server.get<ReadWeaveApiControlSettings>("readweave/api-control");
+        const alerts = settings.alerts.filter(alert => alert.active);
+        if (!alerts.length) {
+            toast.closePersistent("readweave-api-alerts");
+            return;
+        }
+        const providers = new Map(settings.providers.map(provider => [ provider.id, provider ]));
+        const message = alerts.map(alert => {
+            const provider = providers.get(alert.providerId);
+            return t("readweave_api.alert_toast_line", {
+                provider: provider?.name ?? alert.providerId,
+                route: t(`readweave_api.role_${alert.routeRole}`),
+                model: alert.model ?? t("readweave_api.not_applicable"),
+                message: alert.message,
+                lastSuccess: alert.lastSuccessAt ? new Date(alert.lastSuccessAt).toLocaleString() : "—",
+                fallback: alert.fallbackAvailable ? t("readweave_api.fallback_available") : t("readweave_api.fallback_unavailable"),
+                action: alert.requiresAction ? t("readweave_api.action_required") : "—"
+            });
+        }).join("\n");
+        toast.showPersistent({
+            id: "readweave-api-alerts",
+            icon: "bx bx-error-circle",
+            title: t("readweave_api.alert_toast_title", { count: alerts.length }),
+            message,
+            messageMonospace: false,
+            wide: true
+        });
+    } catch {
+        // Startup and reconnect code already reports application-wide network
+        // failures. Avoid duplicating those as a misleading provider alarm.
     }
 }
 

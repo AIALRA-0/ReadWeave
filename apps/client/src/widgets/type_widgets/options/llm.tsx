@@ -107,6 +107,7 @@ function ReadWeaveSettings() {
         "deepseek-flash",
         "deepseek-v4-pro",
         "deepseek-v4-flash",
+        "deepseek-v4.1-flash",
         "deepseek-chat",
         "deepseek-reasoner"
     ].filter(Boolean))), [model, models]);
@@ -243,6 +244,9 @@ function ReadWeaveSettings() {
 
     return (
         <OptionsSection title={t("readweave_settings.title")} description={t("readweave_settings.description")}>
+            <section className="readweave-settings-group" aria-labelledby="readweave-main-model-heading">
+                <h4 id="readweave-main-model-heading">{t("readweave_settings.group_main_model")}</h4>
+                <p className="form-text">{t("readweave_settings.group_main_model_description")}</p>
             <OptionsRow name="readweave-provider-type" label={t("readweave_settings.provider_type")} stacked>
                 <select className="form-select" value={providerType} data-testid="readweave-provider-type"
                     onChange={event => setProviderType(event.currentTarget.value as ReadWeaveAiSettings["providerType"])}>
@@ -286,7 +290,11 @@ function ReadWeaveSettings() {
                     </datalist>
                 </>
             </OptionsRow>
-            {providerType === "deepseek-compatible" && <details className="mb-3" data-testid="readweave-pricing">
+            </section>
+            <section className="readweave-settings-group" aria-labelledby="readweave-cost-heading">
+                <h4 id="readweave-cost-heading">{t("readweave_settings.group_cost")}</h4>
+                <p className="form-text">{t("readweave_settings.group_cost_description")}</p>
+            {providerType === "deepseek-compatible" && <details className="readweave-settings-details" data-testid="readweave-pricing">
                 <summary>{t("readweave_settings.pricing_title")}</summary>
                 <p className="form-text">{t("readweave_settings.pricing_description")}</p>
                 {(["price_cache_hit", "price_input", "price_output"] as const).map((name, index) => (
@@ -301,71 +309,6 @@ function ReadWeaveSettings() {
                     </OptionsRow>
                 ))}
             </details>}
-            <div className="d-flex flex-wrap gap-2">
-                <button type="button" className="btn btn-primary" disabled={busy || !baseUrl.trim() || !model.trim()} onClick={() => saveSettings(false)} data-testid="readweave-settings-save">
-                    {t("common.save")}
-                </button>
-                <button type="button" className="btn btn-secondary" disabled={busy || (!settings?.hasApiKey && !apiKey.trim())} onClick={loadModels} data-testid="readweave-settings-test">
-                    {t("readweave_settings.test_and_models")}
-                </button>
-                <button type="button" className="btn btn-outline-danger" disabled={busy || settings?.credentialSource !== "settings"} onClick={() => saveSettings(true)}>
-                    {t("readweave_settings.clear_key")}
-                </button>
-            </div>
-            {status && <p className="form-text mb-0" role="status">{status}</p>}
-            <p className="form-text mb-0">{t("readweave_settings.security_note")}</p>
-            <hr />
-            <h5>独立质量核验</h5>
-            <p className="form-text">
-                只有配置了不同服务来源的第二模型并通过复核，答案才会显示绿色；未配置时答案会保存为黄色待核验，不会误标为正确
-            </p>
-            <OptionsRow name="readweave-verifier-base-url" label="核验服务地址" description="必须与生成服务使用不同域名" stacked>
-                <input
-                    type="url"
-                    className="form-control"
-                    value={verifierBaseUrl}
-                    placeholder="https://api.openai.com/v1"
-                    onInput={event => setVerifierBaseUrl(event.currentTarget.value)}
-                    data-testid="readweave-verifier-base-url"
-                />
-            </OptionsRow>
-            <OptionsRow name="readweave-verifier-model" label="核验模型" description="用于事实、命题命中和内部一致性复核" stacked>
-                <input
-                    type="text"
-                    className="form-control"
-                    value={verifierModel}
-                    placeholder="独立核验模型名称"
-                    onInput={event => setVerifierModel(event.currentTarget.value)}
-                    data-testid="readweave-verifier-model"
-                />
-            </OptionsRow>
-            <OptionsRow name="readweave-verifier-api-key" label="核验服务密钥" description={settings?.verifier.hasApiKey
-                ? `已配置 ${settings.verifier.maskedApiKey ?? "••••••••"}`
-                : "尚未配置"} stacked>
-                <input
-                    type="password"
-                    className="form-control"
-                    value={verifierApiKey}
-                    autocomplete="new-password"
-                    placeholder={settings?.verifier.hasApiKey ? "留空则保留现有密钥" : "输入核验服务密钥"}
-                    onInput={event => setVerifierApiKey(event.currentTarget.value)}
-                    data-testid="readweave-verifier-api-key"
-                />
-            </OptionsRow>
-            <p className={`form-text mb-0 ${settings?.verifier.independent ? "text-success" : "text-warning"}`}>
-                {settings?.verifier.independent ? "独立核验已启用" : "独立核验未启用，答案不会显示绿色"}
-            </p>
-            <hr />
-            <h5>{t("readweave_settings.search_title")}</h5>
-            <p className="form-text">{t("readweave_settings.search_description")}</p>
-            <OptionsRow name="readweave-search-disabled" label={t("readweave_settings.search_disabled")} description={t("readweave_settings.search_disabled_description")} stacked>
-                <input
-                    type="checkbox"
-                    checked={searchMode === "off"}
-                    onChange={event => setSearchMode(event.currentTarget.checked ? "off" : "always")}
-                    data-testid="readweave-search-disabled"
-                />
-            </OptionsRow>
             <OptionsRow name="readweave-search-budget" label={t("readweave_settings.search_budget")} description={t("readweave_settings.search_budget_description")} stacked>
                 <input
                     type="number"
@@ -378,19 +321,81 @@ function ReadWeaveSettings() {
                     data-testid="readweave-search-budget"
                 />
             </OptionsRow>
-            <OptionsRow name="readweave-math-shortcut" label="公式快捷键" description="默认 Alt+=，可改为其他包含修饰键的组合" stacked>
+            </section>
+            <section className="readweave-settings-group" aria-labelledby="readweave-actions-heading">
+                <h4 id="readweave-actions-heading">{t("readweave_settings.group_actions")}</h4>
+                <p className="form-text">{t("readweave_settings.group_actions_description")}</p>
+            <div className="d-flex flex-wrap gap-2 readweave-settings-actions">
+                <button type="button" className="btn btn-primary" disabled={busy || !baseUrl.trim() || !model.trim()} onClick={() => saveSettings(false)} data-testid="readweave-settings-save">
+                    {t("common.save")}
+                </button>
+                <button type="button" className="btn btn-secondary" disabled={busy || (!settings?.hasApiKey && !apiKey.trim())} onClick={loadModels} data-testid="readweave-settings-test">
+                    {t("readweave_settings.test_and_models")}
+                </button>
+                <button type="button" className="btn btn-outline-danger" disabled={busy || settings?.credentialSource !== "settings"} onClick={() => saveSettings(true)}>
+                    {t("readweave_settings.clear_key")}
+                </button>
+            </div>
+            {status && <p className="form-text mb-0" role="status">{status}</p>}
+            <p className="form-text mb-0">{t("readweave_settings.security_note")}</p>
+            </section>
+            <section className="readweave-settings-group" aria-labelledby="readweave-advanced-heading">
+                <h4 id="readweave-advanced-heading">{t("readweave_settings.group_advanced")}</h4>
+                <p className="form-text">{t("readweave_settings.group_advanced_description")}</p>
+                <details className="readweave-settings-details">
+                    <summary>{t("readweave_settings.verifier_title")}</summary>
+                    <p className="form-text">{t("readweave_settings.verifier_description")}</p>
+            <OptionsRow name="readweave-verifier-base-url" label={t("readweave_settings.verifier_base_url")} description={t("readweave_settings.verifier_base_url_description")} stacked>
+                <input
+                    type="url"
+                    className="form-control"
+                    value={verifierBaseUrl}
+                    placeholder={t("readweave_settings.verifier_base_url_placeholder")}
+                    onInput={event => setVerifierBaseUrl(event.currentTarget.value)}
+                    data-testid="readweave-verifier-base-url"
+                />
+            </OptionsRow>
+            <OptionsRow name="readweave-verifier-model" label={t("readweave_settings.verifier_model")} description={t("readweave_settings.verifier_model_description")} stacked>
                 <input
                     type="text"
                     className="form-control"
-                    value={mathShortcut}
-                    onInput={event => setMathShortcut(event.currentTarget.value)}
-                    data-testid="readweave-math-shortcut"
+                    value={verifierModel}
+                    placeholder={t("readweave_settings.verifier_model_placeholder")}
+                    onInput={event => setVerifierModel(event.currentTarget.value)}
+                    data-testid="readweave-verifier-model"
                 />
             </OptionsRow>
-            <div className="d-flex align-items-center justify-content-between gap-2 mb-2">
+            <OptionsRow name="readweave-verifier-api-key" label={t("readweave_settings.verifier_api_key")} description={settings?.verifier.hasApiKey
+                ? t("readweave_settings.key_configured", { masked: settings.verifier.maskedApiKey ?? "••••••••" })
+                : t("readweave_settings.key_missing")} stacked>
+                <input
+                    type="password"
+                    className="form-control"
+                    value={verifierApiKey}
+                    autocomplete="new-password"
+                    placeholder={settings?.verifier.hasApiKey ? t("readweave_settings.key_keep_placeholder") : t("readweave_settings.verifier_api_key_placeholder")}
+                    onInput={event => setVerifierApiKey(event.currentTarget.value)}
+                    data-testid="readweave-verifier-api-key"
+                />
+            </OptionsRow>
+            <p className={`form-text mb-0 ${settings?.verifier.independent ? "text-success" : "text-warning"}`}>
+                {settings?.verifier.independent ? t("readweave_settings.verifier_enabled") : t("readweave_settings.verifier_disabled")}
+            </p>
+                </details>
+            </section>
+            <section className="readweave-settings-group" aria-labelledby="readweave-search-heading">
+                <h4 id="readweave-search-heading">{t("readweave_settings.group_search")}</h4>
+                <p className="form-text">{t("readweave_settings.search_description")}</p>
+            <OptionsRow name="readweave-search-mode" label={t("readweave_settings.search_mode")} description={t("readweave_settings.search_mode_description")} stacked>
+                <select className="form-select" value={searchMode} data-testid="readweave-search-mode" onChange={event => setSearchMode(event.currentTarget.value as ReadWeaveAiSettings["searchMode"])}>
+                    <option value="always">{t("readweave_settings.search_mode_always")}</option>
+                    <option value="off">{t("readweave_settings.search_mode_off")}</option>
+                </select>
+            </OptionsRow>
+            <div className="d-flex align-items-center justify-content-between gap-2 mb-2 readweave-search-services-header">
                 <div>
-                    <h6 className="mb-0">外部搜索服务</h6>
-                    <small className="text-muted">配置后，ReadWeave 会在后台使用这些服务补充资料</small>
+                    <h5 className="mb-0">{t("readweave_settings.search_services_title")}</h5>
+                    <small className="text-muted">{t("readweave_settings.search_services_description")}</small>
                 </div>
                 <button
                     type="button"
@@ -399,11 +404,11 @@ function ReadWeaveSettings() {
                     onClick={() => saveSettings(false)}
                     data-testid="readweave-search-settings-save"
                 >
-                    保存外部搜索配置
+                    {t("readweave_settings.save_search_settings")}
                 </button>
             </div>
-            <details>
-                <summary className="mb-3">{t("readweave_settings.search_keys_title")}（点击展开）</summary>
+            <details className="readweave-settings-details">
+                <summary className="mb-3">{t("readweave_settings.search_keys_title")}</summary>
                 <p className="form-text">{t("readweave_settings.search_keys_description")}</p>
                 {([
                     [ "serperApiKey", "Serper", settings?.search.hasSerperApiKey, settings?.search.maskedSerperApiKey, "readweave-serper-api-key" ],
@@ -444,7 +449,7 @@ function ReadWeaveSettings() {
                     {t("readweave_settings.clear_search_keys")}
                 </button>
             </details>
-            <OptionsRow name="readweave-search-test-query" label={t("readweave_settings.search_test_query")} stacked>
+            <OptionsRow name="readweave-search-test-query" label={t("readweave_settings.search_test_query")} description={t("readweave_settings.search_test_query_description")} stacked>
                 <input
                     type="text"
                     className="form-control"
@@ -482,6 +487,20 @@ function ReadWeaveSettings() {
                     )}
                 </div>
             )}
+            </section>
+            <section className="readweave-settings-group" aria-labelledby="readweave-shortcuts-heading">
+                <h4 id="readweave-shortcuts-heading">{t("readweave_settings.group_shortcuts")}</h4>
+                <p className="form-text">{t("readweave_settings.group_shortcuts_description")}</p>
+                <OptionsRow name="readweave-math-shortcut" label={t("readweave_settings.math_shortcut")} description={t("readweave_settings.math_shortcut_description")} stacked>
+                    <input
+                        type="text"
+                        className="form-control"
+                        value={mathShortcut}
+                        onInput={event => setMathShortcut(event.currentTarget.value)}
+                        data-testid="readweave-math-shortcut"
+                    />
+                </OptionsRow>
+            </section>
         </OptionsSection>
     );
 }

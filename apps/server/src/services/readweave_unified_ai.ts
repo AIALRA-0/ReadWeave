@@ -67,6 +67,7 @@ import {
 } from "./readweave_format.js";
 import { readWeaveExplicitUrls, readWeaveNamingRequirements, readWeaveNamingSourceGuidance, researchReadWeaveEvidence } from "./readweave_research.js";
 import {
+    getReadWeaveManagedFallbackRuntimeConfig,
     getReadWeaveRuntimeConfig,
     getReadWeaveSearchRuntimeConfig,
     getReadWeaveVerifierRuntimeConfig,
@@ -298,8 +299,12 @@ function safeModelFailure(error: unknown, config: ReadWeaveModelRuntimeConfig, s
     return failure;
 }
 
-function endpoint(baseUrl: string, providerType: ReadWeaveAiSettings["providerType"]): string {
-    return `${baseUrl.replace(/\/$/, "")}/${providerType === "deepseek-official" ? "responses" : "chat/completions"}`;
+function usesResponsesTransport(config: Pick<ReadWeaveModelRuntimeConfig, "providerType" | "transport">): boolean {
+    return config.transport === "responses" || (!config.transport && config.providerType === "deepseek-official");
+}
+
+function endpoint(baseUrl: string, providerType: ReadWeaveAiSettings["providerType"], transport?: ReadWeaveModelRuntimeConfig["transport"]): string {
+    return `${baseUrl.replace(/\/$/, "")}/${transport === "responses" || (!transport && providerType === "deepseek-official") ? "responses" : "chat/completions"}`;
 }
 
 function responseApiContent(payload: ResponsesApiResponse): string | undefined {
@@ -357,7 +362,7 @@ function modelRouteKey(config: ReadWeaveModelRuntimeConfig): string {
 }
 
 function independentWriterFallback(primary: ReadWeaveModelRuntimeConfig, attemptedRoutes: ReadonlySet<string>): ReadWeaveModelRuntimeConfig | undefined {
-    const fallback = getReadWeaveVerifierRuntimeConfig();
+    const fallback = getReadWeaveManagedFallbackRuntimeConfig(primary) ?? getReadWeaveVerifierRuntimeConfig();
     if (!fallback) return undefined;
     const route = modelRouteKey(fallback);
     return route !== modelRouteKey(primary) && !attemptedRoutes.has(route) ? fallback : undefined;
@@ -397,7 +402,7 @@ async function resolveReadWeaveRuntime(
     const probeReceipt = budget?.reserveModelRequest(probeReservation, probePrices);
     if (budget && probeReceipt === undefined) return { runtime: config };
     try {
-        const response = await fetch(endpoint(config.baseUrl, config.providerType), {
+        const response = await fetch(endpoint(config.baseUrl, config.providerType, config.transport), {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
@@ -610,8 +615,8 @@ export async function requestJson<T>(
         try {
             const startedAt = new Date();
             onUsage?.();
-            const usesResponsesApi = providerType === "deepseek-official";
-            const response = await fetch(endpoint(config.baseUrl, providerType), {
+            const usesResponsesApi = usesResponsesTransport(config);
+            const response = await fetch(endpoint(config.baseUrl, providerType, config.transport), {
                 method: "POST",
                 headers: {
                     "Content-Type": "application/json",
@@ -629,7 +634,7 @@ export async function requestJson<T>(
                             // is a structured, evidence-bound transform, so use
                             // deterministic decoding just like the compatible
                             // Chat Completions route below.
-                            temperature: 0,
+                            temperature: typeof config.modelParameters?.temperature === "number" ? config.modelParameters.temperature : 0,
                             ...(omitOutputLimit ? {} : { max_output_tokens: effectiveMaxTokens }),
                             text: { format: protocol?.schema
                                 ? { type:"json_schema", name:"readweave_stage", schema:protocol.schema }
@@ -638,7 +643,8 @@ export async function requestJson<T>(
                         : {
                             model: config.model,
                             stream: false,
-                            temperature: isKimiCode ? 1 : 0,
+                            temperature: typeof config.modelParameters?.temperature === "number"
+                                ? config.modelParameters.temperature : isKimiCode ? 1 : 0,
                             ...(omitOutputLimit ? {} : { max_tokens: effectiveMaxTokens }),
                             ...(isDeepSeek || isKimiCode
                                 ? {

@@ -110,6 +110,13 @@ describe("active resource addressing", () => {
 });
 
 describe("active generation workflow", () => {
+    it("repairs a mixed nanosecond gloss before format review without capitalizing the unit name", async () => {
+        const p = ports([read, ready(requirements), ready(outline),
+            ready({ body: "动态检查覆盖 10 ns（纳秒， Nanosecond）的工作时间窗" }), format], false);
+        const result = await runReadWeaveActivePipeline(request, p.config);
+        expect(result.body).toBe("动态检查覆盖 10 ns 纳秒（nanosecond）的工作时间窗");
+        expect(result.formatIssues.some(issue => issue.startsWith("FMT-062"))).toBe(false);
+    });
     it.each(["problem", "definition", "annotation", "key-point"] as const)("preserves the explicit user action through every stage: %s", async contentType => {
         const p = ports([read,ready(requirements),ready(outline),ready({body:"按用户选择的操作生成"}),format], false);
         await runReadWeaveActivePipeline({...request,contentType}, p.config);

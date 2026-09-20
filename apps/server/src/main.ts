@@ -91,9 +91,16 @@ async function startApplication() {
     if (sql_init.isDbInitialized() && !config.General.readOnly) {
         const { initializeReadWeaveGenerationJobs } = await import("./services/readweave_generation_jobs.js");
         initializeReadWeaveGenerationJobs();
+        const { initializeReadWeaveApiRegistry } = await import("./services/readweave_api_registry.js");
+        initializeReadWeaveApiRegistry(true);
     }
     const startTriliumServer = (await import("./www.js")).default;
     await startTriliumServer();
+
+    if (sql_init.isDbInitialized() && !config.General.readOnly) {
+        const { initializeReadWeaveApiHealthMonitor } = await import("./services/readweave_api_health.js");
+        initializeReadWeaveApiHealthMonitor();
+    }
 
     if (!sql_init.isDbInitialized()) {
         getLog().banner(t("sql_init.db_not_initialized_server", { port }));

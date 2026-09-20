@@ -76,6 +76,7 @@ import {
     readWeaveCompactStatusText,
     readWeaveContentTypeLabel,
     readWeaveGenerationProgressForDisplay,
+    readWeaveReuseObjectId,
     type ReadWeaveReviewIssueBaseline,
     recoverReadWeaveGenerationFields,
     shouldRemoveReadWeaveAnchorAfterDelete,
@@ -1530,7 +1531,7 @@ export default function ReadWeavePanel() {
         setCandidateDetails(current => ({ ...current, [candidate.objectId]: response.object }));
     }
 
-    async function reuse(candidate: ReadWeaveCandidate) {
+    async function reuse(candidate: ReadWeaveCandidate, mode: "hard" | "soft") {
         const target = captureSelectionAction(true, true);
         if (!target) return;
         let object = candidateDetails[candidate.objectId];
@@ -1554,7 +1555,7 @@ export default function ReadWeavePanel() {
         setBodyEdited(false);
         setBodyEditing(false);
         setCalloutType(object.calloutType);
-        setReuseObjectId(object.objectId);
+        setReuseObjectId(readWeaveReuseObjectId(mode, object.objectId));
         // This is a new local draft, not a request to restore an older job on
         // the same range. Invalidate any response already in flight as well.
         activeGenerationJobId.current = undefined;
@@ -1566,7 +1567,7 @@ export default function ReadWeavePanel() {
         setWorkflow(undefined);
         setReviewIssues([]);
         setReviewIssueBaseline(undefined);
-        setStatus(t("readweave.reuse_selected"));
+        setStatus(t(mode === "hard" ? "readweave.hard_copy_selected" : "readweave.soft_copy_selected"));
         setStatusTone("normal");
     }
 
@@ -2160,7 +2161,7 @@ export default function ReadWeavePanel() {
                                                 class={activeTemplateId === template.id ? "active" : ""}
                                                 onPointerDown={event => event.preventDefault()}
                                                 onClick={() => applyQuestionTemplate(template)}
-                                                disabled={editorLocked}
+                                                disabled={editorLocked || !!reuseObjectId}
                                                 title={template.pattern}
                                                 key={template.id}
                                             >{template.label}</button>
@@ -2213,7 +2214,7 @@ export default function ReadWeavePanel() {
                                             rows={3}
                                             value={questionTitle}
                                             hidden={showRenderedQuestion}
-                                            disabled={editorLocked}
+                                            disabled={editorLocked || !!reuseObjectId}
                                             onFocus={() => { if (selection.pending) void confirmPendingSelection("question", selection.excerpt).catch(error => {
                                                 setStatus(readableError(error, t("readweave.selection_sync_failed")));
                                                 setStatusTone("error");
@@ -2226,7 +2227,7 @@ export default function ReadWeavePanel() {
                                         />
                                         {hasReadWeaveQuestionMath(questionTitle) && <div class="readweave-question-rendered" data-testid="readweave-question-rendered" hidden={!showRenderedQuestion}>
                                             <ReadWeaveQuestionText text={questionTitle} />
-                                            <button type="button" class="btn btn-sm btn-link" disabled={editorLocked} onClick={() => {
+                                            <button type="button" class="btn btn-sm btn-link" disabled={editorLocked || !!reuseObjectId} onClick={() => {
                                                 setEditingMathQuestion(true);
                                                 window.requestAnimationFrame(() => questionTextareaRef.current?.focus());
                                             }}>编辑</button>
@@ -2271,13 +2272,13 @@ export default function ReadWeavePanel() {
                                 </>
                             ) : contentType === "definition" ? (
                                 <>
-                                    <TermFields value={termIdentity} disabled={editorLocked} onChange={changeTermIdentity} />
+                                    <TermFields value={termIdentity} disabled={editorLocked || !!reuseObjectId} onChange={changeTermIdentity} />
                                     {currentTitle && <p class="readweave-term-preview">{currentTitle}</p>}
                                 </>
                             ) : (
                                 <>
                                     <label>{contentType === "note" ? "笔记标题" : "总结标题"}
-                                        <input value={questionTitle} disabled={editorLocked} onInput={event => { setQuestionTitle(event.currentTarget.value); changeDraft(); }} />
+                                        <input value={questionTitle} disabled={editorLocked || !!reuseObjectId} onInput={event => { setQuestionTitle(event.currentTarget.value); changeDraft(); }} />
                                     </label>
                                 </>
                             )}
@@ -2323,7 +2324,10 @@ export default function ReadWeavePanel() {
                                             {candidate.reuseRecommended && <span class="readweave-candidate-recommendation">{t("readweave.reuse_recommended")}</span>}
                                             <div class="readweave-candidate-detail">
                                                 <p>{candidateDetails[candidate.objectId]?.body || t("readweave.loading")}</p>
-                                                <button type="button" class="btn btn-sm btn-secondary" disabled={editorLocked} onClick={() => reuse(candidate)}>{t("readweave.reuse")}</button>
+                                                <div class="readweave-candidate-actions">
+                                                    <button type="button" class="btn btn-sm btn-secondary" disabled={editorLocked} title={t("readweave.hard_copy_help")} aria-label={t("readweave.hard_copy_help")} data-testid="readweave-hard-copy" onClick={() => reuse(candidate, "hard")}>{t("readweave.hard_copy")}</button>
+                                                    <button type="button" class="btn btn-sm btn-secondary" disabled={editorLocked} title={t("readweave.soft_copy_help")} aria-label={t("readweave.soft_copy_help")} data-testid="readweave-soft-copy" onClick={() => reuse(candidate, "soft")}>{t("readweave.soft_copy")}</button>
+                                                </div>
                                             </div>
                                         </div>
                                     ))}
@@ -2391,7 +2395,7 @@ export default function ReadWeavePanel() {
                                         type="button"
                                         class="btn btn-sm btn-link readweave-body-edit"
                                         aria-pressed={bodyEditing}
-                                        disabled={editorLocked}
+                                        disabled={editorLocked || !!reuseObjectId}
                                         onClick={toggleBodyEditing}
                                         data-testid="readweave-edit-body"
                                     >
@@ -2406,7 +2410,7 @@ export default function ReadWeavePanel() {
                                     ref={bodyTextareaRef}
                                     rows={9}
                                     value={body}
-                                    disabled={editorLocked}
+                                    disabled={editorLocked || !!reuseObjectId}
                                     class="readweave-body-editing"
                                     aria-labelledby="readweave-draft-body-label"
                                     onInput={event => changeGeneratedBody(event.currentTarget.value)}
@@ -2432,7 +2436,7 @@ export default function ReadWeavePanel() {
                                     <button
                                         type="button"
                                         class="btn btn-sm btn-link"
-                                        disabled={editorLocked || !bodyEditing}
+                                        disabled={editorLocked || !!reuseObjectId || !bodyEditing}
                                         aria-expanded={localRewriteOpen}
                                         onClick={() => setLocalRewriteOpen(current => !current)}
                                     >只修改选中文字</button>

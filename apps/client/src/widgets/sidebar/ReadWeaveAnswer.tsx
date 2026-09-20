@@ -7,7 +7,30 @@ import { READWEAVE_SELECTION_ACTIONS } from "./readweave_selection_actions.js";
 
 const markdown = new Marked({ breaks: true, gfm: true });
 
-function renderAnswerMarkdown(body: string): string {
+/**
+ * ReadWeave headings are required to carry their outline number. A bare line
+ * such as `1. Innovus 是什么` is otherwise parsed by Markdown as an ordered
+ * list item, which applies the list's indentation to the visible heading.
+ * Only blank-line-separated, top-level numbered labels followed by content
+ * are promoted; ordinary and nested list items keep their native structure.
+ */
+export function normalizeReadWeaveNumberedHeadings(body: string): string {
+    const lines = body.split("\n");
+    for (let index = 0; index < lines.length - 2; index++) {
+        if (!lines[index].trim() || lines[index + 1].trim()) continue;
+        if (index > 0 && /^\d+(?:\.\d+)*\.[ \t]+/u.test(lines[index - 1])) continue;
+        const match = lines[index].match(/^(\d+(?:\.\d+)*\.)[ \t]+(.+)$/u);
+        if (!match) continue;
+
+        const next = lines[index + 2];
+        if (!next.trim() || /^(?:[ \t]{2,}[-+*]|[ \t]*\d+[.)])[ \t]+/u.test(next)) continue;
+        lines[index] = `## ${match[1]} ${match[2]}`;
+    }
+    return lines.join("\n");
+}
+
+export function renderAnswerMarkdown(body: string): string {
+    body = normalizeReadWeaveNumberedHeadings(body);
     const protectedRanges = Array.from(body.matchAll(/(?:^|\n)[ \t]*(?:```|~~~)[^\n]*\n[\s\S]*?\n[ \t]*(?:```|~~~)[ \t]*(?=\n|$)|(`+)[^`\n]*?\1/gu),
         match => ({ start:match.index, end:match.index + match[0].length }));
     const formulas: Array<{slot:string; source:string}> = [];

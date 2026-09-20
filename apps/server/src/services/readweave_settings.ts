@@ -7,6 +7,7 @@ import { options as optionService, ValidationError } from "@triliumnext/core";
 
 import { type ReadWeaveModelRates,readWeaveModelRates } from "./readweave_budget.js";
 import { NonRetryableReadWeaveError } from "./readweave_errors.js";
+import { getReadWeaveModelRoutes, getReadWeavePrimaryModelRoute, getReadWeaveSearchProviderRoutes } from "./readweave_api_registry.js";
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_MODEL = "deepseek-flash";
@@ -47,6 +48,18 @@ export interface ReadWeaveSearchRuntimeConfig {
     semanticScholarApiKey?: string;
     openAlexApiKey?: string;
     unpaywallEmail?: string;
+    tinyFishApiKey?: string;
+    octenApiKey?: string;
+    parallelApiKey?: string;
+    tinyFishBaseUrl?: string;
+    octenBaseUrl?: string;
+    octenEndpoint?: string;
+    octenCount?: number;
+    openAlexBaseUrl?: string;
+    parallelBaseUrl?: string;
+    parallelEndpoint?: string;
+    parallelMode?: string;
+    parallelMaxResults?: number;
 }
 
 export interface ReadWeaveModelRuntimeConfig {
@@ -56,6 +69,8 @@ export interface ReadWeaveModelRuntimeConfig {
     providerType: ReadWeaveAiSettings["providerType"];
     rates: ReadWeaveModelRates;
     pricingVersion: string;
+    transport?: "responses" | "chat-completions";
+    modelParameters?: Record<string, number | string | boolean>;
 }
 
 interface ModelsPayload {
@@ -237,6 +252,8 @@ function updateOptionalSecret(
 }
 
 export function getReadWeaveSearchRuntimeConfig(): ReadWeaveSearchRuntimeConfig {
+    let managed: ReturnType<typeof getReadWeaveSearchProviderRoutes> = {};
+    try { managed = getReadWeaveSearchProviderRoutes(); } catch { /* Legacy and isolated tests may not have initialized SQL. */ }
     return {
         mode: searchMode(),
         budgetCny: searchBudgetCny(),
@@ -246,12 +263,34 @@ export function getReadWeaveSearchRuntimeConfig(): ReadWeaveSearchRuntimeConfig 
         jinaApiKey: storedOrEnvironment("readWeaveJinaApiKey", "JINA_API_KEY"),
         exaApiKey: storedOrEnvironment("readWeaveExaApiKey", "EXA_API_KEY"),
         semanticScholarApiKey: storedOrEnvironment("readWeaveSemanticScholarApiKey", "SEMANTIC_SCHOLAR_API_KEY"),
-        openAlexApiKey: storedOrEnvironment("readWeaveOpenAlexApiKey", "OPENALEX_API_KEY"),
+        openAlexApiKey: managed.openalex?.apiKey ?? storedOrEnvironment("readWeaveOpenAlexApiKey", "OPENALEX_API_KEY"),
+        openAlexBaseUrl: managed.openalex?.baseUrl,
+        tinyFishApiKey: managed.tinyfish?.apiKey,
+        tinyFishBaseUrl: managed.tinyfish?.baseUrl,
+        octenApiKey: managed.octen?.apiKey,
+        octenBaseUrl: managed.octen?.baseUrl,
+        octenEndpoint: managed.octen?.endpoint,
+        octenCount: typeof managed.octen?.modelParameters.count === "number" ? managed.octen.modelParameters.count : undefined,
+        parallelApiKey: managed.parallel?.apiKey,
+        parallelBaseUrl: managed.parallel?.baseUrl,
+        parallelEndpoint: managed.parallel?.endpoint,
+        parallelMode: typeof managed.parallel?.modelParameters.mode === "string" ? managed.parallel.modelParameters.mode : undefined,
+        parallelMaxResults: typeof managed.parallel?.modelParameters.maxResults === "number" ? managed.parallel.modelParameters.maxResults : undefined,
         unpaywallEmail: storedOrEnvironment("readWeaveUnpaywallEmail", "UNPAYWALL_EMAIL")
     };
 }
 
 export function getReadWeaveRuntimeConfig(): ReadWeaveModelRuntimeConfig {
+    // Live and benchmark suites run against an isolated database containing
+    // harmless defaults. Explicit process settings must select the intended
+    // provider instead of being shadowed by those defaults.
+    const preferEnvironment = process.env.READWEAVE_LIVE_AI === "1"
+        || process.env.READWEAVE_BENCHMARK_AI === "1";
+    let managed: ReturnType<typeof getReadWeavePrimaryModelRoute>;
+    if (!preferEnvironment) {
+        try { managed = getReadWeavePrimaryModelRoute(); } catch { /* Preserve the legacy settings path before SQL initialization. */ }
+    }
+    if (managed?.model) return managedModelRuntime(managed);
     const credential = configuredApiKey();
     if (!credential.value) {
         throw new NonRetryableReadWeaveError("ReadWeave API is not configured. Add an API key in Settings → AI / LLM → ReadWeave.");
@@ -261,11 +300,6 @@ export function getReadWeaveRuntimeConfig(): ReadWeaveModelRuntimeConfig {
     const storedModel = optionService.getOptionOrNull("readWeaveModel")?.trim();
     const environmentModel = process.env.READWEAVE_MODEL?.trim()
         || process.env.READWEAVE_DEEPSEEK_MODEL?.trim();
-    // Live and benchmark suites run against an isolated database containing
-    // harmless defaults. Explicit process settings must select the intended
-    // provider instead of being shadowed by those defaults.
-    const preferEnvironment = process.env.READWEAVE_LIVE_AI === "1"
-        || process.env.READWEAVE_BENCHMARK_AI === "1";
     const baseUrl = (preferEnvironment ? environmentBaseUrl || storedBaseUrl : storedBaseUrl || environmentBaseUrl)
         || DEFAULT_BASE_URL;
     const model = (preferEnvironment ? environmentModel || storedModel : storedModel || environmentModel)
@@ -278,8 +312,39 @@ export function getReadWeaveRuntimeConfig(): ReadWeaveModelRuntimeConfig {
         model,
         providerType,
         rates: pricing.rates,
-        pricingVersion: pricing.pricingVersion
+        pricingVersion: pricing.pricingVersion,
+        transport: providerType === "deepseek-official" ? "responses" : "chat-completions"
     };
+}
+
+function managedModelRuntime(managed: NonNullable<ReturnType<typeof getReadWeavePrimaryModelRoute>>): ReadWeaveModelRuntimeConfig {
+    const pricing = managed.pricing;
+    const fallback = readWeaveModelRates(managed.model!);
+    const rates = pricing?.currency === "CNY" ? {
+        cacheHitInput: pricing.cacheHitInputPerMillion ?? fallback.cacheHitInput,
+        cacheMissInput: pricing.cacheMissInputPerMillion ?? fallback.cacheMissInput,
+        output: pricing.outputPerMillion ?? fallback.output
+    } : fallback;
+    return {
+        apiKey: managed.apiKey,
+        baseUrl: managed.baseUrl,
+        model: managed.model!,
+        providerType: "deepseek-compatible",
+        rates,
+        pricingVersion: `${managed.id}-${pricing?.source ?? "unknown"}-v1`,
+        transport: managed.requestProtocol === "responses" ? "responses" : "chat-completions",
+        modelParameters: managed.modelParameters
+    };
+}
+
+export function getReadWeaveManagedFallbackRuntimeConfig(primary: ReadWeaveModelRuntimeConfig): ReadWeaveModelRuntimeConfig | undefined {
+    let routes: ReturnType<typeof getReadWeaveModelRoutes> = [];
+    try { routes = getReadWeaveModelRoutes(); } catch { return undefined; }
+    const primaryHost = new URL(primary.baseUrl).hostname.toLowerCase();
+    const route = routes.find(item => item.model && item.role !== "primary"
+        && item.health.state !== "unavailable"
+        && (new URL(item.baseUrl).hostname.toLowerCase() !== primaryHost || item.model.toLowerCase() !== primary.model.toLowerCase()));
+    return route ? managedModelRuntime(route) : undefined;
 }
 
 export function getReadWeaveVerifierRuntimeConfig(): ReadWeaveModelRuntimeConfig | undefined {

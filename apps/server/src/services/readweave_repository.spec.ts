@@ -130,6 +130,34 @@ describe("ReadWeave repository", () => {
         });
     });
 
+    it("stores a hard-copied question and answer as an independent object", () => {
+        cls.init(() => {
+            const article = noteService.createNewNote({
+                parentNoteId: "root", title: "ReadWeave independent copy article", type: "text",
+                mime: "text/html", content: "<p>Independent copy source paragraph.</p>"
+            }).note;
+            const original = saveReadWeaveEntry({
+                articleId: article.noteId, anchorId: "rw_copy_source", anchorType: "paragraph",
+                kind: "question", title: "What is the original answer?",
+                body: professionalAnswer("原始问答"), sourceExcerpt: "Independent copy source paragraph.",
+                calloutType: "note"
+            });
+            const copy = saveReadWeaveEntry({
+                articleId: article.noteId, anchorId: "rw_copy_target", anchorType: "paragraph",
+                kind: "question", title: original.title, body: original.body,
+                sourceExcerpt: "Independent copy source paragraph.", calloutType: original.calloutType
+            });
+            expect(copy.objectId).not.toBe(original.objectId);
+            expect(copy.title).toBe(original.title);
+            expect(copy.body).toBe(original.body);
+            editReadWeaveLink(original.linkId, {
+                mode: "global", title: original.title,
+                body: professionalAnswer("只修改原问答"), calloutType: "warning"
+            });
+            expect(getEntriesForAnchor(article.noteId, "rw_copy_target")[0].body).toBe(original.body);
+        });
+    });
+
     it.each(["article", "all"] as const)("strips only server task contracts from %s exports of reused and revised objects", scope => {
         cls.init(() => {
             const sentinel = `PRIVATE_ARTICLE_A_CONTEXT_${scope}`;

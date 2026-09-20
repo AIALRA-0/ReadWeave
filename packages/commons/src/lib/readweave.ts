@@ -724,6 +724,122 @@ export interface ReadWeaveSearchTestResult {
     warnings: string[];
 }
 
+export type ReadWeaveApiProviderId = "kuafu" | "deepseek-official" | "tinyfish" | "octen" | "openalex" | "parallel";
+export type ReadWeaveApiProviderKind = "model" | "search";
+export type ReadWeaveApiRouteRole = "primary" | "fallback" | "supplemental";
+export type ReadWeaveApiHealthState = "unknown" | "healthy" | "degraded" | "unavailable" | "disabled";
+export type ReadWeaveApiAlertCode =
+    | "quota-low" | "quota-exhausted" | "authentication" | "endpoint"
+    | "model-missing" | "model-unavailable" | "timeout" | "request-failed"
+    | "provider-unstable" | "configuration-drift";
+
+export interface ReadWeaveApiQuotaStatus {
+    supported: boolean;
+    unit?: "USD" | "credits" | "requests";
+    limit?: number;
+    used?: number;
+    remaining?: number;
+    resetsAt?: string;
+    detail?: string;
+}
+
+export interface ReadWeaveApiProviderHealth {
+    state: ReadWeaveApiHealthState;
+    checkedAt?: string;
+    lastSuccessAt?: string;
+    lastFailureAt?: string;
+    latencyMs?: number;
+    successRate?: number;
+    consecutiveFailures: number;
+    lastErrorCode?: ReadWeaveApiAlertCode;
+    lastError?: string;
+    catalogVerified?: boolean;
+    callableVerified?: boolean;
+    detectedModels?: string[];
+    quota: ReadWeaveApiQuotaStatus;
+}
+
+export interface ReadWeaveApiProviderProfile {
+    id: ReadWeaveApiProviderId;
+    name: string;
+    kind: ReadWeaveApiProviderKind;
+    enabled: boolean;
+    role: ReadWeaveApiRouteRole;
+    priority: number;
+    baseUrl: string;
+    endpoint: string;
+    authType: "bearer" | "x-api-key" | "query";
+    requestProtocol: "responses" | "rest-search";
+    model?: string;
+    configuredModels: string[];
+    hasApiKey: boolean;
+    maskedApiKey?: string;
+    credentialSource: "api-control" | "legacy" | "environment" | "missing";
+    modelParameters?: Record<string, number | string | boolean>;
+    pricing?: {
+        currency: "CNY" | "USD";
+        cacheHitInputPerMillion?: number;
+        cacheMissInputPerMillion?: number;
+        outputPerMillion?: number;
+        searchPerRequest?: number;
+        source: "verified-dashboard" | "official" | "configured" | "unknown";
+    };
+    health: ReadWeaveApiProviderHealth;
+}
+
+export interface ReadWeaveApiAlert {
+    id: string;
+    providerId: ReadWeaveApiProviderId;
+    routeRole: ReadWeaveApiRouteRole;
+    model?: string;
+    code: ReadWeaveApiAlertCode;
+    severity: "warning" | "critical";
+    message: string;
+    active: boolean;
+    firstSeenAt: string;
+    lastSeenAt: string;
+    resolvedAt?: string;
+    lastSuccessAt?: string;
+    fallbackAvailable: boolean;
+    requiresAction: boolean;
+}
+
+export interface ReadWeaveApiControlSettings {
+    version: 1;
+    healthCheckIntervalMinutes: number;
+    fullProbeIntervalMinutes: number;
+    providers: ReadWeaveApiProviderProfile[];
+    alerts: ReadWeaveApiAlert[];
+    monitor: {
+        running: boolean;
+        lastCycleAt?: string;
+        nextCycleAt?: string;
+    };
+}
+
+export interface ReadWeaveApiProviderUpdate {
+    id: ReadWeaveApiProviderId;
+    enabled?: boolean;
+    role?: ReadWeaveApiRouteRole;
+    priority?: number;
+    baseUrl?: string;
+    model?: string;
+    apiKey?: string;
+    clearApiKey?: boolean;
+    modelParameters?: Record<string, number | string | boolean>;
+}
+
+export interface ReadWeaveApiControlUpdate {
+    healthCheckIntervalMinutes?: number;
+    fullProbeIntervalMinutes?: number;
+    providers?: ReadWeaveApiProviderUpdate[];
+}
+
+export interface ReadWeaveApiProbeRequest {
+    providerId?: ReadWeaveApiProviderId;
+    full?: boolean;
+}
+
 export interface ReadWeaveModelInfo {
     id: string;
 }
