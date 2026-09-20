@@ -1,0 +1,23 @@
+apps/server/src/services/readweave_api_registry.ts
+  s_f4bc084e1b5e1b::t_55f647a9d2ef18 120
+apps/server/src/services/readweave_api_health.ts
+  s_f4bc084e1b5e1b::t_a3d6129f21e508 9,262
+apps/server/src/services/readweave_unified_ai.spec.ts
+  s_f4bc084e1b5e1b::t_55f647a9d2ef18 1732
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "92f9de89107563b3a023841480b7b491859e498f",
+  "prompts": {},
+  "sessions": {
+    "s_f4bc084e1b5e1b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05e85-d752-7582-abf7-4d4f5901369e",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "AIALRA-0 <71060413+AIALRA-0@users.noreply.github.com>"
+    }
+  }
+}
